@@ -1,0 +1,45 @@
+{
+  "name": "screenflow-ai",
+  "version": "1.0.0",
+  "description": "Premium Windows alternative to Screen Studio with AI editing, zoom, and exports",
+  "main": "electron/main.js",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && electron-builder",
+    "start": "electron ."
+  },
+  "dependencies": {
+    "electron-updater": "^6.1.7",
+    "lucide-react": "^0.395.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "electron": "^31.0.1",
+    "electron-builder": "^24.13.3",
+    "vite": "^5.3.1"
+  },
+  "build": {
+    "appId": "com.screenflow.ai",
+    "productName": "ScreenFlowAI",
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": true,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": true
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "yourusername",
+      "repo": "screenflow-ai"
+    }
+  }
+}
