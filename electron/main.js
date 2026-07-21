@@ -515,9 +515,9 @@ ipcMain.handle('live:set-display-source', (_, sourceId) => {
 });
 
 ipcMain.handle('livekit:create-token', async (_, roomName, participantName) => {
-  const livekitUrl = process.env.LIVEKIT_URL;
-  const apiKey = process.env.LIVEKIT_API_KEY;
-  const apiSecret = process.env.LIVEKIT_API_SECRET;
+  const livekitUrl = cleanEnvValue(process.env.LIVEKIT_URL, 'LIVEKIT_URL');
+  const apiKey = cleanEnvValue(process.env.LIVEKIT_API_KEY, 'LIVEKIT_API_KEY');
+  const apiSecret = cleanEnvValue(process.env.LIVEKIT_API_SECRET, 'LIVEKIT_API_SECRET');
 
   if (!livekitUrl || !apiKey || !apiSecret) {
     return {
@@ -528,7 +528,8 @@ ipcMain.handle('livekit:create-token', async (_, roomName, participantName) => {
 
   try {
     const { AccessToken } = require('livekit-server-sdk');
-    const identity = (participantName || `guest-${Date.now()}`).replace(/[^\w.-]/g, '-');
+    const baseIdentity = (participantName || 'Presenter').replace(/[^\w.-]/g, '-');
+    const identity = `${baseIdentity}-${Math.random().toString(36).slice(2, 8)}`;
     const at = new AccessToken(apiKey, apiSecret, {
       identity,
       name: participantName || identity,
@@ -552,6 +553,14 @@ ipcMain.handle('livekit:create-token', async (_, roomName, participantName) => {
     return { success: false, error: err.message };
   }
 });
+
+function cleanEnvValue(value, name) {
+  return String(value || '')
+    .trim()
+    .replace(/^['"]|['"]$/g, '')
+    .replace(new RegExp(`^${name}\\s*=\\s*`), '')
+    .trim();
+}
 
 // IPC - Recording and Global Tracker
 ipcMain.handle('recording:start', async (event, options) => {
