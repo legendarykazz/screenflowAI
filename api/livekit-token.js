@@ -15,9 +15,9 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  const livekitUrl = process.env.LIVEKIT_URL;
-  const apiKey = process.env.LIVEKIT_API_KEY;
-  const apiSecret = process.env.LIVEKIT_API_SECRET;
+  const livekitUrl = cleanEnvValue(process.env.LIVEKIT_URL, 'LIVEKIT_URL');
+  const apiKey = cleanEnvValue(process.env.LIVEKIT_API_KEY, 'LIVEKIT_API_KEY');
+  const apiSecret = cleanEnvValue(process.env.LIVEKIT_API_SECRET, 'LIVEKIT_API_SECRET');
 
   if (!livekitUrl || !apiKey || !apiSecret) {
     res.status(500).json({ error: 'LiveKit environment variables are not configured.' });
@@ -67,3 +67,11 @@ module.exports = async function handler(req, res) {
     identity
   });
 };
+
+function cleanEnvValue(value, name) {
+  return String(value || '')
+    .trim()
+    .replace(/^['"]|['"]$/g, '')
+    .replace(new RegExp(`^${name}\\s*=\\s*`), '')
+    .trim();
+}
