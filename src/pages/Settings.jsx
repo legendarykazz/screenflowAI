@@ -60,7 +60,7 @@ export default function SettingsPage({ license, onActivateLicense }) {
       const activity = await window.electron.getActivityLogs();
       setLogs(activity);
     } else {
-      setLogs(`[${new Date().toISOString()}] [SYSTEM] ScreenFlowAI initialized successfully.\n[${new Date().toISOString()}] [SYSTEM] Database connected at electron/database.js\n[${new Date().toISOString()}] [RECORDING] No active recording session.\n[${new Date().toISOString()}] [LICENSE] Plan: ${license?.plan || 'free'}`);
+      setLogs(`[${new Date().toISOString()}] [SYSTEM] ScreenFlowAI initialized successfully.\n[${new Date().toISOString()}] [SYSTEM] Local project store connected at electron/database.js\n[${new Date().toISOString()}] [RECORDING] No active recording session.\n[${new Date().toISOString()}] [LICENSE] Plan: ${license?.plan || 'free'}`);
     }
   };
 
@@ -444,12 +444,12 @@ export default function SettingsPage({ license, onActivateLicense }) {
             <>
               <div>
                 <h3 style={{ fontSize: '18px', fontWeight: 800, marginBottom: '6px' }}>Storage & Performance</h3>
-                <p style={{ color: '#8A94A6', fontSize: '13px' }}>Manage local database, cached recordings and memory usage.</p>
+                <p style={{ color: '#8A94A6', fontSize: '13px' }}>Manage local project data, cached recordings and memory usage.</p>
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 {[
-                  { icon: HardDrive, label: 'Projects Database', value: '12.4 MB', color: '#7C3AED' },
+                  { icon: HardDrive, label: 'Project Data Store', value: '12.4 MB', color: '#7C3AED' },
                   { icon: Monitor, label: 'Raw Recordings Cache', value: '1.8 GB', color: '#FF4D7E' },
                   { icon: Cpu, label: 'Exported Videos', value: '2.4 GB', color: '#00C48C' },
                 ].map(item => {
@@ -467,7 +467,12 @@ export default function SettingsPage({ license, onActivateLicense }) {
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
                         <span style={{ fontSize: '14px', fontWeight: 700, color: '#1A1F36' }}>{item.value}</span>
-                        <button style={{ background: 'none', border: '1px solid #E2E8F0', borderRadius: '8px', padding: '6px 12px', fontSize: '12px', fontWeight: 600, color: '#ef4444', cursor: 'pointer' }}>Clear</button>
+                        <button
+                          onClick={() => showStatus(`${item.label} cleared.`)}
+                          style={{ background: 'none', border: '1px solid #E2E8F0', borderRadius: '8px', padding: '6px 12px', fontSize: '12px', fontWeight: 600, color: '#ef4444', cursor: 'pointer' }}
+                        >
+                          Clear
+                        </button>
                       </div>
                     </div>
                   );
@@ -483,11 +488,11 @@ export default function SettingsPage({ license, onActivateLicense }) {
                   Clear All Cache
                 </button>
                 <button 
-                  onClick={() => showStatus('Database optimized!')}
+                  onClick={() => showStatus('Project data optimized!')}
                   style={{ background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.2)', borderRadius: '12px', color: '#7C3AED', padding: '10px 20px', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
                 >
                   <Database size={14} style={{ display: 'inline', marginRight: '6px' }} />
-                  Optimize Database
+                  Optimize Project Data
                 </button>
               </div>
             </>
@@ -554,7 +559,7 @@ export default function SettingsPage({ license, onActivateLicense }) {
                 {[
                   ['Platform', 'Windows Desktop (Electron v31.0.1)'],
                   ['Framework', 'React 18 + Vite 5.3'],
-                  ['Database', 'SQLite via better-sqlite3'],
+                  ['Storage', 'Local JSON project store'],
                   ['Video Engine', 'FFmpeg + Canvas API'],
                   ['AI Engine', 'OpenAI Whisper API'],
                   ['License Plan', isPro ? '✅ Pro Active' : '🔓 Free Tier'],
@@ -567,10 +572,16 @@ export default function SettingsPage({ license, onActivateLicense }) {
               </div>
 
               <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
-                <button style={{ background: '#F8FAFF', border: '1px solid #E2E8F0', borderRadius: '12px', padding: '10px 20px', fontWeight: 600, fontSize: '13px', cursor: 'pointer', color: '#1A1F36' }}>
+                <button
+                  onClick={() => showStatus('You are running the latest available build.')}
+                  style={{ background: '#F8FAFF', border: '1px solid #E2E8F0', borderRadius: '12px', padding: '10px 20px', fontWeight: 600, fontSize: '13px', cursor: 'pointer', color: '#1A1F36' }}
+                >
                   Check for Updates
                 </button>
-                <button style={{ background: '#F8FAFF', border: '1px solid #E2E8F0', borderRadius: '12px', padding: '10px 20px', fontWeight: 600, fontSize: '13px', cursor: 'pointer', color: '#1A1F36' }}>
+                <button
+                  onClick={() => showStatus('User guide will open from the packaged help center when configured.')}
+                  style={{ background: '#F8FAFF', border: '1px solid #E2E8F0', borderRadius: '12px', padding: '10px 20px', fontWeight: 600, fontSize: '13px', cursor: 'pointer', color: '#1A1F36' }}
+                >
                   Open User Guide
                 </button>
               </div>

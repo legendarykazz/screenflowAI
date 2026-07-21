@@ -43,12 +43,16 @@ export default function Editor({ projectId, onCloseProject, license }) {
   const [isExporting, setIsExporting] = useState(false);
   const [exportStartTime, setExportStartTime] = useState(0);
   const [exportDone, setExportDone] = useState(false);
+  const [exportError, setExportError] = useState('');
+  const [mediaPort, setMediaPort] = useState(10101);
+  const [selectedClipId, setSelectedClipId] = useState('screen');
+  const [timelineDrag, setTimelineDrag] = useState(null);
 
   // Timeline clips state
   const [timelineClips, setTimelineClips] = useState([
-    { id: 'screen', label: 'Screen Recording', start: 0, end: 0.85, color: '#667eea', track: 0 },
-    { id: 'audio', label: 'Microphone Audio', start: 0, end: 0.85, color: '#00C48C', track: 1 },
-    { id: 'webcam', label: 'Webcam Overlay', start: 0.05, end: 0.80, color: '#FF4D7E', track: 2 },
+    { id: 'screen', label: 'Screen Recording', start: 0, end: 0.85, color: '#667eea', track: 0, enabled: true },
+    { id: 'audio', label: 'Microphone Audio', start: 0, end: 0.85, color: '#10b981', track: 1, enabled: true },
+    { id: 'webcam', label: 'Webcam Overlay', start: 0.05, end: 0.80, color: '#f59e0b', track: 2, enabled: true },
   ]);
 
   // Refs for real-time preview simulation
@@ -57,13 +61,108 @@ export default function Editor({ projectId, onCloseProject, license }) {
   const animationRef = useRef(null);
   const cursorEventsRef = useRef([]);
   const timelineRef = useRef(null);
+  const exportProgressUnsubscribeRef = useRef(null);
+  const timelineDragRef = useRef(null);
+  const timelineClipsRef = useRef(timelineClips);
+  const brandLogoRef = useRef(null);
+
+  // Smooth Zoom state for Screen Studio continuous panning
+  const smoothZoomRef = useRef(1.0);
+  const smoothZoomXRef = useRef(960);
+  const smoothZoomYRef = useRef(540);
+  const smoothCursorXRef = useRef(960);
+  const smoothCursorYRef = useRef(540);
 
   useEffect(() => {
     loadProjectData();
     return () => {
       if (animationRef.current) cancelAnimationFrame(animationRef.current);
+      exportProgressUnsubscribeRef.current?.();
     };
   }, [projectId]);
+
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.muted = isMuted;
+      videoRef.current.volume = volume;
+    }
+  }, [isMuted, volume]);
+
+  useEffect(() => {
+    timelineDragRef.current = timelineDrag;
+  }, [timelineDrag]);
+
+  useEffect(() => {
+    timelineClipsRef.current = timelineClips;
+  }, [timelineClips]);
+
+  useEffect(() => {
+    if (!settings.brand_logo) {
+      brandLogoRef.current = null;
+      return;
+    }
+    const img = new window.Image();
+    img.onload = () => { brandLogoRef.current = img; };
+    img.onerror = () => { brandLogoRef.current = null; };
+    img.src = settings.brand_logo.startsWith('data:') || settings.brand_logo.startsWith('http')
+      ? settings.brand_logo
+      : `file:///${settings.brand_logo.replace(/\\/g, '/')}`;
+  }, [settings.brand_logo]);
+
+  useEffect(() => {
+    const handleMove = (event) => {
+      const drag = timelineDragRef.current;
+      if (!drag || !timelineRef.current || duration <= 0) return;
+
+      const rect = timelineRef.current.getBoundingClientRect();
+      const pct = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+      const time = pct * duration;
+      const minLength = Math.min(1, Math.max(0.15, duration * 0.04));
+
+      setTimelineClips((clips) => {
+        const nextClips = clips.map((clip) => {
+        if (clip.id !== drag.id) return clip;
+
+        if (drag.mode === 'move') {
+          const length = drag.end - drag.start;
+          const nextStart = Math.min(Math.max(0, time - drag.offset), Math.max(0, duration - length));
+          return {
+            ...clip,
+            start: nextStart / duration,
+            end: (nextStart + length) / duration
+          };
+        }
+
+        if (drag.mode === 'trim-start') {
+          const nextStart = Math.min(time, drag.end - minLength);
+          return { ...clip, start: Math.max(0, nextStart) / duration };
+        }
+
+        if (drag.mode === 'trim-end') {
+          const nextEnd = Math.max(time, drag.start + minLength);
+          return { ...clip, end: Math.min(duration, nextEnd) / duration };
+        }
+
+        return clip;
+        });
+        timelineClipsRef.current = nextClips;
+        return nextClips;
+      });
+    };
+
+    const handleUp = () => {
+      if (timelineDragRef.current) {
+        saveTimelineClips(timelineClipsRef.current);
+      }
+      setTimelineDrag(null);
+    };
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+    };
+  }, [duration]);
 
   const loadProjectData = async () => {
     if (window.electron && window.electron.getProject) {
@@ -71,6 +170,9 @@ export default function Editor({ projectId, onCloseProject, license }) {
       setProject(proj);
       setSettings(proj.settings || {});
       if (proj?.duration) setDuration(proj.duration);
+      if (Array.isArray(proj?.settings?.timeline_clips)) {
+        setTimelineClips(proj.settings.timeline_clips);
+      }
       
       const events = await window.electron.getCursorEvents(projectId);
       cursorEventsRef.current = events;
@@ -81,14 +183,24 @@ export default function Editor({ projectId, onCloseProject, license }) {
       if (proj && proj.video_path && videoRef.current) {
         const path = proj.video_path;
         const previewVideo = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4';
+        
+        let activePort = 10101;
+        if (window.electron?.getMediaPort) {
+          activePort = await window.electron.getMediaPort();
+          setMediaPort(activePort);
+        }
+        
         const source = path.startsWith('browser-preview-recording') || path === 'mock_screen.mp4'
           ? previewVideo
-          : path.startsWith('http')
+          : path.startsWith('http') || path.startsWith('blob:')
             ? path
-            : `file:///${path.replace(/\\/g, '/')}`;
+            : `http://127.0.0.1:${activePort}/video?path=${encodeURIComponent(path)}`;
         videoRef.current.src = source;
+        videoRef.current.muted = isMuted;
         videoRef.current.onloadedmetadata = () => {
-          if (videoRef.current?.duration && isFinite(videoRef.current.duration)) {
+          if (proj.duration && proj.duration > 0) {
+            setDuration(proj.duration);
+          } else if (videoRef.current?.duration && isFinite(videoRef.current.duration)) {
             setDuration(videoRef.current.duration);
           }
         };
@@ -111,6 +223,14 @@ export default function Editor({ projectId, onCloseProject, license }) {
       await window.electron.updateProject(projectId, updatedFields);
     }
     setSavedStatus('saved');
+  };
+
+  const saveTimelineClips = async (nextClips) => {
+    setTimelineClips(nextClips);
+    setSettings((prev) => ({ ...prev, timeline_clips: nextClips }));
+    if (window.electron?.updateProject) {
+      await window.electron.updateProject(projectId, { timeline_clips: nextClips });
+    }
   };
 
   const easeInOutCubic = (t) => (
@@ -141,12 +261,17 @@ export default function Editor({ projectId, onCloseProject, license }) {
     const rawX = next ? previous.x + (next.x - previous.x) * eased : previous.x;
     const rawY = next ? previous.y + (next.y - previous.y) * eased : previous.y;
 
-    const xs = events.map((event) => event.x);
-    const ys = events.map((event) => event.y);
-    const minX = Math.min(...xs);
-    const minY = Math.min(...ys);
-    const maxX = Math.max(...xs);
-    const maxY = Math.max(...ys);
+    let minX = events[0].x;
+    let maxX = events[0].x;
+    let minY = events[0].y;
+    let maxY = events[0].y;
+    for (let i = 1; i < events.length; i++) {
+      const ev = events[i];
+      if (ev.x < minX) minX = ev.x;
+      if (ev.x > maxX) maxX = ev.x;
+      if (ev.y < minY) minY = ev.y;
+      if (ev.y > maxY) maxY = ev.y;
+    }
     const sourceWidth = video?.videoWidth || (maxX - minX) || width;
     const sourceHeight = video?.videoHeight || (maxY - minY) || height;
     const hasAbsoluteScreenCoords = minX < 0 || minY < 0 || maxX > sourceWidth || maxY > sourceHeight;
@@ -176,16 +301,57 @@ export default function Editor({ projectId, onCloseProject, license }) {
     return { ...click, x: point.x, y: point.y };
   };
 
-  const drawCinematicCursor = (ctx, x, y, activeClick) => {
+  const getClipById = (id) => timelineClips.find((clip) => clip.id === id);
+
+  const isClipActive = (id, timestamp = currentTime) => {
+    const clip = getClipById(id);
+    if (!clip || !duration) return true;
+    if (clip.enabled === false) return false;
+    const start = clip.start * duration;
+    const end = clip.end * duration;
+    return timestamp >= start && timestamp <= end;
+  };
+
+  const seekToTimelineEvent = (event) => {
+    if (!timelineRef.current || duration <= 0) return;
+    const rect = timelineRef.current.getBoundingClientRect();
+    const pct = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+    const newTime = pct * duration;
+    if (videoRef.current) videoRef.current.currentTime = newTime;
+    setCurrentTime(newTime);
+    if (animationRef.current) cancelAnimationFrame(animationRef.current);
+    animationRef.current = requestAnimationFrame(renderPreview);
+  };
+
+  const startClipDrag = (event, clip, mode) => {
+    event.stopPropagation();
+    setSelectedClipId(clip.id);
+    const start = clip.start * duration;
+    const end = clip.end * duration;
+    const rect = timelineRef.current?.getBoundingClientRect();
+    const pointerTime = rect ? (((event.clientX - rect.left) / rect.width) * duration) : start;
+    setTimelineDrag({
+      id: clip.id,
+      mode,
+      start,
+      end,
+      offset: Math.max(0, pointerTime - start)
+    });
+  };
+
+  const drawCinematicCursor = (ctx, x, y, activeClick, cursorAlpha = 1) => {
+    if (settings.cursor_baked) return;
     if (settings.cursor_visible === false) return;
+    if (cursorAlpha <= 0.02) return;
 
     const hSize = settings.cursor_size || 40;
     const hColor = settings.cursor_color || '#ff4500';
     const highlightMode = settings.cursor_highlight || 'ripple';
+    const cursorStyle = settings.cursor_style || 'arrow';
 
     if (highlightMode !== 'none') {
       ctx.save();
-      ctx.globalAlpha = settings.cursor_opacity !== undefined ? settings.cursor_opacity : 0.8;
+      ctx.globalAlpha = (settings.cursor_opacity !== undefined ? settings.cursor_opacity : 0.8) * cursorAlpha;
 
       if (activeClick && (highlightMode === 'ripple' || highlightMode === 'both')) {
         const age = videoRef.current ? videoRef.current.currentTime - activeClick.timestamp : 0;
@@ -210,20 +376,42 @@ export default function Editor({ projectId, onCloseProject, license }) {
       ctx.restore();
     }
 
-    ctx.save();
-    ctx.shadowColor = 'rgba(0,0,0,0.35)';
-    ctx.shadowBlur = 5;
-    ctx.fillStyle = '#ffffff';
-    ctx.strokeStyle = '#0f172a';
-    ctx.lineWidth = 2;
     const cSize = (settings.cursor_size || 40) * (settings.cursor_scale || 1.0);
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x + cSize * 0.72, y + cSize * 0.7);
-    ctx.lineTo(x + cSize * 0.26, y + cSize * 0.82);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
+
+    ctx.save();
+    ctx.globalAlpha = cursorAlpha;
+    ctx.shadowColor = 'rgba(0,0,0,0.42)';
+    ctx.shadowBlur = 7;
+    ctx.lineWidth = 2;
+
+    if (cursorStyle === 'dot') {
+      ctx.fillStyle = hColor;
+      ctx.strokeStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(x, y, cSize * 0.22, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    } else if (cursorStyle === 'ring') {
+      ctx.strokeStyle = hColor;
+      ctx.lineWidth = Math.max(3, cSize * 0.08);
+      ctx.beginPath();
+      ctx.arc(x, y, cSize * 0.35, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(x, y, Math.max(3, cSize * 0.08), 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#0f172a';
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + cSize * 0.72, y + cSize * 0.7);
+      ctx.lineTo(x + cSize * 0.26, y + cSize * 0.82);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
     ctx.restore();
   };
 
@@ -247,6 +435,10 @@ export default function Editor({ projectId, onCloseProject, license }) {
     const height = canvas.height;
     const timestamp = video.currentTime;
     setCurrentTime(timestamp);
+    const screenActive = isClipActive('screen', timestamp);
+    const audioActive = isClipActive('audio', timestamp);
+    const webcamActive = isClipActive('webcam', timestamp);
+    video.muted = isMuted || !audioActive;
 
     // 1. Draw Background
     ctx.save();
@@ -289,17 +481,55 @@ export default function Editor({ projectId, onCloseProject, license }) {
     }
     ctx.restore();
 
+    if (!screenActive) {
+      ctx.save();
+      ctx.fillStyle = '#070912';
+      ctx.fillRect(0, 0, width, height);
+      ctx.fillStyle = 'rgba(255,255,255,0.72)';
+      ctx.font = '700 22px Inter';
+      ctx.textAlign = 'center';
+      ctx.fillText('Screen clip trimmed out', width / 2, height / 2);
+      ctx.restore();
+      animationRef.current = requestAnimationFrame(renderPreview);
+      return;
+    }
+
     // 2. Smooth cursor tracker and normalize it into the preview canvas.
     const events = cursorEventsRef.current;
     const cursorPoint = getCursorPointAtTime(events, timestamp, width, height, video);
     let currentX = cursorPoint.x;
     let currentY = cursorPoint.y;
+    let cursorAlpha = 1;
     let activeClick = getActiveClick(events, timestamp, width, height, video);
 
+    if (settings.cursor_loop_to_start && duration > 1.5 && timestamp > duration - 1.2 && events.length > 0) {
+      const loopT = Math.min(1, Math.max(0, (timestamp - (duration - 1.2)) / 1.2));
+      const firstPoint = getCursorPointAtTime(events, 0, width, height, video);
+      currentX = currentX + (firstPoint.x - currentX) * loopT;
+      currentY = currentY + (firstPoint.y - currentY) * loopT;
+    }
+
+    if (settings.cursor_auto_hide !== false && cursorPoint.source && !activeClick) {
+      const idleDelay = settings.cursor_idle_hide_delay !== undefined ? settings.cursor_idle_hide_delay : 1.2;
+      const idleTime = timestamp - cursorPoint.source.timestamp;
+      if (idleTime > idleDelay) {
+        cursorAlpha = Math.max(0, 1 - ((idleTime - idleDelay) / 0.45));
+      }
+    }
+    if (settings.auto_smooth_cursor !== false) {
+      const cursorEase = settings.cursor_smoothing !== undefined ? settings.cursor_smoothing : 0.18;
+      smoothCursorXRef.current += (currentX - smoothCursorXRef.current) * cursorEase;
+      smoothCursorYRef.current += (currentY - smoothCursorYRef.current) * cursorEase;
+      currentX = smoothCursorXRef.current;
+      currentY = smoothCursorYRef.current;
+    } else {
+      smoothCursorXRef.current = currentX;
+      smoothCursorYRef.current = currentY;
+    }
     // 3. Zoom Easing Calculation
-    let zoom = 1.0;
-    let zoomX = width / 2;
-    let zoomY = height / 2;
+    let targetZoom = 1.0;
+    let targetX = width / 2;
+    let targetY = height / 2;
 
     // Check if we have active AI scene suggested zoom active
     let activeSceneZoom = null;
@@ -309,18 +539,18 @@ export default function Editor({ projectId, onCloseProject, license }) {
 
     if (activeSceneZoom) {
       const age = timestamp - activeSceneZoom.timestamp;
-      const targetZoom = activeSceneZoom.zoom || settings.zoom_level || 1.5;
+      const sceneTargetZoom = activeSceneZoom.zoom || settings.zoom_level || 1.5;
       if (age <= 0.3) {
         const t = age / 0.3;
-        zoom = 1.0 + (targetZoom - 1.0) * easeInOutCubic(t);
+        targetZoom = 1.0 + (sceneTargetZoom - 1.0) * easeInOutCubic(t);
       } else if (age <= 0.8) {
-        zoom = targetZoom;
+        targetZoom = sceneTargetZoom;
       } else if (age <= 1.1) {
         const t = (1.1 - age) / 0.3;
-        zoom = 1.0 + (targetZoom - 1.0) * easeInOutCubic(t);
+        targetZoom = 1.0 + (sceneTargetZoom - 1.0) * easeInOutCubic(t);
       }
-      zoomX = currentX;
-      zoomY = currentY;
+      targetX = currentX;
+      targetY = currentY;
     } else if (activeClick && settings.zoom_level > 1.0) {
       const age = timestamp - activeClick.timestamp;
       const inDuration = settings.zoom_in_duration || 0.35;
@@ -328,16 +558,36 @@ export default function Editor({ projectId, onCloseProject, license }) {
       const outDuration = settings.zoom_out_duration || 0.35;
       if (age <= inDuration) {
         const t = age / inDuration;
-        zoom = 1.0 + (settings.zoom_level - 1.0) * easeInOutCubic(t);
+        targetZoom = 1.0 + (settings.zoom_level - 1.0) * easeInOutCubic(t);
       } else if (age <= inDuration + holdDuration) {
-        zoom = settings.zoom_level;
+        targetZoom = settings.zoom_level;
       } else if (age <= inDuration + holdDuration + outDuration) {
         const t = (inDuration + holdDuration + outDuration - age) / outDuration;
-        zoom = 1.0 + (settings.zoom_level - 1.0) * easeInOutCubic(t);
+        targetZoom = 1.0 + (settings.zoom_level - 1.0) * easeInOutCubic(t);
       }
-      zoomX = activeClick.x;
-      zoomY = activeClick.y;
+      targetX = activeClick.x;
+      targetY = activeClick.y;
+    } else if (settings.follow_cursor !== false && settings.zoom_level > 1.0) {
+      // Screen Studio style: Continuous cursor tracking zoom
+      targetZoom = settings.zoom_level || 1.35;
+      targetX = currentX;
+      targetY = currentY;
+    } else if (settings.follow_cursor === false && settings.zoom_level > 1.0) {
+      // Manual click-to-focus static zoom
+      targetZoom = settings.zoom_level || 1.35;
+      targetX = (settings.zoom_center_x !== undefined ? settings.zoom_center_x : 0.5) * width;
+      targetY = (settings.zoom_center_y !== undefined ? settings.zoom_center_y : 0.5) * height;
     }
+
+    // Smoothly ease the zoom factor and panning coordinates over frames
+    const zoomEase = settings.zoom_smoothing !== undefined ? settings.zoom_smoothing : 0.08;
+    smoothZoomRef.current += (targetZoom - smoothZoomRef.current) * zoomEase;
+    smoothZoomXRef.current += (targetX - smoothZoomXRef.current) * zoomEase;
+    smoothZoomYRef.current += (targetY - smoothZoomYRef.current) * zoomEase;
+
+    let zoom = smoothZoomRef.current;
+    let zoomX = smoothZoomXRef.current;
+    let zoomY = smoothZoomYRef.current;
 
     // 4. Draw Screen Capture with Motion Blur
     let blurAmt = 0;
@@ -367,86 +617,97 @@ export default function Editor({ projectId, onCloseProject, license }) {
       ctx.translate(-zoomX, -zoomY);
     }
 
-    // Draw video frame inside rounded card
-    const cardMargin = 40;
-    const cardW = width - cardMargin * 2;
-    const cardH = height - cardMargin * 2;
-    const radius = 24;
-
-    ctx.beginPath();
-    ctx.moveTo(cardMargin + radius, cardMargin);
-    ctx.lineTo(cardMargin + cardW - radius, cardMargin);
-    ctx.quadraticCurveTo(cardMargin + cardW, cardMargin, cardMargin + cardW, cardMargin + radius);
-    ctx.lineTo(cardMargin + cardW, cardMargin + cardH - radius);
-    ctx.quadraticCurveTo(cardMargin + cardW, cardMargin + cardH, cardMargin + cardW - radius, cardMargin + cardH);
-    ctx.lineTo(cardMargin + radius, cardMargin + cardH);
-    ctx.quadraticCurveTo(cardMargin, cardMargin + cardH, cardMargin, cardMargin + cardH - radius);
-    ctx.lineTo(cardMargin, cardMargin + radius);
-    ctx.quadraticCurveTo(cardMargin, cardMargin, cardMargin + radius, cardMargin);
-    ctx.closePath();
-    ctx.clip();
-
     try {
-      ctx.drawImage(video, 0, 0, width, height);
+      const vAspectRatio = (video.videoWidth && video.videoHeight) ? (video.videoWidth / video.videoHeight) : (16 / 9);
+      const canvasAspectRatio = width / height;
+      
+      let drawW = width;
+      let drawH = height;
+      let drawX = 0;
+      let drawY = 0;
+      
+      if (vAspectRatio > canvasAspectRatio) {
+        drawW = height * vAspectRatio;
+        drawX = (width - drawW) / 2;
+      } else {
+        drawH = width / vAspectRatio;
+        drawY = (height - drawH) / 2;
+      }
+
+      ctx.drawImage(video, drawX, drawY, drawW, drawH);
     } catch (e) {
       // Fallback if video isn't ready
       ctx.fillStyle = '#2d2d30';
       ctx.fillRect(0, 0, width, height);
     }
 
-    drawCinematicCursor(ctx, currentX, currentY, activeClick);
+    drawCinematicCursor(ctx, currentX, currentY, activeClick, cursorAlpha);
     ctx.restore();
 
-    // 5. Draw Webcam Overlay mockup
-    const webcamPos = settings.webcam_position || 'bottom-right';
-    const webcamScale = settings.webcam_size || 0.2; // 20% of width by default
-    const webcamSize = width * webcamScale;
-    const margin = 60;
-    let camX = width - webcamSize - margin;
-    let camY = height - webcamSize - margin;
+    // 5. Draw Webcam Overlay mockup (only if enabled in settings)
+    if (settings.webcam_enabled && !settings.webcam_baked && webcamActive) {
+      const webcamPos = settings.webcam_position || 'bottom-right';
+      const webcamScale = settings.webcam_size || 0.22;
+      const camW = Math.round(width * webcamScale);
+      const camH = Math.round(camW * 0.68);
+      const margin = 42;
+      let camX = width - camW - margin;
+      let camY = height - camH - margin;
 
-    if (webcamPos === 'top-left') {
-      camX = margin;
-      camY = margin;
-    } else if (webcamPos === 'top-right') {
-      camX = width - webcamSize - margin;
-      camY = margin;
-    } else if (webcamPos === 'bottom-left') {
-      camX = margin;
-      camY = height - webcamSize - margin;
+      if (webcamPos === 'top-left') {
+        camX = margin;
+        camY = margin;
+      } else if (webcamPos === 'top-right') {
+        camX = width - camW - margin;
+        camY = margin;
+      } else if (webcamPos === 'bottom-left') {
+        camX = margin;
+        camY = height - camH - margin;
+      }
+
+      ctx.save();
+      ctx.shadowColor = 'rgba(0,0,0,0.32)';
+      ctx.shadowBlur = 22;
+      ctx.shadowOffsetY = 10;
+
+      ctx.beginPath();
+      ctx.roundRect(camX, camY, camW, camH, 18);
+      ctx.fillStyle = '#111827';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.72)';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+
+      ctx.clip();
+      const tileGrad = ctx.createLinearGradient(camX, camY, camX + camW, camY + camH);
+      tileGrad.addColorStop(0, '#1f2937');
+      tileGrad.addColorStop(1, '#334155');
+      ctx.fillStyle = tileGrad;
+      ctx.fillRect(camX, camY, camW, camH);
+
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = 'rgba(255,255,255,0.08)';
+      ctx.beginPath();
+      ctx.arc(camX + camW * 0.22, camY + camH * 0.18, camW * 0.38, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#cbd5e1';
+      ctx.beginPath();
+      ctx.arc(camX + camW / 2, camY + camH * 0.42, camH * 0.18, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#94a3b8';
+      ctx.beginPath();
+      ctx.roundRect(camX + camW * 0.28, camY + camH * 0.64, camW * 0.44, camH * 0.28, 28);
+      ctx.fill();
+
+      ctx.fillStyle = 'rgba(15,23,42,0.58)';
+      ctx.fillRect(camX, camY + camH - 28, camW, 28);
+      ctx.fillStyle = '#f8fafc';
+      ctx.font = '700 13px Inter';
+      ctx.textAlign = 'left';
+      ctx.fillText(settings.webcam_label || 'Camera', camX + 14, camY + camH - 10);
+      ctx.restore();
     }
-
-    ctx.save();
-    // Shadow
-    ctx.shadowColor = 'rgba(0,0,0,0.4)';
-    ctx.shadowBlur = 16;
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 8;
-    
-    // Draw rounded container for webcam
-    ctx.beginPath();
-    ctx.arc(camX + webcamSize/2, camY + webcamSize/2, webcamSize/2, 0, Math.PI * 2);
-    ctx.fillStyle = '#1e1e24';
-    ctx.fill();
-    ctx.strokeStyle = 'var(--accent-primary)';
-    ctx.lineWidth = 4;
-    ctx.stroke();
-    
-    // Draw user avatar inside webcam circle
-    ctx.shadowBlur = 0;
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 0;
-    ctx.clip();
-    
-    ctx.fillStyle = '#4a4a5a';
-    ctx.beginPath();
-    ctx.arc(camX + webcamSize/2, camY + webcamSize * 0.45, webcamSize * 0.22, 0, Math.PI * 2);
-    ctx.fill();
-    
-    ctx.beginPath();
-    ctx.arc(camX + webcamSize/2, camY + webcamSize * 1.1, webcamSize * 0.45, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
 
     // 8. Draw Captions overlays
     const currentCaption = captions.find(c => timestamp >= c.start_time && timestamp <= c.end_time);
@@ -505,34 +766,52 @@ export default function Editor({ projectId, onCloseProject, license }) {
       ctx.save();
       ctx.shadowColor = 'rgba(0,0,0,0.3)';
       ctx.shadowBlur = 8;
-      
-      // Draw watermark background card
-      ctx.fillStyle = 'rgba(255,255,255,0.06)';
+
+      ctx.fillStyle = `rgba(15,23,42,${settings.watermark_opacity ?? 0.7})`;
       ctx.strokeStyle = 'rgba(255,255,255,0.1)';
       ctx.lineWidth = 1;
-      
-      const wWidth = 200;
-      const wHeight = 44;
-      const wX = width - wWidth - 60;
-      const wY = 60;
-      
-      // Rounded card
+
+      const logoScale = settings.watermark_scale || 0.1;
+      const wWidth = Math.max(160, Math.min(360, width * logoScale * 1.9));
+      const wHeight = Math.max(40, Math.min(82, width * logoScale * 0.42));
+      const position = settings.watermark_position || 'top-right';
+      const wX = position.includes('left') ? 60 : width - wWidth - 60;
+      const wY = position.includes('bottom') ? height - wHeight - 60 : 60;
+
       ctx.beginPath();
       ctx.roundRect ? ctx.roundRect(wX, wY, wWidth, wHeight, 8) : ctx.rect(wX, wY, wWidth, wHeight);
       ctx.fill();
       ctx.stroke();
-      
-      // Logo placeholder text
-      ctx.fillStyle = !isPro ? 'rgba(239, 68, 68, 0.9)' : 'rgba(255,255,255,0.9)';
-      ctx.font = 'bold 12px Inter';
-      ctx.textAlign = 'center';
-      
-      const watermarkText = !isPro 
-        ? 'SCREENFLOW AI (FREE TRIAL)' 
-        : (settings.brand_name ? settings.brand_name.toUpperCase() : 'SCREENFLOW AI');
 
-      ctx.fillText(watermarkText, wX + wWidth/2, wY + wHeight/2 + 5);
+      const logoImg = brandLogoRef.current;
+      if (logoImg?.complete && logoImg.naturalWidth > 0) {
+        const logoMaxW = wWidth - 28;
+        const logoMaxH = wHeight - 16;
+        const logoRatio = logoImg.naturalWidth / logoImg.naturalHeight;
+        let logoW = logoMaxW;
+        let logoH = logoW / logoRatio;
+        if (logoH > logoMaxH) {
+          logoH = logoMaxH;
+          logoW = logoH * logoRatio;
+        }
+        ctx.drawImage(logoImg, wX + (wWidth - logoW) / 2, wY + (wHeight - logoH) / 2, logoW, logoH);
+      } else {
+        ctx.fillStyle = settings.brand_primary_color || 'rgba(255,255,255,0.9)';
+        ctx.font = `bold ${Math.max(11, Math.min(22, wHeight * 0.3))}px ${settings.watermark_font || 'Inter'}`;
+        ctx.textAlign = 'center';
+        const watermarkText = (settings.watermark_text || settings.brand_name || 'SCREENFLOW AI').toUpperCase();
+        ctx.fillText(watermarkText, wX + wWidth/2, wY + wHeight/2 + 5);
+      }
       ctx.restore();
+
+      if (!isPro) {
+        ctx.save();
+        ctx.fillStyle = 'rgba(239, 68, 68, 0.9)';
+        ctx.font = 'bold 11px Inter';
+        ctx.textAlign = 'right';
+        ctx.fillText('SCREENFLOW AI (FREE TRIAL)', width - 60, 34);
+        ctx.restore();
+      }
     }
 
     // 10. Draw Lower Thirds (Display between 2.0s and 6.0s of video)
@@ -554,7 +833,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
       
       // Glass banner background
       ctx.fillStyle = 'rgba(24, 24, 27, 0.85)';
-      ctx.strokeStyle = 'rgba(99, 102, 241, 0.3)';
+      ctx.strokeStyle = settings.brand_primary_color || 'rgba(99, 102, 241, 0.3)';
       ctx.lineWidth = 2;
       
       const ltW = 340;
@@ -570,11 +849,11 @@ export default function Editor({ projectId, onCloseProject, license }) {
       ctx.fillStyle = '#ffffff';
       ctx.font = 'bold 16px Inter';
       ctx.textAlign = 'left';
-      ctx.fillText(settings.brand_author || 'John Doe', slideX + 20, ltY + 32);
+      ctx.fillText(settings.brand_author || 'Alex Morgan', slideX + 20, ltY + 32);
 
-      ctx.fillStyle = 'var(--text-secondary)';
+      ctx.fillStyle = settings.brand_secondary_color || '#cbd5e1';
       ctx.font = '12px Inter';
-      ctx.fillText(settings.brand_title || 'SaaS Founder / Speaker', slideX + 20, ltY + 54);
+      ctx.fillText(settings.brand_title || 'SaaS Founder', slideX + 20, ltY + 54);
       ctx.restore();
     }
 
@@ -594,7 +873,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
       ctx.translate(width/2, height/2);
       ctx.scale(scale, scale);
       ctx.fillStyle = `rgba(255,255,255,${opacity})`;
-      ctx.fillText(settings.brand_name ? settings.brand_name.toUpperCase() : 'SCREENFLOW AI', 0, 10);
+      ctx.fillText((settings.brand_name || 'SCREENFLOW AI').toUpperCase(), 0, 10);
       ctx.restore();
     } else if (settings.outro_enabled && timestamp > (project?.duration || 10) - 2.0) {
       ctx.save();
@@ -607,7 +886,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
       ctx.font = 'bold 36px Outfit';
       ctx.textAlign = 'center';
       ctx.fillStyle = `rgba(255,255,255,${opacity})`;
-      ctx.fillText('THANKS FOR WATCHING', width/2, height/2 - 15);
+      ctx.fillText((settings.outro_text || 'THANKS FOR WATCHING').toUpperCase(), width/2, height/2 - 15);
       
       ctx.font = '16px Inter';
       ctx.fillStyle = `rgba(161,161,170,${opacity})`;
@@ -619,6 +898,28 @@ export default function Editor({ projectId, onCloseProject, license }) {
     animationRef.current = requestAnimationFrame(renderPreview);
   };
 
+  const handleCanvasClick = (e) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const rect = canvas.getBoundingClientRect();
+    const clickX = (e.clientX - rect.left) / rect.width;
+    const clickY = (e.clientY - rect.top) / rect.height;
+    
+    handleSaveSettings({
+      zoom_center_x: clickX,
+      zoom_center_y: clickY,
+      follow_cursor: false
+    });
+  };
+
+  const handleCanvasWheel = (e) => {
+    if (settings.zoom_level === undefined) return;
+    const zoomDelta = -e.deltaY * 0.001;
+    const nextZoom = Math.max(1.0, Math.min(4.0, settings.zoom_level + zoomDelta));
+    handleSaveSettings({ zoom_level: parseFloat(nextZoom.toFixed(2)) });
+  };
+
   const handlePlayToggle = () => {
     const video = videoRef.current;
     if (!video) return;
@@ -627,7 +928,16 @@ export default function Editor({ projectId, onCloseProject, license }) {
       video.pause();
       cancelAnimationFrame(animationRef.current);
     } else {
-      video.play();
+      video.muted = isMuted;
+      const playPromise = video.play();
+      if (playPromise !== undefined && typeof playPromise.catch === 'function') {
+        playPromise.catch((err) => {
+          console.warn("Video playback was blocked or interrupted. Muting and retrying...", err);
+          video.muted = true;
+          setIsMuted(true);
+          video.play().catch(e => console.error("Video play retry failed:", e));
+        });
+      }
       animationRef.current = requestAnimationFrame(renderPreview);
     }
     setIsPlaying(!isPlaying);
@@ -658,6 +968,32 @@ export default function Editor({ projectId, onCloseProject, license }) {
       setSilencePeriods(periods);
     }
     setDetectingSilence(false);
+  };
+
+  const applySilenceCutToTimeline = (enabled) => {
+    setAutoCutSilence(enabled);
+    if (!enabled || silencePeriods.length === 0 || duration <= 0) return;
+
+    const firstGap = silencePeriods[0];
+    const lastGap = silencePeriods[silencePeriods.length - 1];
+    const nextStart = Math.max(0, Math.min((firstGap.end || 0) / duration, 0.92));
+    const nextEnd = Math.min(1, Math.max((lastGap.start || duration) / duration, nextStart + 0.08));
+
+    const nextClips = timelineClips.map((clip) => (
+      clip.id === 'screen' || clip.id === 'audio'
+        ? { ...clip, start: nextStart, end: nextEnd, enabled: true }
+        : clip
+    ));
+    saveTimelineClips(nextClips);
+  };
+
+  const toggleTimelineLayer = (id, enabled) => {
+    const nextClips = timelineClips.map((clip) => (
+      clip.id === id
+        ? { ...clip, enabled, start: enabled ? Math.min(clip.start, 0.05) : clip.start, end: enabled ? Math.max(clip.end, 0.85) : clip.end }
+        : clip
+    ));
+    saveTimelineClips(nextClips);
   };
 
   const handleScanScene = async () => {
@@ -691,26 +1027,73 @@ export default function Editor({ projectId, onCloseProject, license }) {
     setAnalyzingScene(false);
   };
 
+  const applyBrandKitToProject = async () => {
+    if (!window.electron?.getBrandKit) return;
+    const kit = await window.electron.getBrandKit();
+    await handleSaveSettings({
+      brand_preset: 'brand-kit',
+      brand_name: kit.brand_name || 'SCREENFLOW AI',
+      brand_author: kit.lower_third_name || 'Alex Morgan',
+      brand_title: kit.lower_third_title || 'SaaS Founder',
+      brand_primary_color: kit.primary_color || '#7C3AED',
+      brand_secondary_color: kit.secondary_color || '#FF4D7E',
+      brand_logo: kit.primary_logo || null,
+      brand_white_logo: kit.white_logo || null,
+      watermark_enabled: true,
+      watermark_text: kit.watermark_text || kit.brand_name || 'SCREENFLOW AI',
+      watermark_opacity: kit.watermark_opacity ?? 0.7,
+      watermark_position: kit.watermark_position || 'top-right',
+      watermark_font: kit.watermark_font || 'Inter',
+      lower_third_enabled: true,
+      lower_third_style: kit.lower_third_style || 'modern',
+      intro_style: kit.intro_style || 'fade',
+      outro_style: kit.outro_style || 'subscribe',
+      outro_text: kit.outro_text || 'Thanks for Watching!'
+    });
+  };
+
   // Export start
   const handleExport = async () => {
+    let exportPath = '';
+    if (window.electron?.saveFile) {
+      exportPath = await window.electron.saveFile(`ScreenFlow_${projectId}.${exportFormat}`, [
+        { name: 'Video Files', extensions: [exportFormat] }
+      ]);
+      if (!exportPath) {
+        return;
+      }
+    }
+
     setShowExportModal(true);
     setIsExporting(true);
     setExportProgress(0);
     setExportDone(false);
+    setExportError('');
     setExportStartTime(Date.now());
 
-    // Simulate export progress if no real electron
-    if (window.electron && window.electron.startExport) {
-      const exportPath = `c:/Users/USER/Desktop/ScreenFlow_${projectId}.${exportFormat}`;
-      await window.electron.startExport(projectId, exportPath, exportFormat, exportQuality);
-      
-      window.electron.onExportProgress((data) => {
+    if (window.electron && window.electron.startExport && exportPath) {
+      exportProgressUnsubscribeRef.current?.();
+      exportProgressUnsubscribeRef.current = window.electron.onExportProgress((data) => {
         setExportProgress(data.progress);
-        if (data.progress >= 100) {
+        if (data.error) {
+          setExportError(data.error);
+          setIsExporting(false);
+          exportProgressUnsubscribeRef.current?.();
+          exportProgressUnsubscribeRef.current = null;
+        } else if (data.progress >= 100) {
           setIsExporting(false);
           setExportDone(true);
+          exportProgressUnsubscribeRef.current?.();
+          exportProgressUnsubscribeRef.current = null;
         }
       });
+
+      try {
+        await window.electron.startExport(projectId, exportPath, exportFormat, exportQuality);
+      } catch (err) {
+        setExportError(err.message);
+        setIsExporting(false);
+      }
     } else {
       // Demo: simulate progress
       let pct = 0;
@@ -735,11 +1118,11 @@ export default function Editor({ projectId, onCloseProject, license }) {
   };
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: '0', background: 'var(--bg-secondary)' }}>
+    <div className="editor-fullscreen" style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: '0', background: '#0f1117', color: '#e5e7eb' }}>
       {/* Top Header Bar */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 24px', borderBottom: '1px solid var(--border-color)', flexShrink: 0 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 24px', borderBottom: '1px solid #242936', background: 'linear-gradient(135deg, #7C3AED 0%, #FF4D7E 100%)', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <button onClick={onCloseProject} style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid var(--border-color)', borderRadius: '10px', color: 'var(--text-secondary)', cursor: 'pointer', padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600, transition: 'all 0.2s' }}
+          <button onClick={onCloseProject} style={{ background: '#1a1e27', border: '1px solid #2b313d', borderRadius: '8px', color: 'var(--text-secondary)', cursor: 'pointer', padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600, transition: 'all 0.2s' }}
             onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
             onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.06)'}
           >
@@ -766,7 +1149,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
           </div>
 
           <button onClick={handleGenerateCaptions} 
-            style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid var(--border-color)', borderRadius: '10px', color: 'var(--text-secondary)', cursor: 'pointer', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600 }}
+            style={{ background: '#1a1e27', border: '1px solid #2b313d', borderRadius: '8px', color: 'var(--text-secondary)', cursor: 'pointer', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600 }}
             disabled={loadingCaptions}
           >
             <Type size={13} />
@@ -774,13 +1157,13 @@ export default function Editor({ projectId, onCloseProject, license }) {
           </button>
 
           {!isPro && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '5px', background: 'rgba(124,58,237,0.12)', border: '1px solid rgba(124,58,237,0.25)', borderRadius: '8px', padding: '5px 10px', fontSize: '11px', fontWeight: 700, color: '#a78bfa' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '5px', background: '#1f2937', border: '1px solid #374151', borderRadius: '8px', padding: '5px 10px', fontSize: '11px', fontWeight: 700, color: '#d1d5db' }}>
               <Lock size={10} /> FREE PLAN
             </div>
           )}
 
           <button onClick={() => { setShowExportModal(true); setExportDone(false); setExportProgress(0); setIsExporting(false); }}
-            style={{ background: 'linear-gradient(135deg, #7C3AED 0%, #FF4D7E 100%)', border: 'none', borderRadius: '10px', color: '#fff', cursor: 'pointer', padding: '8px 18px', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 700, boxShadow: '0 4px 12px rgba(124,58,237,0.3)' }}
+            style={{ background: 'linear-gradient(135deg, #7C3AED 0%, #FF4D7E 100%)', border: 'none', borderRadius: '10px', color: '#fff', cursor: 'pointer', padding: '8px 18px', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 700, boxShadow: 'none' }}
           >
             <Download size={13} /> Export
           </button>
@@ -809,14 +1192,25 @@ export default function Editor({ projectId, onCloseProject, license }) {
               ref={canvasRef} 
               width={1280} 
               height={720} 
-              style={{ maxWidth: '100%', maxHeight: '100%', aspectRatio: '16/9', display: 'block', objectFit: 'contain' }}
+              onClick={handleCanvasClick}
+              onWheel={handleCanvasWheel}
+              style={{ 
+                maxWidth: '100%', 
+                maxHeight: '100%', 
+                aspectRatio: '16/9', 
+                display: 'block', 
+                objectFit: 'contain',
+                cursor: settings.follow_cursor === false ? 'crosshair' : 'zoom-in'
+              }}
             />
             {/* Hidden HTML5 video source */}
             <video 
               ref={videoRef} 
               src="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4" 
-              style={{ display: 'none' }}
+              style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0, pointerEvents: 'none' }}
               loop
+              playsInline
+              crossOrigin="anonymous"
             />
 
             {/* Playback overlay controls */}
@@ -840,7 +1234,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
 
             {/* Scene marker pills */}
             {smartZoomActive && sceneEvents.map((ev, i) => (
-              <div key={i} style={{ position: 'absolute', top: '14px', left: `${(ev.timestamp / duration) * 100}%`, transform: 'translateX(-50%)', background: 'rgba(124,58,237,0.8)', borderRadius: '6px', padding: '2px 8px', fontSize: '10px', fontWeight: 700, color: '#fff', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+              <div key={i} style={{ position: 'absolute', top: '14px', left: `${(ev.timestamp / duration) * 100}%`, transform: 'translateX(-50%)', background: 'rgba(37,99,235,0.88)', borderRadius: '6px', padding: '2px 8px', fontSize: '10px', fontWeight: 700, color: '#fff', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                 {ev.zoom}x
               </div>
             ))}
@@ -856,7 +1250,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
               </button>
 
               <button onClick={handlePlayToggle}
-                style={{ background: 'linear-gradient(135deg, #7C3AED 0%, #FF4D7E 100%)', border: 'none', borderRadius: '10px', color: '#fff', cursor: 'pointer', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 4px 12px rgba(124,58,237,0.3)' }}>
+                style={{ background: 'linear-gradient(135deg, #7C3AED 0%, #FF4D7E 100%)', border: 'none', borderRadius: '10px', color: '#fff', cursor: 'pointer', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: 'none' }}>
                 {isPlaying ? <Pause size={14} fill="#fff" /> : <Play size={14} fill="#fff" style={{ marginLeft: '1px' }} />}
               </button>
 
@@ -869,22 +1263,22 @@ export default function Editor({ projectId, onCloseProject, license }) {
               <div 
                 ref={timelineRef}
                 style={{ flex: 1, height: '6px', background: 'rgba(255,255,255,0.08)', borderRadius: '3px', position: 'relative', cursor: 'pointer' }}
-                onClick={(e) => {
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const pct = (e.clientX - rect.left) / rect.width;
-                  const newTime = pct * duration;
-                  if (videoRef.current) videoRef.current.currentTime = newTime;
-                  setCurrentTime(newTime);
-                }}
+                onClick={seekToTimelineEvent}
               >
                 {/* Progress fill */}
-                <div style={{ position: 'absolute', left: 0, top: 0, height: '100%', width: `${(currentTime / duration) * 100}%`, background: 'linear-gradient(90deg, #7C3AED, #FF4D7E)', borderRadius: '3px' }} />
+                <div style={{ position: 'absolute', left: 0, top: 0, height: '100%', width: `${(currentTime / duration) * 100}%`, background: '#7C3AED', borderRadius: '3px' }} />
                 {/* Playhead */}
                 <div style={{ position: 'absolute', left: `${(currentTime / duration) * 100}%`, top: '-5px', width: '16px', height: '16px', borderRadius: '50%', background: '#fff', border: '3px solid #7C3AED', transform: 'translateX(-50%)', boxShadow: '0 2px 8px rgba(0,0,0,0.4)', cursor: 'grab' }} />
               </div>
 
               {/* Volume */}
-              <button onClick={() => { setIsMuted(!isMuted); if(videoRef.current) videoRef.current.muted = !isMuted; }}
+              <button onClick={() => {
+                setIsMuted((prevMuted) => {
+                  const nextMuted = !prevMuted;
+                  if (videoRef.current) videoRef.current.muted = nextMuted;
+                  return nextMuted;
+                });
+              }}
                 style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex', padding: '4px' }}>
                 {isMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
               </button>
@@ -904,6 +1298,57 @@ export default function Editor({ projectId, onCloseProject, license }) {
 
             {/* Visual Timeline Tracks */}
             <div style={{ padding: '10px 16px', display: 'flex', flexDirection: 'column', gap: '6px', overflowX: 'auto' }}>
+              {selectedClipId && (
+                <div style={{ marginLeft: '88px', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '8px', color: '#cbd5e1', fontSize: '11px' }}>
+                  {(() => {
+                    const selectedClip = getClipById(selectedClipId);
+                    if (!selectedClip) return null;
+                    const start = selectedClip.start * duration;
+                    const end = selectedClip.end * duration;
+                    return (
+                      <>
+                        <strong style={{ color: selectedClip.color }}>{selectedClip.label}</strong>
+                        <span>Start</span>
+                        <input
+                          type="number"
+                          min="0"
+                          max={duration}
+                          step="0.1"
+                          value={start.toFixed(1)}
+                          onChange={(event) => {
+                            const nextStart = Math.max(0, Math.min(parseFloat(event.target.value) || 0, end - 0.15));
+                            saveTimelineClips(timelineClips.map((clip) => clip.id === selectedClip.id ? { ...clip, start: nextStart / duration, enabled: true } : clip));
+                          }}
+                          style={{ width: '58px', background: '#0f1322', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '6px', color: '#fff', padding: '4px 6px', fontSize: '11px' }}
+                        />
+                        <span>End</span>
+                        <input
+                          type="number"
+                          min="0"
+                          max={duration}
+                          step="0.1"
+                          value={end.toFixed(1)}
+                          onChange={(event) => {
+                            const nextEnd = Math.min(duration, Math.max(parseFloat(event.target.value) || duration, start + 0.15));
+                            saveTimelineClips(timelineClips.map((clip) => clip.id === selectedClip.id ? { ...clip, end: nextEnd / duration, enabled: true } : clip));
+                          }}
+                          style={{ width: '58px', background: '#0f1322', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '6px', color: '#fff', padding: '4px 6px', fontSize: '11px' }}
+                        />
+                        <button
+                          onClick={() => {
+                            if (videoRef.current) videoRef.current.currentTime = start;
+                            setCurrentTime(start);
+                            animationRef.current = requestAnimationFrame(renderPreview);
+                          }}
+                          style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px', color: '#fff', padding: '4px 8px', cursor: 'pointer', fontSize: '11px', fontWeight: 700 }}
+                        >
+                          Jump
+                        </button>
+                      </>
+                    );
+                  })()}
+                </div>
+              )}
               {/* Timecode ruler */}
               <div style={{ display: 'flex', gap: '0', position: 'relative', height: '18px', marginLeft: '80px' }}>
                 {Array.from({ length: Math.ceil(duration) + 1 }, (_, i) => i).filter(i => i % 5 === 0).map(sec => (
@@ -922,7 +1367,10 @@ export default function Editor({ projectId, onCloseProject, license }) {
                   </div>
 
                   {/* Track lane */}
-                  <div style={{ flex: 1, height: '32px', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)', position: 'relative', overflow: 'hidden', minWidth: `${100 * timelineZoom}%` }}>
+                  <div
+                    style={{ flex: 1, height: '32px', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)', position: 'relative', overflow: 'hidden', minWidth: `${100 * timelineZoom}%`, cursor: 'pointer' }}
+                    onClick={seekToTimelineEvent}
+                  >
                     {/* Clip block */}
                     <div style={{
                       position: 'absolute',
@@ -930,15 +1378,29 @@ export default function Editor({ projectId, onCloseProject, license }) {
                       width: `${(clip.end - clip.start) * 100}%`,
                       height: '100%',
                       background: `${clip.color}33`,
-                      border: `1px solid ${clip.color}66`,
+                      border: selectedClipId === clip.id ? `2px solid ${clip.color}` : `1px solid ${clip.color}66`,
+                      opacity: clip.enabled === false ? 0.35 : 1,
                       borderRadius: '5px',
                       display: 'flex', alignItems: 'center', padding: '0 8px',
-                      cursor: 'pointer', transition: 'opacity 0.2s'
+                      cursor: timelineDrag?.id === clip.id ? 'grabbing' : 'grab', transition: 'opacity 0.2s, border 0.2s'
+                    }}
+                    onMouseDown={(event) => startClipDrag(event, clip, 'move')}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setSelectedClipId(clip.id);
                     }}
                     onMouseEnter={e => e.currentTarget.style.opacity = '0.8'}
                     onMouseLeave={e => e.currentTarget.style.opacity = '1'}
                     >
+                      <div
+                        onMouseDown={(event) => startClipDrag(event, clip, 'trim-start')}
+                        style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: '8px', cursor: 'ew-resize', background: 'rgba(255,255,255,0.18)' }}
+                      />
                       <span style={{ fontSize: '9px', fontWeight: 700, color: clip.color, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{clip.label}</span>
+                      <div
+                        onMouseDown={(event) => startClipDrag(event, clip, 'trim-end')}
+                        style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: '8px', cursor: 'ew-resize', background: 'rgba(255,255,255,0.18)' }}
+                      />
                     </div>
 
                     {/* Playhead line overlay */}
@@ -961,9 +1423,9 @@ export default function Editor({ projectId, onCloseProject, license }) {
         </div>
 
         {/* Sidebar panel */}
-        <div style={{ display: 'flex', flexDirection: 'column', overflowY: 'auto', background: 'var(--bg-surface)' }}>
+        <div className="editor-inspector" style={{ display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
           {/* Compact icon-tab bar */}
-          <div style={{ display: 'flex', gap: '0', borderBottom: '1px solid var(--border-color)', padding: '8px 12px 0', overflowX: 'auto' }}>
+          <div style={{ display: 'flex', gap: '0', borderBottom: '1px solid rgba(255,255,255,0.08)', padding: '10px 12px 0', overflowX: 'auto', background: 'rgba(10,13,24,0.36)' }}>
             {[
               { id: 'zoom', icon: ZoomIn, label: 'Zoom' },
               { id: 'bg', icon: Image, label: 'Background' },
@@ -978,7 +1440,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
                     display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px',
                     padding: '8px 12px 10px',
                     background: 'none', border: 'none', cursor: 'pointer',
-                    color: sidebarTab === tab.id ? '#a78bfa' : 'var(--text-muted)',
+                    color: sidebarTab === tab.id ? '#ffffff' : '#a5aec6',
                     borderBottom: sidebarTab === tab.id ? '2px solid #7C3AED' : '2px solid transparent',
                     fontSize: '10px', fontWeight: 600, transition: 'all 0.15s', flexShrink: 0
                   }}>
@@ -994,12 +1456,12 @@ export default function Editor({ projectId, onCloseProject, license }) {
           {sidebarTab === 'zoom' || sidebarTab === 'bg' || sidebarTab === 'cursor' || sidebarTab === 'brand' ? (
             <>
               {/* Zoom Controls */}
-              <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <h3 style={{ fontSize: '14px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <h3 style={{ fontSize: '15px', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '9px' }}>
               <Sparkles size={14} /> Smart Zoom Easing
             </h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Zoom Scale ({settings.zoom_level}x)</span>
+              <span style={{ fontSize: '12px', color: '#d7dcf0', fontWeight: 700 }}>Zoom Scale ({settings.zoom_level}x)</span>
               <input 
                 type="range" 
                 min="1.0" 
@@ -1018,10 +1480,10 @@ export default function Editor({ projectId, onCloseProject, license }) {
                     onClick={() => handleSaveSettings({ zoom_level: val })}
                     style={{
                       flex: 1,
-                      padding: '6px',
-                      borderRadius: '6px',
-                      border: '1px solid var(--border-color)',
-                      background: settings.zoom_level === val ? 'var(--accent-gradient)' : 'rgba(255,255,255,0.02)',
+                      padding: '9px 6px',
+                      borderRadius: '9px',
+                      border: settings.zoom_level === val ? '1px solid rgba(255,255,255,0.24)' : '1px solid rgba(255,255,255,0.12)',
+                      background: settings.zoom_level === val ? 'var(--accent-gradient)' : 'rgba(16,20,36,0.54)',
                       color: '#fff',
                       fontSize: '11px',
                       fontWeight: 600,
@@ -1031,6 +1493,82 @@ export default function Editor({ projectId, onCloseProject, license }) {
                   >
                     {val}x
                   </button>
+                ))}
+              </div>
+
+              {/* Zoom Style Selector (Screen Studio style) */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '10px' }}>
+                <span style={{ fontSize: '11px', color: '#d7dcf0', fontWeight: 700 }}>Camera Animation Mode</span>
+                <div style={{ display: 'flex', gap: '6px', background: 'rgba(16,20,36,0.58)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '12px', padding: '4px' }}>
+                  <button
+                    onClick={() => handleSaveSettings({ follow_cursor: true })}
+                    style={{
+                      flex: 1,
+                      padding: '10px 6px',
+                      borderRadius: '9px',
+                      border: 'none',
+                      background: settings.follow_cursor !== false ? 'rgba(139,92,246,0.54)' : 'transparent',
+                      color: settings.follow_cursor !== false ? '#ffffff' : '#c9d0e5',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      transition: 'all 0.2s'
+                    }}
+                  >
+                    Continuous Glide
+                  </button>
+                  <button
+                    onClick={() => handleSaveSettings({ follow_cursor: false })}
+                    style={{
+                      flex: 1,
+                      padding: '10px 6px',
+                      borderRadius: '9px',
+                      border: 'none',
+                      background: settings.follow_cursor === false ? 'rgba(139,92,246,0.54)' : 'transparent',
+                      color: settings.follow_cursor === false ? '#ffffff' : '#c9d0e5',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      transition: 'all 0.2s'
+                    }}
+                  >
+                    Zoom on Clicks
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '10px' }}>
+                <span style={{ fontSize: '12px', color: '#d7dcf0', fontWeight: 700 }}>Zoom Smoothness ({Math.round((settings.zoom_smoothing !== undefined ? settings.zoom_smoothing : 0.08) * 100)}%)</span>
+                <input
+                  type="range"
+                  min="0.03"
+                  max="0.22"
+                  step="0.01"
+                  value={settings.zoom_smoothing !== undefined ? settings.zoom_smoothing : 0.08}
+                  onChange={(e) => handleSaveSettings({ zoom_smoothing: parseFloat(e.target.value) })}
+                  style={{ width: '100%', accentColor: 'var(--accent-primary)' }}
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginTop: '2px' }}>
+                {[
+                  ['zoom_in_duration', 'In'],
+                  ['zoom_hold_duration', 'Hold'],
+                  ['zoom_out_duration', 'Out']
+                ].map(([key, label]) => (
+                  <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{label}</span>
+                    <input
+                      type="number"
+                      min="0.1"
+                      max="2"
+                      step="0.05"
+                      value={settings[key] !== undefined ? settings[key] : key === 'zoom_hold_duration' ? 0.55 : 0.35}
+                      onChange={(e) => handleSaveSettings({ [key]: parseFloat(e.target.value) })}
+                      className="input-control"
+                      style={{ fontSize: '12px', padding: '8px' }}
+                    />
+                  </label>
                 ))}
               </div>
 
@@ -1076,8 +1614,8 @@ export default function Editor({ projectId, onCloseProject, license }) {
           </div>
 
           {/* Background Settings */}
-          <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <h3 style={{ fontSize: '14px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <h3 style={{ fontSize: '15px', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '9px' }}>
               <Image size={14} /> Canvas Background
             </h3>
             <select 
@@ -1085,10 +1623,10 @@ export default function Editor({ projectId, onCloseProject, license }) {
               onChange={(e) => handleSaveSettings({ background_type: e.target.value })}
               className="input-control"
             >
-              <option value="gradient">Gradient Background</option>
-              <option value="solid">Solid Color</option>
-              <option value="blur">Video Blur Backdrop</option>
-              <option value="image">Custom Uploaded Image</option>
+              <option style={{ background: '#252a42', color: '#fff' }} value="gradient">Gradient Background</option>
+              <option style={{ background: '#252a42', color: '#fff' }} value="solid">Solid Color</option>
+              <option style={{ background: '#252a42', color: '#fff' }} value="blur">Video Blur Backdrop</option>
+              <option style={{ background: '#252a42', color: '#fff' }} value="image">Custom Uploaded Image</option>
             </select>
 
             {settings.background_type === 'solid' && (
@@ -1106,21 +1644,21 @@ export default function Editor({ projectId, onCloseProject, license }) {
             {settings.background_type === 'gradient' && (
               <div style={{ display: 'flex', gap: '12px', marginTop: '4px' }}>
                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Start Color</span>
+                  <span style={{ fontSize: '11px', color: '#d7dcf0', fontWeight: 700 }}>Start Color</span>
                   <input 
                     type="color" 
                     value={settings.background_value_start || '#6366f1'} 
                     onChange={(e) => handleSaveSettings({ background_value_start: e.target.value })}
-                    style={{ width: '100%', height: '36px', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'transparent', cursor: 'pointer' }}
+                    style={{ width: '100%', height: '44px', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '10px', background: 'rgba(16,20,36,0.54)', cursor: 'pointer', padding: '4px' }}
                   />
                 </div>
                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>End Color</span>
+                  <span style={{ fontSize: '11px', color: '#d7dcf0', fontWeight: 700 }}>End Color</span>
                   <input 
                     type="color" 
                     value={settings.background_value_end || '#a855f7'} 
                     onChange={(e) => handleSaveSettings({ background_value_end: e.target.value })}
-                    style={{ width: '100%', height: '36px', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'transparent', cursor: 'pointer' }}
+                    style={{ width: '100%', height: '44px', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '10px', background: 'rgba(16,20,36,0.54)', cursor: 'pointer', padding: '4px' }}
                   />
                 </div>
               </div>
@@ -1152,6 +1690,25 @@ export default function Editor({ projectId, onCloseProject, license }) {
             <h3 style={{ fontSize: '14px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
               <MousePointer size={14} /> Cursor Highlight
             </h3>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={settings.cursor_visible !== false}
+                onChange={(e) => handleSaveSettings({ cursor_visible: e.target.checked })}
+              />
+              Show cursor in preview/export
+            </label>
+
+            <select
+              value={settings.cursor_style || 'arrow'}
+              onChange={(e) => handleSaveSettings({ cursor_style: e.target.value })}
+              className="input-control"
+            >
+              <option value="arrow">White Arrow Pointer</option>
+              <option value="dot">Colored Dot Pointer</option>
+              <option value="ring">Minimal Ring Pointer</option>
+            </select>
+
             <select 
               value={settings.cursor_highlight || 'ripple'} 
               onChange={(e) => handleSaveSettings({ cursor_highlight: e.target.value })}
@@ -1187,6 +1744,19 @@ export default function Editor({ projectId, onCloseProject, license }) {
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '4px' }}>
+              <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Pointer Scale ({Math.round((settings.cursor_scale || 1) * 100)}%)</span>
+              <input
+                type="range"
+                min="0.5"
+                max="2"
+                step="0.05"
+                value={settings.cursor_scale || 1}
+                onChange={(e) => handleSaveSettings({ cursor_scale: parseFloat(e.target.value) })}
+                style={{ width: '100%', accentColor: 'var(--accent-primary)' }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '4px' }}>
               <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Glow Opacity ({Math.round((settings.cursor_opacity !== undefined ? settings.cursor_opacity : 0.8) * 100)}%)</span>
               <input 
                 type="range" 
@@ -1198,13 +1768,93 @@ export default function Editor({ projectId, onCloseProject, license }) {
                 style={{ width: '100%', accentColor: 'var(--accent-primary)' }}
               />
             </div>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={settings.auto_smooth_cursor !== false}
+                onChange={(e) => handleSaveSettings({ auto_smooth_cursor: e.target.checked })}
+              />
+              Smooth cursor movement
+            </label>
+
+            {settings.auto_smooth_cursor !== false && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Cursor Smoothness ({Math.round((settings.cursor_smoothing !== undefined ? settings.cursor_smoothing : 0.18) * 100)}%)</span>
+                <input
+                  type="range"
+                  min="0.05"
+                  max="0.45"
+                  step="0.01"
+                  value={settings.cursor_smoothing !== undefined ? settings.cursor_smoothing : 0.18}
+                  onChange={(e) => handleSaveSettings({ cursor_smoothing: parseFloat(e.target.value) })}
+                  style={{ width: '100%', accentColor: 'var(--accent-primary)' }}
+                />
+              </div>
+            )}
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={settings.cursor_auto_hide !== false}
+                onChange={(e) => handleSaveSettings({ cursor_auto_hide: e.target.checked })}
+              />
+              Auto-hide cursor when idle
+            </label>
+
+            {settings.cursor_auto_hide !== false && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Idle Hide Delay ({(settings.cursor_idle_hide_delay !== undefined ? settings.cursor_idle_hide_delay : 1.2).toFixed(1)}s)</span>
+                <input
+                  type="range"
+                  min="0.4"
+                  max="3"
+                  step="0.1"
+                  value={settings.cursor_idle_hide_delay !== undefined ? settings.cursor_idle_hide_delay : 1.2}
+                  onChange={(e) => handleSaveSettings({ cursor_idle_hide_delay: parseFloat(e.target.value) })}
+                  style={{ width: '100%', accentColor: 'var(--accent-primary)' }}
+                />
+              </div>
+            )}
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={!!settings.cursor_loop_to_start}
+                onChange={(e) => handleSaveSettings({ cursor_loop_to_start: e.target.checked })}
+              />
+              Loop cursor back to start
+            </label>
           </div>
 
           {/* Webcam settings card */}
           <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <h3 style={{ fontSize: '14px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Camera size={14} /> Webcam Overlay
+            <h3 style={{ fontSize: '14px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'space-between' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><Camera size={14} /> Webcam Overlay</span>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', fontWeight: 'normal', fontSize: '12px' }}>
+                <input 
+                  type="checkbox" 
+                  checked={!!settings.webcam_enabled} 
+                  onChange={(e) => {
+                    handleSaveSettings({ webcam_enabled: e.target.checked });
+                    toggleTimelineLayer('webcam', e.target.checked);
+                  }}
+                  style={{ accentColor: 'var(--accent-primary)' }}
+                />
+                Show
+              </label>
             </h3>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Label</span>
+              <input
+                type="text"
+                value={settings.webcam_label || 'Camera'}
+                onChange={(e) => handleSaveSettings({ webcam_label: e.target.value })}
+                className="input-control"
+                placeholder="Camera"
+              />
+            </div>
             
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Position Alignment</span>
@@ -1224,10 +1874,10 @@ export default function Editor({ projectId, onCloseProject, license }) {
               <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Overlay Size ({Math.round((settings.webcam_size || 0.2) * 100)}%)</span>
               <input 
                 type="range" 
-                min="0.1" 
-                max="0.4" 
+                min="0.14" 
+                max="0.36" 
                 step="0.02" 
-                value={settings.webcam_size || 0.2} 
+                value={settings.webcam_size || 0.22} 
                 onChange={(e) => handleSaveSettings({ webcam_size: parseFloat(e.target.value) })}
                 style={{ width: '100%', accentColor: 'var(--accent-primary)' }}
               />
@@ -1235,7 +1885,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
           </div>
 
           {/* Motion Blur settings card */}
-          <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '12px', order: -1 }}>
             <h3 style={{ fontSize: '14px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Film size={14} /> Camera Motion Blur
             </h3>
@@ -1303,9 +1953,9 @@ export default function Editor({ projectId, onCloseProject, license }) {
                   <input 
                     type="checkbox" 
                     checked={autoCutSilence} 
-                    onChange={(e) => setAutoCutSilence(e.target.checked)} 
+                    onChange={(e) => applySilenceCutToTimeline(e.target.checked)} 
                   />
-                  Auto-cut silence (Live Preview)
+                  Auto-cut silence and update timeline
                 </label>
               </div>
             )}
@@ -1317,57 +1967,33 @@ export default function Editor({ projectId, onCloseProject, license }) {
               <Layers size={14} /> Brand Styling & Overlays
             </h3>
 
-            {/* Brand Presets */}
+            <button
+              onClick={applyBrandKitToProject}
+              style={{ background: 'linear-gradient(135deg, #7C3AED 0%, #FF4D7E 100%)', border: 'none', borderRadius: '12px', color: '#fff', padding: '11px 12px', fontWeight: 900, cursor: 'pointer' }}
+            >
+              Apply Saved Brand Kit
+            </button>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Primary Color</span>
+                <input type="color" value={settings.brand_primary_color || '#7C3AED'} onChange={(e) => handleSaveSettings({ brand_primary_color: e.target.value })} style={{ width: '100%', height: '42px', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '10px', background: 'rgba(16,20,36,0.54)', cursor: 'pointer', padding: '4px' }} />
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Accent Color</span>
+                <input type="color" value={settings.brand_secondary_color || '#FF4D7E'} onChange={(e) => handleSaveSettings({ brand_secondary_color: e.target.value })} style={{ width: '100%', height: '42px', border: '1px solid rgba(255,255,255,0.18)', borderRadius: '10px', background: 'rgba(16,20,36,0.54)', cursor: 'pointer', padding: '4px' }} />
+              </label>
+            </div>
+
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Brand Presets</span>
-              <select 
-                onChange={(e) => {
-                  const val = e.target.value;
-                  if (val === 'modern') {
-                    handleSaveSettings({
-                      brand_preset: 'modern',
-                      brand_name: 'Modern Studio',
-                      brand_author: 'Jane Doe',
-                      brand_title: 'Creative Director',
-                      watermark_enabled: true,
-                      lower_third_enabled: true,
-                      intro_enabled: true,
-                      outro_enabled: true
-                    });
-                  } else if (val === 'creative') {
-                    handleSaveSettings({
-                      brand_preset: 'creative',
-                      brand_name: 'Pixel & Code',
-                      brand_author: 'Alex Smith',
-                      brand_title: 'UX Lead',
-                      watermark_enabled: true,
-                      lower_third_enabled: true,
-                      intro_enabled: true,
-                      outro_enabled: true
-                    });
-                  } else if (val === 'corporate') {
-                    handleSaveSettings({
-                      brand_preset: 'corporate',
-                      brand_name: 'CorpTech Inc',
-                      brand_author: 'Robert Vance',
-                      brand_title: 'Chief Officer',
-                      watermark_enabled: true,
-                      lower_third_enabled: true,
-                      intro_enabled: true,
-                      outro_enabled: true
-                    });
-                  } else {
-                    handleSaveSettings({ brand_preset: 'none' });
-                  }
-                }}
+              <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Company Name</span>
+              <input
+                type="text"
+                value={settings.brand_name || 'SCREENFLOW AI'}
+                onChange={(e) => handleSaveSettings({ brand_name: e.target.value })}
                 className="input-control"
-                value={settings.brand_preset || 'none'}
-              >
-                <option value="none">No Preset (Custom)</option>
-                <option value="modern">Modern Studio Preset</option>
-                <option value="creative">Creative Pixel Preset</option>
-                <option value="corporate">Corporate Tech Preset</option>
-              </select>
+                style={{ fontSize: '12px', padding: '8px 10px' }}
+              />
             </div>
 
             {/* Watermark/Logo toggles */}
@@ -1383,15 +2009,70 @@ export default function Editor({ projectId, onCloseProject, license }) {
               </label>
 
               {(settings.watermark_enabled || !isPro) && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Watermark Logo Text</span>
-                  <input 
-                    type="text" 
-                    value={settings.brand_name || 'SCREENFLOW AI'} 
-                    onChange={(e) => handleSaveSettings({ brand_name: e.target.value })}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Watermark Text</span>
+                    <input
+                      type="text"
+                      value={settings.watermark_text || settings.brand_name || 'SCREENFLOW AI'}
+                      onChange={(e) => handleSaveSettings({ watermark_text: e.target.value })}
+                      className="input-control"
+                      style={{ fontSize: '12px', padding: '8px 10px' }}
+                    />
+                  </div>
+
+                  <button
+                    onClick={async () => {
+                      const file = await window.electron?.selectFile?.([{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }]);
+                      if (file) handleSaveSettings({ brand_logo: file });
+                    }}
+                    style={{ background: 'rgba(16,20,36,0.54)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '10px', color: '#fff', padding: '9px 10px', cursor: 'pointer', fontSize: '12px', fontWeight: 800 }}
+                  >
+                    {settings.brand_logo ? 'Replace Logo File' : 'Choose Logo File'}
+                  </button>
+
+                  {settings.brand_logo && (
+                    <div style={{ color: '#cbd5e1', fontSize: '10px', lineHeight: 1.4, wordBreak: 'break-all' }}>
+                      Logo selected: {settings.brand_logo.split(/[\\/]/).pop()}
+                    </div>
+                  )}
+
+                  <select
+                    value={settings.watermark_position || 'top-right'}
+                    onChange={(e) => handleSaveSettings({ watermark_position: e.target.value })}
                     className="input-control"
-                    style={{ fontSize: '12px', padding: '6px 10px' }}
-                  />
+                  >
+                    <option value="top-left">Top Left</option>
+                    <option value="top-right">Top Right</option>
+                    <option value="bottom-left">Bottom Left</option>
+                    <option value="bottom-right">Bottom Right</option>
+                  </select>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Logo/Text Size ({Math.round((settings.watermark_scale || 0.1) * 100)}%)</span>
+                    <input
+                      type="range"
+                      min="0.07"
+                      max="0.22"
+                      step="0.01"
+                      value={settings.watermark_scale || 0.1}
+                      onChange={(e) => handleSaveSettings({ watermark_scale: parseFloat(e.target.value) })}
+                      style={{ width: '100%', accentColor: 'var(--accent-primary)' }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Opacity ({Math.round((settings.watermark_opacity ?? 0.7) * 100)}%)</span>
+                    <input
+                      type="range"
+                      min="0.15"
+                      max="1"
+                      step="0.05"
+                      value={settings.watermark_opacity ?? 0.7}
+                      onChange={(e) => handleSaveSettings({ watermark_opacity: parseFloat(e.target.value) })}
+                      style={{ width: '100%', accentColor: 'var(--accent-primary)' }}
+                    />
+                  </div>
                 </div>
               )}
             </div>
@@ -1451,6 +2132,15 @@ export default function Editor({ projectId, onCloseProject, license }) {
                 />
                 Enable Outro Card
               </label>
+              {settings.outro_enabled && (
+                <input
+                  type="text"
+                  value={settings.outro_text || 'Thanks for Watching'}
+                  onChange={(e) => handleSaveSettings({ outro_text: e.target.value })}
+                  className="input-control"
+                  style={{ fontSize: '12px', padding: '8px 10px' }}
+                />
+              )}
             </div>
           </div>
           </>
@@ -1523,13 +2213,23 @@ export default function Editor({ projectId, onCloseProject, license }) {
           }}
           onClick={e => { if (e.target === e.currentTarget && !isExporting) setShowExportModal(false); }}
         >
-          <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-color)', borderRadius: '24px', padding: '32px', width: '460px', display: 'flex', flexDirection: 'column', gap: '24px', boxShadow: '0 40px 80px rgba(0,0,0,0.5)' }}>
+          <div style={{ background: '#f8fafc', border: '1px solid var(--border-color)', borderRadius: '24px', padding: '32px', width: '460px', display: 'flex', flexDirection: 'column', gap: '24px', boxShadow: '0 40px 80px rgba(0,0,0,0.5)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h3 style={{ fontSize: '20px', fontWeight: 800 }}>Export Video</h3>
               {!isExporting && <button onClick={() => setShowExportModal(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '22px', lineHeight: 1 }}>×</button>}
             </div>
 
-            {exportDone ? (
+            {exportError ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '8px 0' }}>
+                <div style={{ color: '#f87171', fontSize: '14px', fontWeight: 800 }}>Export failed</div>
+                <div style={{ color: 'var(--text-secondary)', fontSize: '12px', lineHeight: 1.5, maxHeight: '120px', overflow: 'auto', whiteSpace: 'pre-wrap' }}>
+                  {exportError}
+                </div>
+                <button onClick={() => { setExportError(''); setExportProgress(0); }} style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border-color)', borderRadius: '12px', color: 'var(--text-primary)', padding: '12px', fontWeight: 700, fontSize: '14px', cursor: 'pointer' }}>
+                  Try Again
+                </button>
+              </div>
+            ) : exportDone ? (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px', padding: '16px 0', textAlign: 'center' }}>
                 <div style={{ background: 'rgba(0,196,140,0.12)', color: '#00C48C', width: '64px', height: '64px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   <Check size={28} />
@@ -1556,7 +2256,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
                 </div>
                 <div>
                   <div style={{ height: '8px', background: 'rgba(255,255,255,0.06)', borderRadius: '4px', overflow: 'hidden' }}>
-                    <div style={{ height: '100%', width: `${exportProgress}%`, background: 'linear-gradient(90deg, #7C3AED, #FF4D7E)', transition: 'width 0.4s ease', borderRadius: '4px' }} />
+                    <div style={{ height: '100%', width: `${exportProgress}%`, background: '#7C3AED', transition: 'width 0.4s ease', borderRadius: '4px' }} />
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: 'var(--text-muted)', marginTop: '6px' }}>
                     <span>{Math.round(exportProgress)}% complete</span>
@@ -1604,7 +2304,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
                 </div>
 
                 <div style={{ display: 'flex', gap: '12px' }}>
-                  <button onClick={handleExport} style={{ flex: 1, background: 'linear-gradient(135deg, #7C3AED 0%, #FF4D7E 100%)', border: 'none', borderRadius: '12px', color: '#fff', padding: '14px', fontWeight: 800, fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', boxShadow: '0 6px 20px rgba(124,58,237,0.35)' }}>
+                  <button onClick={handleExport} style={{ flex: 1, background: 'linear-gradient(135deg, #7C3AED 0%, #FF4D7E 100%)', border: 'none', borderRadius: '12px', color: '#fff', padding: '14px', fontWeight: 800, fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', boxShadow: 'none' }}>
                     <Download size={16} /> Start Export
                   </button>
                   <button onClick={() => setShowExportModal(false)} style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border-color)', borderRadius: '12px', color: 'var(--text-secondary)', padding: '14px 20px', fontWeight: 700, fontSize: '14px', cursor: 'pointer' }}>Cancel</button>
@@ -1617,3 +2317,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
     </div>
   );
 }
+
+
+
+

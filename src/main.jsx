@@ -9,11 +9,14 @@ import Dashboard from './pages/Dashboard';
 import Recording from './pages/Recording';
 import Projects from './pages/Projects';
 import Exports from './pages/Exports';
-import Templates from './pages/Templates';
 import SettingsPage from './pages/Settings';
 import Editor from './pages/Editor';
 import BrandKit from './pages/BrandKit';
 import AITools from './pages/AITools';
+import Widget from './pages/Widget';
+import FootballLab from './pages/FootballLab';
+import LiveCall from './pages/LiveCall';
+import JoinCall from './pages/JoinCall';
 
 // Safe browser mock stubs if running outside of Electron
 if (!window.electron) {
@@ -113,12 +116,26 @@ if (!window.electron) {
       { id: 'screen-1', name: 'Primary Monitor (1080p)', thumbnail: '' },
       { id: 'window-1', name: 'Chrome Browser Window', thumbnail: '' }
     ],
+    setLiveDisplaySource: async () => ({ success: true }),
+    createLiveKitToken: async () => ({ success: false, error: 'LiveKit is only available in Electron.' }),
     startRecording: async () => ({ success: true }),
     stopRecording: async () => ({ events: mockCursorEvents }),
-    saveRecordedFile: async () => ({
-      success: true,
-      filePath: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4'
-    }),
+    saveRecordedFile: async (uint8Array) => {
+      try {
+        const blob = new Blob([uint8Array], { type: 'video/webm' });
+        const url = URL.createObjectURL(blob);
+        return {
+          success: true,
+          filePath: url
+        };
+      } catch (err) {
+        console.error("Mock file save failed:", err);
+        return {
+          success: false,
+          error: err.message
+        };
+      }
+    },
     startExport: async (projectId, path, format, quality) => {
       // Simulate progress
       let p = 0;
@@ -201,12 +218,14 @@ function App() {
         return <Projects onOpenProject={handleOpenProject} />;
       case 'exports':
         return <Exports />;
-      case 'templates':
-        return <Templates onCreateProject={handleOpenProject} license={license} />;
       case 'brandkit':
         return <BrandKit />;
       case 'aitools':
         return <AITools navigateTo={setCurrentPage} />;
+      case 'livecall':
+        return <LiveCall />;
+      case 'football':
+        return <FootballLab />;
       case 'settings':
         return (
           <SettingsPage 
@@ -238,8 +257,11 @@ function App() {
   );
 }
 
+const isWidget = window.location.hash === '#/widget' || window.location.search.includes('widget=true');
+const isJoinPage = window.location.pathname.startsWith('/join/');
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <App />
+    {isJoinPage ? <JoinCall /> : isWidget ? <Widget /> : <App />}
   </React.StrictMode>
 );

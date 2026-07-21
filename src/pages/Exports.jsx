@@ -10,6 +10,8 @@ export default function Exports() {
   const [activeTab, setActiveTab] = useState('All Exports');
   const [searchQuery, setSearchQuery] = useState('');
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [hiddenExportIds, setHiddenExportIds] = useState([]);
+  const [statusMessage, setStatusMessage] = useState('');
 
   useEffect(() => {
     loadExports();
@@ -46,7 +48,9 @@ export default function Exports() {
       }))
     : mockExports;
 
-  const filteredExports = displayExports.filter(exp => {
+  const visibleExports = displayExports.filter(exp => !hiddenExportIds.includes(exp.id));
+
+  const filteredExports = visibleExports.filter(exp => {
     const matchesSearch = exp.name.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesTab = activeTab === 'All Exports' || 
       (activeTab === 'Completed' && exp.status === 'Completed') ||
@@ -55,15 +59,15 @@ export default function Exports() {
     return matchesSearch && matchesTab;
   });
 
-  const totalSize = displayExports.filter(e => e.status === 'Completed').reduce((acc, e) => {
+  const totalSize = visibleExports.filter(e => e.status === 'Completed').reduce((acc, e) => {
     const mb = parseFloat(e.size);
     return isNaN(mb) ? acc : acc + mb;
   }, 0);
 
   const stats = [
-    { label: 'Total Exports', value: displayExports.length, color: '#7C3AED', bg: 'rgba(124,58,237,0.08)' },
-    { label: 'Completed', value: displayExports.filter(e => e.status === 'Completed').length, color: '#00C48C', bg: 'rgba(0,196,140,0.08)' },
-    { label: 'Processing', value: displayExports.filter(e => e.status === 'Processing').length, color: '#FFB800', bg: 'rgba(255,184,0,0.08)' },
+    { label: 'Total Exports', value: visibleExports.length, color: '#7C3AED', bg: 'rgba(124,58,237,0.08)' },
+    { label: 'Completed', value: visibleExports.filter(e => e.status === 'Completed').length, color: '#00C48C', bg: 'rgba(0,196,140,0.08)' },
+    { label: 'Processing', value: visibleExports.filter(e => e.status === 'Processing').length, color: '#FFB800', bg: 'rgba(255,184,0,0.08)' },
     { label: 'Total Size', value: `${(totalSize / 1000).toFixed(1)} GB`, color: '#3B82F6', bg: 'rgba(59,130,246,0.08)' },
   ];
 
@@ -86,6 +90,22 @@ export default function Exports() {
     MP4: { color: '#3B82F6', bg: 'rgba(59,130,246,0.1)' },
     MOV: { color: '#8B5CF6', bg: 'rgba(139,92,246,0.1)' },
     WebM: { color: '#00C48C', bg: 'rgba(0,196,140,0.1)' },
+  };
+
+  const handleDownloadRecord = (exp) => {
+    const blob = new Blob([JSON.stringify(exp, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${exp.name.replace(/\.[^.]+$/, '')}-export-record.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setStatusMessage(`Export record prepared for ${exp.name}.`);
+  };
+
+  const handleRemoveExport = (exp) => {
+    setHiddenExportIds(prev => [...prev, exp.id]);
+    setStatusMessage(`${exp.name} removed from this view.`);
   };
 
   return (
@@ -125,11 +145,23 @@ export default function Exports() {
             <RefreshCw size={14} style={{ animation: isRefreshing ? 'spin 1s linear infinite' : 'none' }} />
             Refresh
           </button>
-          <button style={{ background: '#FFF', border: '1px solid #E2E8F0', borderRadius: '12px', padding: '10px 14px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600, color: '#5A607F' }}>
+          <button
+            onClick={() => {
+              setActiveTab('Processing');
+              setStatusMessage('Showing export jobs that are still processing.');
+            }}
+            style={{ background: '#FFF', border: '1px solid #E2E8F0', borderRadius: '12px', padding: '10px 14px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600, color: '#5A607F' }}
+          >
             <Settings size={14} /> Export Settings
           </button>
         </div>
       </div>
+
+      {statusMessage && (
+        <div style={{ background: '#EEF7FF', border: '1px solid #CBE4FF', borderRadius: '12px', color: '#2563EB', fontSize: '13px', fontWeight: 700, padding: '10px 14px' }}>
+          {statusMessage}
+        </div>
+      )}
 
       {/* Stats row */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
@@ -214,11 +246,17 @@ export default function Exports() {
                   <td style={{ padding: '16px' }}>
                     <div style={{ display: 'flex', gap: '6px' }}>
                       {exp.status === 'Completed' && (
-                        <button style={{ background: 'rgba(0,196,140,0.08)', border: 'none', borderRadius: '8px', padding: '6px 10px', color: '#00C48C', fontSize: '12px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <button
+                          onClick={() => handleDownloadRecord(exp)}
+                          style={{ background: 'rgba(0,196,140,0.08)', border: 'none', borderRadius: '8px', padding: '6px 10px', color: '#00C48C', fontSize: '12px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                        >
                           <Download size={11} /> Download
                         </button>
                       )}
-                      <button style={{ background: 'rgba(239,68,68,0.06)', border: 'none', borderRadius: '8px', padding: '6px 10px', color: '#ef4444', fontSize: '12px', cursor: 'pointer' }}>
+                      <button
+                        onClick={() => handleRemoveExport(exp)}
+                        style={{ background: 'rgba(239,68,68,0.06)', border: 'none', borderRadius: '8px', padding: '6px 10px', color: '#ef4444', fontSize: '12px', cursor: 'pointer' }}
+                      >
                         <Trash2 size={11} />
                       </button>
                     </div>

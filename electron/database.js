@@ -7,7 +7,27 @@ let data = {
   project_settings: [],
   cursor_events: [],
   captions: [],
-  exports: []
+  exports: [],
+  brand_kit: null
+};
+
+const defaultBrandKit = {
+  brand_name: 'SaaS Studio',
+  primary_logo: null,
+  white_logo: null,
+  extra_logos: [],
+  primary_color: '#7C3AED',
+  secondary_color: '#FF4D7E',
+  watermark_text: '@SaaSStudio',
+  watermark_opacity: 0.7,
+  watermark_position: 'top-right',
+  watermark_font: 'Inter',
+  lower_third_name: 'Alex Morgan',
+  lower_third_title: 'SaaS Founder & CEO',
+  lower_third_style: 'modern',
+  intro_style: 'fade',
+  outro_style: 'subscribe',
+  outro_text: 'Thanks for Watching!'
 };
 
 function readData() {
@@ -58,13 +78,20 @@ function getProject(id) {
     cursor_color: '#ff4500',
     cursor_opacity: 0.8,
     cursor_size: 40,
+    cursor_style: 'arrow',
+    cursor_smoothing: 0.18,
+    cursor_auto_hide: true,
+    cursor_idle_hide_delay: 1.2,
+    cursor_loop_to_start: false,
     background_type: 'gradient',
     background_value: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
     webcam_size: 0.2,
     webcam_position: 'bottom-right',
+    webcam_label: 'Camera',
     motion_blur: 1,
     motion_blur_intensity: 0.5,
     cursor_visible: true,
+    cursor_baked: false,
     auto_zoom: true,
     auto_smooth_cursor: true,
     click_emphasis: 'ripple',
@@ -74,9 +101,12 @@ function getProject(id) {
     resolution: '1080p - 60fps',
     system_audio: true,
     webcam_enabled: false,
+    webcam_baked: false,
+    timeline_clips: null,
     zoom_in_duration: 0.35,
     zoom_hold_duration: 0.55,
     zoom_out_duration: 0.35,
+    zoom_smoothing: 0.08,
   };
   
   return { ...project, settings };
@@ -106,13 +136,20 @@ function createProject(id, name) {
     cursor_color: '#ff4500',
     cursor_opacity: 0.8,
     cursor_size: 40,
+    cursor_style: 'arrow',
+    cursor_smoothing: 0.18,
+    cursor_auto_hide: true,
+    cursor_idle_hide_delay: 1.2,
+    cursor_loop_to_start: false,
     background_type: 'gradient',
     background_value: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
     webcam_size: 0.2,
     webcam_position: 'bottom-right',
+    webcam_label: 'Camera',
     motion_blur: 1,
     motion_blur_intensity: 0.5,
     cursor_visible: true,
+    cursor_baked: false,
     auto_zoom: true,
     auto_smooth_cursor: true,
     click_emphasis: 'ripple',
@@ -122,9 +159,12 @@ function createProject(id, name) {
     resolution: '1080p - 60fps',
     system_audio: true,
     webcam_enabled: false,
+    webcam_baked: false,
+    timeline_clips: null,
     zoom_in_duration: 0.35,
     zoom_hold_duration: 0.55,
     zoom_out_duration: 0.35,
+    zoom_smoothing: 0.08,
     watermark_path: null,
     watermark_opacity: 0.5,
     watermark_scale: 0.1,
@@ -148,14 +188,19 @@ function updateProject(id, fields) {
   const now = Date.now();
   data.projects[projectIdx].updated_at = now;
 
-  const allowedProjectFields = ['name', 'video_path', 'audio_path', 'webcam_path', 'duration', 'aspect_ratio'];
+  const allowedProjectFields = ['name', 'video_path', 'audio_path', 'webcam_path', 'raw_video_path', 'duration', 'aspect_ratio'];
   const allowedSettingsFields = [
     'zoom_level', 'cursor_scale', 'cursor_highlight', 'cursor_color', 'cursor_opacity', 'cursor_size',
-    'background_type', 'background_value', 'webcam_size', 'webcam_position', 'motion_blur',
+    'cursor_style', 'cursor_smoothing',
+    'cursor_auto_hide', 'cursor_idle_hide_delay', 'cursor_loop_to_start',
+    'background_type', 'background_value', 'background_value_start', 'background_value_end', 'webcam_size', 'webcam_position', 'webcam_label', 'motion_blur',
     'motion_blur_intensity', 'watermark_path', 'watermark_opacity', 'watermark_scale', 'watermark_position',
-    'intro_video', 'outro_video', 'cursor_visible', 'auto_zoom', 'auto_smooth_cursor', 'click_emphasis',
-    'cinematic_preset', 'recording_mode', 'recording_source', 'resolution', 'system_audio', 'webcam_enabled',
-    'zoom_in_duration', 'zoom_hold_duration', 'zoom_out_duration'
+    'intro_video', 'outro_video', 'cursor_visible', 'cursor_baked', 'auto_zoom', 'auto_smooth_cursor', 'click_emphasis',
+    'cinematic_preset', 'recording_mode', 'recording_source', 'resolution', 'system_audio', 'webcam_enabled', 'webcam_baked',
+    'zoom_in_duration', 'zoom_hold_duration', 'zoom_out_duration', 'zoom_smoothing', 'timeline_clips',
+    'brand_preset', 'brand_name', 'brand_author', 'brand_title', 'brand_primary_color', 'brand_secondary_color',
+    'brand_logo', 'brand_white_logo', 'watermark_enabled', 'watermark_text', 'watermark_font',
+    'lower_third_enabled', 'lower_third_style', 'intro_enabled', 'intro_style', 'outro_enabled', 'outro_style', 'outro_text'
   ];
 
   // Update project fields
@@ -271,6 +316,18 @@ function getExports() {
   return [...data.exports].sort((a, b) => b.created_at - a.created_at);
 }
 
+function getBrandKit() {
+  readData();
+  return { ...defaultBrandKit, ...(data.brand_kit || {}) };
+}
+
+function saveBrandKit(fields) {
+  readData();
+  data.brand_kit = { ...defaultBrandKit, ...(data.brand_kit || {}), ...fields, updated_at: Date.now() };
+  writeData();
+  return data.brand_kit;
+}
+
 module.exports = {
   initDatabase,
   getProjects,
@@ -284,5 +341,7 @@ module.exports = {
   getCaptions,
   addExport,
   updateExport,
-  getExports
+  getExports,
+  getBrandKit,
+  saveBrandKit
 };

@@ -4,14 +4,14 @@ import {
   Video, 
   FolderHeart, 
   Download, 
-  Layers, 
   Settings,
   Flame,
   Award,
   ChevronDown,
   Sparkles,
   Palette,
-  Cpu
+  Trophy,
+  Users
 } from 'lucide-react';
 
 export default function Sidebar({ currentPage, setCurrentPage, license }) {
@@ -19,10 +19,11 @@ export default function Sidebar({ currentPage, setCurrentPage, license }) {
     { id: 'dashboard', name: 'Home', icon: Home },
     { id: 'recording', name: 'Record', icon: Video },
     { id: 'projects', name: 'Projects', icon: FolderHeart },
-    { id: 'templates', name: 'Templates', icon: Layers },
     { id: 'exports', name: 'Exports', icon: Download },
     { id: 'brandkit', name: 'Brand Kit', icon: Palette },
     { id: 'aitools', name: 'AI Tools', icon: Sparkles },
+    { id: 'livecall', name: 'Live Call', icon: Users },
+    { id: 'football', name: 'Football Lab', icon: Trophy },
     { id: 'settings', name: 'Settings', icon: Settings },
   ];
 

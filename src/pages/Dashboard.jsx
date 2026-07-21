@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  Play, Plus, Trash2, Copy, FileVideo, Sparkles, FolderOpen, 
+  Play, Plus, Trash2, Copy, FileVideo, FolderOpen, 
   Video, Type, ArrowRight, Clock, Download, HardDrive, 
   Search, ChevronRight, MoreVertical, Activity, Zap,
-  TrendingUp, Check, Circle, AlertCircle, RefreshCw
+  TrendingUp, Check, Circle, AlertCircle, RefreshCw, Trophy, Users
 } from 'lucide-react';
 
 export default function Dashboard({ onCreateProject, onOpenProject, navigateTo }) {
@@ -98,9 +98,9 @@ export default function Dashboard({ onCreateProject, onOpenProject, navigateTo }
 
   const quickActions = [
     { label: 'Start Recording', icon: Video, color: '#FF4D7E', action: () => navigateTo('recording') },
+    { label: 'Live Call Studio', icon: Users, color: '#00A878', action: () => navigateTo('livecall') },
     { label: 'New Project', icon: Plus, color: '#7C3AED', action: handleCreate },
-    { label: 'Browse Templates', icon: Sparkles, color: '#00E0FF', action: () => navigateTo('templates') },
-    { label: 'Open AI Tools', icon: Activity, color: '#00C48C', action: () => navigateTo('aitools') },
+    { label: 'View Exports', icon: Download, color: '#00E0FF', action: () => navigateTo('exports') },
   ];
 
   const formatRelativeTime = (ts) => {
@@ -129,11 +129,11 @@ export default function Dashboard({ onCreateProject, onOpenProject, navigateTo }
       {/* Top Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
-          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '30px', fontWeight: 800, color: '#1A1F36', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            Good morning, Alex! <span style={{ fontSize: '26px' }}>👋</span>
+          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '28px', fontWeight: 750, color: '#1A1F36', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            Projects
           </h1>
           <p style={{ color: '#5A607F', fontSize: '14px', marginTop: '4px' }}>
-            Ready to create something amazing today?
+            Record, edit, and export screen videos from one quiet workspace.
           </p>
         </div>
 
@@ -142,7 +142,7 @@ export default function Dashboard({ onCreateProject, onOpenProject, navigateTo }
           <div style={{ 
             display: 'flex', alignItems: 'center', gap: '6px',
             background: '#fff', border: '1px solid #E2E8F0',
-            borderRadius: '10px', padding: '6px 12px',
+            borderRadius: '8px', padding: '6px 12px',
             fontSize: '12px', fontWeight: 600,
             color: savedStatus === 'saved' ? '#00C48C' : savedStatus === 'saving' ? '#FFB800' : '#ef4444'
           }}>
@@ -164,7 +164,7 @@ export default function Dashboard({ onCreateProject, onOpenProject, navigateTo }
                 width: '100%',
                 background: '#FFF',
                 border: '1px solid #E2E8F0',
-                borderRadius: '12px',
+                borderRadius: '8px',
                 padding: '10px 12px 10px 36px',
                 fontSize: '13px',
                 outline: 'none',
@@ -179,7 +179,7 @@ export default function Dashboard({ onCreateProject, onOpenProject, navigateTo }
             style={{
               background: 'linear-gradient(135deg, #7C3AED 0%, #FF4D7E 100%)',
               border: 'none',
-              borderRadius: '12px',
+              borderRadius: '8px',
               color: '#fff',
               padding: '10px 20px',
               fontWeight: 700,
@@ -188,7 +188,7 @@ export default function Dashboard({ onCreateProject, onOpenProject, navigateTo }
               display: 'flex',
               alignItems: 'center',
               gap: '8px',
-              boxShadow: '0 4px 16px rgba(124,58,237,0.3)',
+              boxShadow: 'none',
               transition: 'all 0.2s'
             }}
           >
@@ -206,12 +206,12 @@ export default function Dashboard({ onCreateProject, onOpenProject, navigateTo }
             <div key={i} style={{
               background: '#FFF',
               border: '1px solid rgba(0,0,0,0.04)',
-              borderRadius: '20px',
+              borderRadius: '8px',
               padding: '24px',
               display: 'flex',
               alignItems: 'center',
               gap: '16px',
-              boxShadow: '0 2px 12px rgba(0,0,0,0.03)',
+              boxShadow: '0 1px 2px rgba(17,19,24,0.04)',
               transition: 'all 0.2s',
               cursor: 'default'
             }}
@@ -250,7 +250,7 @@ export default function Dashboard({ onCreateProject, onOpenProject, navigateTo }
                 style={{
                   background: '#FFF',
                   border: '1px solid rgba(0,0,0,0.04)',
-                  borderRadius: '16px',
+                  borderRadius: '8px',
                   padding: '20px',
                   display: 'flex',
                   alignItems: 'center',
@@ -304,7 +304,7 @@ export default function Dashboard({ onCreateProject, onOpenProject, navigateTo }
         {isLoading ? (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '20px' }}>
             {[1,2,3,4].map(i => (
-              <div key={i} style={{ background: '#FFF', borderRadius: '20px', height: '200px', border: '1px solid rgba(0,0,0,0.04)', 
+              <div key={i} style={{ background: '#FFF', borderRadius: '8px', height: '200px', border: '1px solid rgba(0,0,0,0.04)', 
                 animation: 'pulse 1.5s ease-in-out infinite', opacity: 0.6 }} />
             ))}
           </div>
@@ -319,9 +319,9 @@ export default function Dashboard({ onCreateProject, onOpenProject, navigateTo }
                 <div style={{
                   background: '#FFF',
                   border: '1px solid rgba(0,0,0,0.04)',
-                  borderRadius: '20px',
+                  borderRadius: '8px',
                   overflow: 'hidden',
-                  boxShadow: '0 2px 12px rgba(0,0,0,0.03)',
+                  boxShadow: '0 1px 2px rgba(17,19,24,0.04)',
                   cursor: 'pointer',
                   display: 'flex',
                   flexDirection: 'column',
@@ -446,7 +446,7 @@ export default function Dashboard({ onCreateProject, onOpenProject, navigateTo }
               style={{
                 background: '#FFF',
                 border: '2px dashed #E2E8F0',
-                borderRadius: '20px',
+                borderRadius: '8px',
                 display: 'flex',
                 flexDirection: 'column',
                 alignItems: 'center',
@@ -488,3 +488,6 @@ export default function Dashboard({ onCreateProject, onOpenProject, navigateTo }
     </div>
   );
 }
+
+
+

@@ -41,6 +41,33 @@ export default function BrandKit() {
   const fileInputRef = useRef(null);
   const [uploadingId, setUploadingId] = useState(null);
 
+  useEffect(() => {
+    loadBrandKit();
+  }, []);
+
+  const loadBrandKit = async () => {
+    if (!window.electron?.getBrandKit) return;
+    const kit = await window.electron.getBrandKit();
+    setBrandName(kit.brand_name || 'SaaS Studio');
+    setPrimaryColor(kit.primary_color || '#7C3AED');
+    setSecondaryColor(kit.secondary_color || '#FF4D7E');
+    setWatermarkText(kit.watermark_text || '@SaaSStudio');
+    setWatermarkOpacity(Math.round((kit.watermark_opacity ?? 0.7) * 100));
+    setWatermarkPosition(kit.watermark_position || 'top-right');
+    setWatermarkFont(kit.watermark_font || 'Inter');
+    setLowerThirdName(kit.lower_third_name || 'Alex Morgan');
+    setLowerThirdTitle(kit.lower_third_title || 'SaaS Founder & CEO');
+    setLowerThirdStyle(kit.lower_third_style || 'modern');
+    setIntroStyle(kit.intro_style || 'fade');
+    setOutroStyle(kit.outro_style || 'subscribe');
+    setOutroText(kit.outro_text || 'Thanks for Watching!');
+    setLogos([
+      { id: 'primary', label: 'Primary Logo', src: kit.primary_logo || null },
+      { id: 'white', label: 'White Logo', src: kit.white_logo || null },
+      ...(kit.extra_logos || [])
+    ]);
+  };
+
   const tabs = [
     { id: 'logos', name: 'Logos & Assets', icon: Image },
     { id: 'watermarks', name: 'Watermarks', icon: Layers },
@@ -88,6 +115,32 @@ export default function BrandKit() {
     setTimeout(() => setSavedMsg(''), 2500);
   };
 
+  const buildBrandKitPayload = () => ({
+    brand_name: brandName,
+    primary_logo: logos.find((logo) => logo.id === 'primary')?.src || null,
+    white_logo: logos.find((logo) => logo.id === 'white')?.src || null,
+    extra_logos: logos.filter((logo) => logo.id !== 'primary' && logo.id !== 'white'),
+    primary_color: primaryColor,
+    secondary_color: secondaryColor,
+    watermark_text: watermarkText,
+    watermark_opacity: watermarkOpacity / 100,
+    watermark_position: watermarkPosition,
+    watermark_font: watermarkFont,
+    lower_third_name: lowerThirdName,
+    lower_third_title: lowerThirdTitle,
+    lower_third_style: lowerThirdStyle,
+    intro_style: introStyle,
+    outro_style: outroStyle,
+    outro_text: outroText
+  });
+
+  const handleSaveBrandKit = async () => {
+    if (window.electron?.saveBrandKit) {
+      await window.electron.saveBrandKit(buildBrandKitPayload());
+    }
+    showSaved('Brand kit saved!');
+  };
+
   return (
     <div style={{ 
       background: '#F8FAFF', 
@@ -120,7 +173,7 @@ export default function BrandKit() {
             </div>
           )}
           <button 
-            onClick={() => showSaved()}
+            onClick={handleSaveBrandKit}
             style={{
               background: 'linear-gradient(135deg, #7C3AED 0%, #FF4D7E 100%)',
               border: 'none', borderRadius: '12px', color: '#fff',
