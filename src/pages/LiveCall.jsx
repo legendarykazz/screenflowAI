@@ -88,7 +88,8 @@ export default function LiveCall() {
   const [isLiveKitConnected, setIsLiveKitConnected] = useState(false);
 
   const [roomCode, setRoomCode] = useState(() => `SF-${Math.random().toString(36).slice(2, 7).toUpperCase()}`);
-  const inviteLink = useMemo(() => `https://screenflow.ai/join/${roomCode}`, [roomCode]);
+  const joinBaseUrl = import.meta.env.VITE_JOIN_BASE_URL || 'https://screenflow.ai';
+  const inviteLink = useMemo(() => `${joinBaseUrl.replace(/\/$/, '')}/join/${roomCode}`, [joinBaseUrl, roomCode]);
 
   useEffect(() => {
     zoomRef.current = zoom;
