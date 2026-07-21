@@ -86,6 +86,7 @@ export default function LiveCall() {
   const [liveKitStatus, setLiveKitStatus] = useState('Not connected');
   const [remoteParticipants, setRemoteParticipants] = useState([]);
   const [isLiveKitConnected, setIsLiveKitConnected] = useState(false);
+  const isBrowserPresenter = !window.navigator?.userAgent?.toLowerCase?.().includes('electron') && !window.electron?.getAppVersion;
 
   const [roomCode, setRoomCode] = useState(() => `SF-${Math.random().toString(36).slice(2, 7).toUpperCase()}`);
   const joinBaseUrl = import.meta.env.VITE_JOIN_BASE_URL || 'https://screenflow.ai';
@@ -252,11 +253,14 @@ export default function LiveCall() {
         liveKitVideoTrackRef.current = null;
         liveKitAudioTrackRef.current = null;
         setIsLiveKitConnected(false);
-        setLiveKitStatus(reason ? `Disconnected: ${reason}` : 'Disconnected');
+        setLiveKitStatus(reason ? `Disconnected: ${String(reason)}` : 'Disconnected');
         setRemoteParticipants([]);
       });
 
       await room.connect(tokenResult.url, tokenResult.token);
+      room.engine?.client?.on?.('signalDisconnected', () => {
+        setLiveKitStatus('Signal disconnected. Check browser WebRTC/network permissions.');
+      });
       liveKitRoomRef.current = room;
       setIsLiveKitConnected(true);
       setLiveKitStatus(`Connected as ${tokenResult.identity}`);
@@ -267,7 +271,8 @@ export default function LiveCall() {
       return room;
     } catch (error) {
       setIsLiveKitConnected(false);
-      setLiveKitStatus(error?.message || 'LiveKit connection failed.');
+      const message = error?.message || error?.reason || error?.toString?.() || 'LiveKit connection failed.';
+      setLiveKitStatus(`Connect failed: ${message}`);
       return null;
     }
   };
@@ -906,6 +911,9 @@ export default function LiveCall() {
               <Copy size={16} /> {copiedInvite ? 'Invite Copied' : 'Copy Invite Link'}
             </button>
             <p style={smallTextStyle}>LiveKit: {liveKitStatus}</p>
+            {isBrowserPresenter && (
+              <p style={smallTextStyle}>Web presenter mode works best in Chrome/Edge desktop. If it disconnects, use the desktop app as presenter and the website as viewer.</p>
+            )}
           </section>
 
           <section style={callCardStyle}>
