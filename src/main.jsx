@@ -117,7 +117,22 @@ if (!window.electron) {
       { id: 'window-1', name: 'Chrome Browser Window', thumbnail: '' }
     ],
     setLiveDisplaySource: async () => ({ success: true }),
-    createLiveKitToken: async () => ({ success: false, error: 'LiveKit is only available in Electron.' }),
+    createLiveKitToken: async (roomName, participantName) => {
+      try {
+        const response = await fetch('/api/livekit-token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomCode: roomName, participantName })
+        });
+        const result = await response.json();
+        if (!response.ok) {
+          return { success: false, error: result.error || 'Unable to create LiveKit token.' };
+        }
+        return { success: true, ...result };
+      } catch (err) {
+        return { success: false, error: err.message || 'LiveKit token endpoint is unavailable.' };
+      }
+    },
     startRecording: async () => ({ success: true }),
     stopRecording: async () => ({ events: mockCursorEvents }),
     saveRecordedFile: async (uint8Array) => {
