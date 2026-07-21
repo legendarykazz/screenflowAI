@@ -1,4 +1,5 @@
 const { AccessToken } = require('livekit-server-sdk');
+const crypto = require('crypto');
 
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -84,7 +85,8 @@ function handleDebug(req, res) {
     apiKeyPreview: maskValue(apiKey),
     apiKeyLength: apiKey.length,
     hasApiSecret: Boolean(apiSecret),
-    apiSecretLength: apiSecret.length
+    apiSecretLength: apiSecret.length,
+    apiSecretFingerprint: fingerprintValue(apiSecret)
   });
 }
 
@@ -100,4 +102,9 @@ function maskValue(value) {
   if (!value) return '';
   if (value.length <= 8) return `${value.slice(0, 2)}...`;
   return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
+function fingerprintValue(value) {
+  if (!value) return '';
+  return crypto.createHash('sha256').update(value).digest('hex').slice(0, 12);
 }
