@@ -1,11 +1,16 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Room, RoomEvent } from 'livekit-client';
-import { Camera, PhoneOff, Play, Users, Video } from 'lucide-react';
+import { Room, RoomEvent, Track } from 'livekit-client';
+import { Camera, Mic, PhoneOff, Play, Users, Video } from 'lucide-react';
 
 export default function JoinCall() {
   const roomRef = useRef(null);
   const mediaRef = useRef(null);
   const cameraRef = useRef(null);
+  const localCameraRef = useRef(null);
+  const localCameraStreamRef = useRef(null);
+  const localMicStreamRef = useRef(null);
+  const publishedCameraTrackRef = useRef(null);
+  const publishedMicTrackRef = useRef(null);
   const activeVideoSidRef = useRef(null);
   const activeCameraSidRef = useRef(null);
   const roomCode = useMemo(() => {
@@ -16,16 +21,18 @@ export default function JoinCall() {
   const [name, setName] = useState('Guest');
   const [status, setStatus] = useState('Ready to join');
   const [connected, setConnected] = useState(false);
+  const [cameraOn, setCameraOn] = useState(false);
+  const [micOn, setMicOn] = useState(false);
   const [participants, setParticipants] = useState([]);
 
   const joinRoom = async () => {
     try {
       setStatus('Getting access token...');
-      const params = new URLSearchParams({ roomCode, participantName: name, role: 'viewer' });
+      const params = new URLSearchParams({ roomCode, participantName: name, role: 'participant' });
       const response = await fetch(`/api/livekit-token?${params.toString()}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomCode, participantName: name, role: 'viewer' })
+        body: JSON.stringify({ roomCode, participantName: name, role: 'participant' })
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Unable to get LiveKit token.');
@@ -50,8 +57,17 @@ export default function JoinCall() {
         setConnected(false);
         setStatus('Disconnected');
         setParticipants([]);
+        setCameraOn(false);
+        setMicOn(false);
         activeVideoSidRef.current = null;
         activeCameraSidRef.current = null;
+        publishedCameraTrackRef.current = null;
+        publishedMicTrackRef.current = null;
+        localCameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+        localMicStreamRef.current?.getTracks().forEach((track) => track.stop());
+        localCameraStreamRef.current = null;
+        localMicStreamRef.current = null;
+        if (localCameraRef.current) localCameraRef.current.srcObject = null;
         if (mediaRef.current) mediaRef.current.innerHTML = '';
         if (cameraRef.current) cameraRef.current.innerHTML = '';
       });
@@ -69,6 +85,71 @@ export default function JoinCall() {
   const leaveRoom = () => {
     roomRef.current?.disconnect();
     roomRef.current = null;
+  };
+
+  const toggleMic = async () => {
+    const room = roomRef.current;
+    if (!room) return;
+
+    if (micOn) {
+      if (publishedMicTrackRef.current) await room.localParticipant.unpublishTrack(publishedMicTrackRef.current);
+      localMicStreamRef.current?.getTracks().forEach((track) => track.stop());
+      localMicStreamRef.current = null;
+      publishedMicTrackRef.current = null;
+      setMicOn(false);
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const audioTrack = stream.getAudioTracks()[0];
+      localMicStreamRef.current = stream;
+      publishedMicTrackRef.current = audioTrack;
+      await room.localParticipant.publishTrack(audioTrack, {
+        name: 'participant-mic',
+        source: Track.Source.Microphone
+      });
+      setMicOn(true);
+    } catch (error) {
+      setStatus(error.message || 'Microphone permission was not granted.');
+    }
+  };
+
+  const toggleCamera = async () => {
+    const room = roomRef.current;
+    if (!room) return;
+
+    if (cameraOn) {
+      if (publishedCameraTrackRef.current) await room.localParticipant.unpublishTrack(publishedCameraTrackRef.current);
+      localCameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+      localCameraStreamRef.current = null;
+      publishedCameraTrackRef.current = null;
+      if (localCameraRef.current) localCameraRef.current.srcObject = null;
+      setCameraOn(false);
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 1280, height: 720 },
+        audio: false
+      });
+      const cameraTrack = stream.getVideoTracks()[0];
+      localCameraStreamRef.current = stream;
+      publishedCameraTrackRef.current = cameraTrack;
+      if (localCameraRef.current) localCameraRef.current.srcObject = stream;
+      await room.localParticipant.publishTrack(cameraTrack, {
+        name: 'participant-camera',
+        source: Track.Source.Camera,
+        videoEncoding: {
+          maxBitrate: 1_200_000,
+          maxFramerate: 30
+        }
+      });
+      setCameraOn(true);
+    } catch (error) {
+      setStatus(error.message || 'Camera permission was not granted.');
+    }
   };
 
   const updateParticipants = (room = roomRef.current) => {
@@ -145,6 +226,17 @@ export default function JoinCall() {
           </button>
         </div>
 
+        {connected && (
+          <div className="join-actions" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginTop: '10px' }}>
+            <button onClick={toggleMic} style={secondaryButtonStyle}>
+              <Mic size={17} /> {micOn ? 'Mute' : 'Mic'}
+            </button>
+            <button onClick={toggleCamera} style={secondaryButtonStyle}>
+              <Camera size={17} /> {cameraOn ? 'Camera On' : 'Camera'}
+            </button>
+          </div>
+        )}
+
         <p style={statusStyle}>{status}</p>
 
         <section className="viewer-section" style={viewerStyle}>
@@ -160,8 +252,11 @@ export default function JoinCall() {
         <section style={viewerStyle}>
           <div style={viewerHeaderStyle}>
             <Camera size={18} />
-            Presenter Camera
+            Camera
           </div>
+          {connected && (
+            <video ref={localCameraRef} autoPlay muted playsInline style={localCameraStyle} />
+          )}
           <div className="camera-box" ref={cameraRef} style={cameraBoxStyle}>
             <span data-placeholder="true">Camera appears here when the presenter turns it on.</span>
           </div>
@@ -311,6 +406,14 @@ const cameraBoxStyle = {
   minHeight: '150px',
   overflow: 'hidden',
   padding: '10px'
+};
+
+const localCameraStyle = {
+  aspectRatio: '16 / 9',
+  background: '#090B12',
+  display: 'block',
+  objectFit: 'cover',
+  width: '100%'
 };
 
 const participantsStyle = {
