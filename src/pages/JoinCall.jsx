@@ -31,16 +31,7 @@ export default function JoinCall() {
       roomRef.current = room;
 
       room.on(RoomEvent.TrackSubscribed, (track) => {
-        const element = track.attach();
-        element.autoplay = true;
-        element.playsInline = true;
-        element.controls = track.kind === 'video';
-        element.style.width = '100%';
-        element.style.borderRadius = '8px';
-        element.style.background = '#090B12';
-        element.style.marginTop = '12px';
-        if (track.kind === 'audio') element.style.display = 'none';
-        mediaRef.current?.appendChild(element);
+        attachTrack(track);
       });
 
       room.on(RoomEvent.TrackUnsubscribed, (track) => {
@@ -59,6 +50,7 @@ export default function JoinCall() {
       await room.connect(result.url, result.token);
       setConnected(true);
       setStatus('Connected. Waiting for presenter output if nothing is visible yet.');
+      attachExistingTracks(room);
       updateParticipants(room);
     } catch (error) {
       setStatus(error.message || 'Could not join the call.');
@@ -73,6 +65,37 @@ export default function JoinCall() {
   const updateParticipants = (room = roomRef.current) => {
     if (!room) return;
     setParticipants(Array.from(room.remoteParticipants.values()).map((participant) => participant.name || participant.identity));
+  };
+
+  const attachExistingTracks = (room) => {
+    room.remoteParticipants.forEach((participant) => {
+      participant.trackPublications.forEach((publication) => {
+        if (publication.track) attachTrack(publication.track);
+      });
+    });
+  };
+
+  const attachTrack = (track) => {
+    if (!mediaRef.current) return;
+
+    const element = track.attach();
+    element.autoplay = true;
+    element.playsInline = true;
+    element.controls = track.kind === 'video';
+    element.style.width = '100%';
+    element.style.maxHeight = '70vh';
+    element.style.borderRadius = '8px';
+    element.style.background = '#090B12';
+    element.style.marginTop = '12px';
+    if (track.kind === 'audio') element.style.display = 'none';
+
+    const alreadyAttached = Array.from(mediaRef.current.children).some((child) => child.dataset?.trackSid === track.sid);
+    if (alreadyAttached) return;
+
+    element.dataset.trackSid = track.sid;
+    mediaRef.current.querySelector('[data-placeholder="true"]')?.remove();
+    mediaRef.current.style.display = 'block';
+    mediaRef.current.appendChild(element);
   };
 
   return (
@@ -104,7 +127,7 @@ export default function JoinCall() {
             Presenter Feed
           </div>
           <div ref={mediaRef} style={mediaBoxStyle}>
-            {!connected && <span>Join to view the live screen or whiteboard.</span>}
+            {!connected && <span data-placeholder="true">Join to view the live screen or whiteboard.</span>}
           </div>
         </section>
 
