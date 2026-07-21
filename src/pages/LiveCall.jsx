@@ -218,51 +218,58 @@ export default function LiveCall() {
 
   const connectLiveKit = async () => {
     if (liveKitRoomRef.current) return liveKitRoomRef.current;
-    if (!window.electron?.createLiveKitToken) {
-      setLiveKitStatus('LiveKit token bridge is unavailable.');
-      return null;
-    }
+    try {
+      if (!window.electron?.createLiveKitToken) {
+        setLiveKitStatus('LiveKit token bridge is unavailable.');
+        return null;
+      }
 
-    setLiveKitStatus('Connecting...');
-    const tokenResult = await window.electron.createLiveKitToken(roomCode, participantName || 'Presenter');
-    if (!tokenResult.success) {
-      setLiveKitStatus(tokenResult.error);
-      return null;
-    }
+      setLiveKitStatus('Creating LiveKit token...');
+      const tokenResult = await window.electron.createLiveKitToken(roomCode, participantName || 'Presenter');
+      if (!tokenResult.success) {
+        setLiveKitStatus(tokenResult.error);
+        return null;
+      }
 
-    const room = new Room({
-      adaptiveStream: true,
-      dynacast: true
-    });
+      setLiveKitStatus(`Connecting to ${tokenResult.url}...`);
+      const room = new Room({
+        adaptiveStream: true,
+        dynacast: true
+      });
 
-    room.on(RoomEvent.ParticipantConnected, updateRemoteParticipants);
-    room.on(RoomEvent.ParticipantDisconnected, updateRemoteParticipants);
-    room.on(RoomEvent.TrackSubscribed, (track) => {
-      attachRemoteTrack(track);
-      updateRemoteParticipants();
-    });
-    room.on(RoomEvent.TrackUnsubscribed, (track) => {
-      track.detach().forEach((element) => element.remove());
-      updateRemoteParticipants();
-    });
-    room.on(RoomEvent.Disconnected, () => {
-      liveKitRoomRef.current = null;
-      liveKitVideoTrackRef.current = null;
-      liveKitAudioTrackRef.current = null;
+      room.on(RoomEvent.ParticipantConnected, updateRemoteParticipants);
+      room.on(RoomEvent.ParticipantDisconnected, updateRemoteParticipants);
+      room.on(RoomEvent.TrackSubscribed, (track) => {
+        attachRemoteTrack(track);
+        updateRemoteParticipants();
+      });
+      room.on(RoomEvent.TrackUnsubscribed, (track) => {
+        track.detach().forEach((element) => element.remove());
+        updateRemoteParticipants();
+      });
+      room.on(RoomEvent.Disconnected, (reason) => {
+        liveKitRoomRef.current = null;
+        liveKitVideoTrackRef.current = null;
+        liveKitAudioTrackRef.current = null;
+        setIsLiveKitConnected(false);
+        setLiveKitStatus(reason ? `Disconnected: ${reason}` : 'Disconnected');
+        setRemoteParticipants([]);
+      });
+
+      await room.connect(tokenResult.url, tokenResult.token);
+      liveKitRoomRef.current = room;
+      setIsLiveKitConnected(true);
+      setLiveKitStatus(`Connected as ${tokenResult.identity}`);
+      updateRemoteParticipants(room);
+
+      if (outputStreamRef.current) await publishOutputStream(outputStreamRef.current);
+      if (audioStreamRef.current) await publishMicStream(audioStreamRef.current);
+      return room;
+    } catch (error) {
       setIsLiveKitConnected(false);
-      setLiveKitStatus('Disconnected');
-      setRemoteParticipants([]);
-    });
-
-    await room.connect(tokenResult.url, tokenResult.token);
-    liveKitRoomRef.current = room;
-    setIsLiveKitConnected(true);
-    setLiveKitStatus(`Connected as ${tokenResult.identity}`);
-    updateRemoteParticipants(room);
-
-    if (outputStreamRef.current) await publishOutputStream(outputStreamRef.current);
-    if (audioStreamRef.current) await publishMicStream(audioStreamRef.current);
-    return room;
+      setLiveKitStatus(error?.message || 'LiveKit connection failed.');
+      return null;
+    }
   };
 
   const disconnectLiveKit = () => {
@@ -288,7 +295,12 @@ export default function LiveCall() {
     liveKitVideoTrackRef.current = videoTrack;
     await room.localParticipant.publishTrack(videoTrack, {
       name: 'screenflow-enhanced-output',
-      source: Track.Source.ScreenShare
+      source: Track.Source.ScreenShare,
+      simulcast: false,
+      videoEncoding: {
+        maxBitrate: 3_500_000,
+        maxFramerate: 30
+      }
     });
     setLiveKitStatus('Publishing enhanced output');
   };

@@ -5,6 +5,7 @@ import { PhoneOff, Play, Users, Video } from 'lucide-react';
 export default function JoinCall() {
   const roomRef = useRef(null);
   const mediaRef = useRef(null);
+  const activeVideoSidRef = useRef(null);
   const roomCode = useMemo(() => {
     const match = window.location.pathname.match(/\/join\/([^/]+)/i);
     return (match?.[1] || '').toUpperCase();
@@ -37,6 +38,7 @@ export default function JoinCall() {
 
       room.on(RoomEvent.TrackUnsubscribed, (track) => {
         track.detach().forEach((element) => element.remove());
+        if (activeVideoSidRef.current === track.sid) activeVideoSidRef.current = null;
       });
 
       room.on(RoomEvent.ParticipantConnected, updateParticipants);
@@ -45,6 +47,7 @@ export default function JoinCall() {
         setConnected(false);
         setStatus('Disconnected');
         setParticipants([]);
+        activeVideoSidRef.current = null;
         if (mediaRef.current) mediaRef.current.innerHTML = '';
       });
 
@@ -82,12 +85,13 @@ export default function JoinCall() {
     const element = track.attach();
     element.autoplay = true;
     element.playsInline = true;
-    element.controls = track.kind === 'video';
+    element.controls = false;
     element.style.width = '100%';
-    element.style.maxHeight = '70vh';
+    element.style.height = '100%';
+    element.style.maxHeight = 'none';
     element.style.borderRadius = '8px';
     element.style.background = '#090B12';
-    element.style.marginTop = '12px';
+    element.style.marginTop = '0';
     element.style.objectFit = 'contain';
     if (track.kind === 'audio') element.style.display = 'none';
 
@@ -96,7 +100,17 @@ export default function JoinCall() {
 
     element.dataset.trackSid = track.sid;
     mediaRef.current.querySelector('[data-placeholder="true"]')?.remove();
-    mediaRef.current.style.display = 'block';
+
+    if (track.kind === 'video') {
+      activeVideoSidRef.current = track.sid;
+      Array.from(mediaRef.current.querySelectorAll('video')).forEach((video) => {
+        video.remove();
+      });
+      element.muted = false;
+      element.play?.().catch(() => {});
+    }
+
+    mediaRef.current.style.display = track.kind === 'video' ? 'block' : mediaRef.current.style.display;
     mediaRef.current.appendChild(element);
   };
 
