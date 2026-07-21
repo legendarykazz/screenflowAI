@@ -1,11 +1,13 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { Room, RoomEvent } from 'livekit-client';
-import { PhoneOff, Play, Users, Video } from 'lucide-react';
+import { Camera, PhoneOff, Play, Users, Video } from 'lucide-react';
 
 export default function JoinCall() {
   const roomRef = useRef(null);
   const mediaRef = useRef(null);
+  const cameraRef = useRef(null);
   const activeVideoSidRef = useRef(null);
+  const activeCameraSidRef = useRef(null);
   const roomCode = useMemo(() => {
     const match = window.location.pathname.match(/\/join\/([^/]+)/i);
     return (match?.[1] || '').toUpperCase();
@@ -19,11 +21,11 @@ export default function JoinCall() {
   const joinRoom = async () => {
     try {
       setStatus('Getting access token...');
-      const params = new URLSearchParams({ roomCode, participantName: name });
+      const params = new URLSearchParams({ roomCode, participantName: name, role: 'viewer' });
       const response = await fetch(`/api/livekit-token?${params.toString()}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomCode, participantName: name })
+        body: JSON.stringify({ roomCode, participantName: name, role: 'viewer' })
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Unable to get LiveKit token.');
@@ -39,6 +41,7 @@ export default function JoinCall() {
       room.on(RoomEvent.TrackUnsubscribed, (track) => {
         track.detach().forEach((element) => element.remove());
         if (activeVideoSidRef.current === track.sid) activeVideoSidRef.current = null;
+        if (activeCameraSidRef.current === track.sid) activeCameraSidRef.current = null;
       });
 
       room.on(RoomEvent.ParticipantConnected, updateParticipants);
@@ -48,7 +51,9 @@ export default function JoinCall() {
         setStatus('Disconnected');
         setParticipants([]);
         activeVideoSidRef.current = null;
+        activeCameraSidRef.current = null;
         if (mediaRef.current) mediaRef.current.innerHTML = '';
+        if (cameraRef.current) cameraRef.current.innerHTML = '';
       });
 
       await room.connect(result.url, result.token);
@@ -81,6 +86,9 @@ export default function JoinCall() {
 
   const attachTrack = (track) => {
     if (!mediaRef.current) return;
+    const isCamera = track.kind === 'video' && track.name === 'presenter-camera';
+    const targetRef = isCamera ? cameraRef : mediaRef;
+    if (!targetRef.current) return;
 
     const element = track.attach();
     element.autoplay = true;
@@ -95,23 +103,24 @@ export default function JoinCall() {
     element.style.objectFit = 'contain';
     if (track.kind === 'audio') element.style.display = 'none';
 
-    const alreadyAttached = Array.from(mediaRef.current.children).some((child) => child.dataset?.trackSid === track.sid);
+    const alreadyAttached = Array.from(targetRef.current.children).some((child) => child.dataset?.trackSid === track.sid);
     if (alreadyAttached) return;
 
     element.dataset.trackSid = track.sid;
-    mediaRef.current.querySelector('[data-placeholder="true"]')?.remove();
+    targetRef.current.querySelector('[data-placeholder="true"]')?.remove();
 
     if (track.kind === 'video') {
-      activeVideoSidRef.current = track.sid;
-      Array.from(mediaRef.current.querySelectorAll('video')).forEach((video) => {
+      if (isCamera) activeCameraSidRef.current = track.sid;
+      else activeVideoSidRef.current = track.sid;
+      Array.from(targetRef.current.querySelectorAll('video')).forEach((video) => {
         video.remove();
       });
       element.muted = false;
       element.play?.().catch(() => {});
     }
 
-    mediaRef.current.style.display = track.kind === 'video' ? 'block' : mediaRef.current.style.display;
-    mediaRef.current.appendChild(element);
+    targetRef.current.style.display = track.kind === 'video' ? 'block' : targetRef.current.style.display;
+    targetRef.current.appendChild(element);
   };
 
   return (
@@ -145,6 +154,16 @@ export default function JoinCall() {
           </div>
           <div className="media-box" ref={mediaRef} style={mediaBoxStyle}>
             {!connected && <span data-placeholder="true">Join to view the live screen or whiteboard.</span>}
+          </div>
+        </section>
+
+        <section style={viewerStyle}>
+          <div style={viewerHeaderStyle}>
+            <Camera size={18} />
+            Presenter Camera
+          </div>
+          <div className="camera-box" ref={cameraRef} style={cameraBoxStyle}>
+            <span data-placeholder="true">Camera appears here when the presenter turns it on.</span>
           </div>
         </section>
 
@@ -281,6 +300,19 @@ const mediaBoxStyle = {
   padding: '10px'
 };
 
+const cameraBoxStyle = {
+  alignItems: 'center',
+  aspectRatio: '16 / 9',
+  background: '#090B12',
+  color: '#CBD5E1',
+  display: 'flex',
+  flexDirection: 'column',
+  justifyContent: 'center',
+  minHeight: '150px',
+  overflow: 'hidden',
+  padding: '10px'
+};
+
 const participantsStyle = {
   borderTop: '1px solid #E2E8F0',
   marginTop: '16px',
@@ -329,6 +361,15 @@ const responsiveStyles = `
     .media-box video {
       max-height: 68vh !important;
       object-fit: contain;
+    }
+
+    .camera-box {
+      aspect-ratio: 16 / 9 !important;
+      min-height: 180px !important;
+    }
+
+    .camera-box video {
+      object-fit: cover;
     }
 
     input,

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Room, RoomEvent, Track } from 'livekit-client';
 import {
   Bot,
+  Camera,
   Circle,
   Copy,
   Eraser,
@@ -51,10 +52,13 @@ export default function LiveCall() {
   const streamRef = useRef(null);
   const outputStreamRef = useRef(null);
   const audioStreamRef = useRef(null);
+  const cameraStreamRef = useRef(null);
+  const cameraPreviewRef = useRef(null);
   const animationRef = useRef(null);
   const liveKitRoomRef = useRef(null);
   const liveKitVideoTrackRef = useRef(null);
   const liveKitAudioTrackRef = useRef(null);
+  const liveKitCameraTrackRef = useRef(null);
   const remoteMediaRef = useRef(null);
   const pathsRef = useRef([]);
   const draftRef = useRef(null);
@@ -67,6 +71,7 @@ export default function LiveCall() {
 
   const [isLive, setIsLive] = useState(false);
   const [micOn, setMicOn] = useState(false);
+  const [cameraOn, setCameraOn] = useState(false);
   const [tool, setTool] = useState('pointer');
   const [zoom, setZoom] = useState(1);
   const [color, setColor] = useState('#FF4D7E');
@@ -99,6 +104,12 @@ export default function LiveCall() {
   useEffect(() => {
     shareModeRef.current = shareMode;
   }, [shareMode]);
+
+  useEffect(() => {
+    if (cameraPreviewRef.current) {
+      cameraPreviewRef.current.srcObject = cameraOn ? cameraStreamRef.current : null;
+    }
+  }, [cameraOn]);
 
   useEffect(() => {
     loadSources();
@@ -201,18 +212,51 @@ export default function LiveCall() {
     }
   };
 
+  const toggleCamera = async () => {
+    if (cameraOn) {
+      if (liveKitCameraTrackRef.current && liveKitRoomRef.current) {
+        await liveKitRoomRef.current.localParticipant.unpublishTrack(liveKitCameraTrackRef.current);
+        liveKitCameraTrackRef.current = null;
+      }
+      cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current = null;
+      if (cameraPreviewRef.current) cameraPreviewRef.current.srcObject = null;
+      setCameraOn(false);
+      setNotes((current) => ['Presenter camera turned off.', ...current]);
+      return;
+    }
+
+    try {
+      const cameraStream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 1280, height: 720 },
+        audio: false
+      });
+      cameraStreamRef.current = cameraStream;
+      if (cameraPreviewRef.current) cameraPreviewRef.current.srcObject = cameraStream;
+      setCameraOn(true);
+      await publishCameraStream(cameraStream);
+      setNotes((current) => ['Presenter camera is live.', ...current]);
+    } catch (error) {
+      setStatus(error?.message || 'Camera permission was not granted.');
+    }
+  };
+
   const stopRoom = () => {
     if (animationRef.current) cancelAnimationFrame(animationRef.current);
     animationRef.current = null;
     streamRef.current?.getTracks().forEach((track) => track.stop());
     audioStreamRef.current?.getTracks().forEach((track) => track.stop());
+    cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
     audioStreamRef.current = null;
+    cameraStreamRef.current = null;
     sourceVideoRef.current = null;
     outputStreamRef.current = null;
+    if (cameraPreviewRef.current) cameraPreviewRef.current.srcObject = null;
     if (outputVideoRef.current) outputVideoRef.current.srcObject = null;
     setIsLive(false);
     setMicOn(false);
+    setCameraOn(false);
     setSourceName(shareMode === 'whiteboard' ? 'Whiteboard' : 'No screen selected');
     setStatus('Live room ended.');
   };
@@ -252,6 +296,7 @@ export default function LiveCall() {
         liveKitRoomRef.current = null;
         liveKitVideoTrackRef.current = null;
         liveKitAudioTrackRef.current = null;
+        liveKitCameraTrackRef.current = null;
         setIsLiveKitConnected(false);
         setLiveKitStatus(reason ? `Disconnected: ${String(reason)}` : 'Disconnected');
         setRemoteParticipants([]);
@@ -268,6 +313,7 @@ export default function LiveCall() {
 
       if (outputStreamRef.current) await publishOutputStream(outputStreamRef.current);
       if (audioStreamRef.current) await publishMicStream(audioStreamRef.current);
+      if (cameraStreamRef.current) await publishCameraStream(cameraStreamRef.current);
       return room;
     } catch (error) {
       setIsLiveKitConnected(false);
@@ -282,6 +328,7 @@ export default function LiveCall() {
     liveKitRoomRef.current = null;
     liveKitVideoTrackRef.current = null;
     liveKitAudioTrackRef.current = null;
+    liveKitCameraTrackRef.current = null;
     setIsLiveKitConnected(false);
     setLiveKitStatus('Disconnected');
     setRemoteParticipants([]);
@@ -323,6 +370,26 @@ export default function LiveCall() {
     await room.localParticipant.publishTrack(audioTrack, {
       name: 'presenter-mic',
       source: Track.Source.Microphone
+    });
+  };
+
+  const publishCameraStream = async (cameraStream) => {
+    const room = liveKitRoomRef.current;
+    const cameraTrack = cameraStream?.getVideoTracks?.()[0];
+    if (!room || !cameraTrack) return;
+
+    if (liveKitCameraTrackRef.current) {
+      await room.localParticipant.unpublishTrack(liveKitCameraTrackRef.current);
+    }
+
+    liveKitCameraTrackRef.current = cameraTrack;
+    await room.localParticipant.publishTrack(cameraTrack, {
+      name: 'presenter-camera',
+      source: Track.Source.Camera,
+      videoEncoding: {
+        maxBitrate: 1_200_000,
+        maxFramerate: 30
+      }
     });
   };
 
@@ -933,9 +1000,18 @@ export default function LiveCall() {
             ))}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginTop: '14px' }}>
               <button onClick={toggleMic} style={secondaryButtonStyle(micOn)}><Mic size={16} /> {micOn ? 'Mute' : 'Mic'}</button>
-              <button onClick={askAi} style={secondaryButtonStyle(false)}><Bot size={16} /> Ask AI</button>
+              <button onClick={toggleCamera} style={secondaryButtonStyle(cameraOn)}><Camera size={16} /> {cameraOn ? 'Camera On' : 'Camera'}</button>
             </div>
+            <button onClick={askAi} style={{ ...secondaryButtonStyle(false), width: '100%', marginTop: '10px' }}><Bot size={16} /> Ask AI</button>
           </section>
+
+          {cameraOn && (
+            <section style={callCardStyle}>
+              <h2 style={sideTitleStyle}><Camera size={17} /> Presenter Camera</h2>
+              <video ref={cameraPreviewRef} autoPlay muted playsInline style={previewVideoStyle} />
+              <p style={smallTextStyle}>Your camera is published as a separate presenter video tile.</p>
+            </section>
+          )}
 
           <section style={callCardStyle}>
             <h2 style={sideTitleStyle}><Play size={17} /> Viewer Feed</h2>

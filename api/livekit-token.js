@@ -45,6 +45,8 @@ module.exports = async function handler(req, res) {
     roomCode: body.roomCode || query.roomCode,
     participantName: body.participantName || query.participantName
   };
+  const role = String(body.role || query.role || 'viewer').toLowerCase();
+  const canPublish = role === 'presenter';
   const room = String(roomCode || '').trim().toUpperCase();
   const name = String(participantName || 'Guest').trim().slice(0, 48);
 
@@ -63,9 +65,9 @@ module.exports = async function handler(req, res) {
   token.addGrant({
     room,
     roomJoin: true,
-    canPublish: true,
+    canPublish,
     canSubscribe: true,
-    canPublishData: true
+    canPublishData: canPublish
   });
 
   res.status(200).json({

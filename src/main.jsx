@@ -119,7 +119,7 @@ if (!window.electron) {
     setLiveDisplaySource: async () => ({ success: true }),
     createLiveKitToken: async (roomName, participantName) => {
       try {
-        const params = new URLSearchParams({ roomCode: roomName, participantName });
+        const params = new URLSearchParams({ roomCode: roomName, participantName, role: 'presenter' });
         const response = await fetch(`/api/livekit-token?${params.toString()}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
