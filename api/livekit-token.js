@@ -33,7 +33,11 @@ module.exports = async function handler(req, res) {
       return;
     }
   }
-  const { roomCode, participantName } = body;
+  const query = req.query || {};
+  const { roomCode, participantName } = {
+    roomCode: body.roomCode || query.roomCode,
+    participantName: body.participantName || query.participantName
+  };
   const room = String(roomCode || '').trim().toUpperCase();
   const name = String(participantName || 'Guest').trim().slice(0, 48);
 

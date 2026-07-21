@@ -18,7 +18,8 @@ export default function JoinCall() {
   const joinRoom = async () => {
     try {
       setStatus('Getting access token...');
-      const response = await fetch('/api/livekit-token', {
+      const params = new URLSearchParams({ roomCode, participantName: name });
+      const response = await fetch(`/api/livekit-token?${params.toString()}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ roomCode, participantName: name })
