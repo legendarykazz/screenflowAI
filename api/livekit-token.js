@@ -10,6 +10,10 @@ module.exports = async function handler(req, res) {
     return;
   }
 
+  if (req.method === 'GET' && req.query?.debug === '1') {
+    return handleDebug(req, res);
+  }
+
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' });
     return;
@@ -24,16 +28,7 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  if (req.query?.debug === '1') {
-    res.status(200).json({
-      livekitUrl,
-      apiKeyPreview: maskValue(apiKey),
-      apiKeyLength: apiKey.length,
-      hasApiSecret: Boolean(apiSecret),
-      apiSecretLength: apiSecret.length
-    });
-    return;
-  }
+  if (req.query?.debug === '1') return handleDebug(req, res);
 
   let body = req.body || {};
   if (typeof body === 'string') {
@@ -78,6 +73,20 @@ module.exports = async function handler(req, res) {
     identity
   });
 };
+
+function handleDebug(req, res) {
+  const livekitUrl = cleanEnvValue(process.env.LIVEKIT_URL, 'LIVEKIT_URL');
+  const apiKey = cleanEnvValue(process.env.LIVEKIT_API_KEY, 'LIVEKIT_API_KEY');
+  const apiSecret = cleanEnvValue(process.env.LIVEKIT_API_SECRET, 'LIVEKIT_API_SECRET');
+
+  res.status(200).json({
+    livekitUrl,
+    apiKeyPreview: maskValue(apiKey),
+    apiKeyLength: apiKey.length,
+    hasApiSecret: Boolean(apiSecret),
+    apiSecretLength: apiSecret.length
+  });
+}
 
 function cleanEnvValue(value, name) {
   return String(value || '')
