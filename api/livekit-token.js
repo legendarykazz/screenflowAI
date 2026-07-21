@@ -24,6 +24,17 @@ module.exports = async function handler(req, res) {
     return;
   }
 
+  if (req.query?.debug === '1') {
+    res.status(200).json({
+      livekitUrl,
+      apiKeyPreview: maskValue(apiKey),
+      apiKeyLength: apiKey.length,
+      hasApiSecret: Boolean(apiSecret),
+      apiSecretLength: apiSecret.length
+    });
+    return;
+  }
+
   let body = req.body || {};
   if (typeof body === 'string') {
     try {
@@ -74,4 +85,10 @@ function cleanEnvValue(value, name) {
     .replace(/^['"]|['"]$/g, '')
     .replace(new RegExp(`^${name}\\s*=\\s*`), '')
     .trim();
+}
+
+function maskValue(value) {
+  if (!value) return '';
+  if (value.length <= 8) return `${value.slice(0, 2)}...`;
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
 }
