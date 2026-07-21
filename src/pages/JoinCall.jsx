@@ -87,6 +87,7 @@ export default function JoinCall() {
     element.style.borderRadius = '8px';
     element.style.background = '#090B12';
     element.style.marginTop = '12px';
+    element.style.objectFit = 'contain';
     if (track.kind === 'audio') element.style.display = 'none';
 
     const alreadyAttached = Array.from(mediaRef.current.children).some((child) => child.dataset?.trackSid === track.sid);
@@ -100,6 +101,7 @@ export default function JoinCall() {
 
   return (
     <div style={pageStyle}>
+      <style>{responsiveStyles}</style>
       <main style={panelStyle}>
         <div style={brandStyle}>ScreenFlow AI</div>
         <h1 style={titleStyle}>Join Live Call</h1>
@@ -110,7 +112,7 @@ export default function JoinCall() {
           <input value={name} onChange={(event) => setName(event.target.value)} disabled={connected} style={inputStyle} />
         </label>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+        <div className="join-actions" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
           <button disabled={connected || !roomCode} onClick={joinRoom} style={primaryButtonStyle}>
             <Play size={17} /> Join
           </button>
@@ -121,12 +123,12 @@ export default function JoinCall() {
 
         <p style={statusStyle}>{status}</p>
 
-        <section style={viewerStyle}>
+        <section className="viewer-section" style={viewerStyle}>
           <div style={viewerHeaderStyle}>
             <Video size={18} />
             Presenter Feed
           </div>
-          <div ref={mediaRef} style={mediaBoxStyle}>
+          <div className="media-box" ref={mediaRef} style={mediaBoxStyle}>
             {!connected && <span data-placeholder="true">Join to view the live screen or whiteboard.</span>}
           </div>
         </section>
@@ -141,14 +143,15 @@ export default function JoinCall() {
 }
 
 const pageStyle = {
-  alignItems: 'center',
+  alignItems: 'flex-start',
   background: '#0B0F19',
   color: '#F8FAFC',
   display: 'flex',
   fontFamily: 'Inter, system-ui, sans-serif',
   justifyContent: 'center',
   minHeight: '100vh',
-  padding: '18px'
+  padding: '18px',
+  WebkitTextSizeAdjust: '100%'
 };
 
 const panelStyle = {
@@ -157,7 +160,8 @@ const panelStyle = {
   color: '#172033',
   maxWidth: '720px',
   padding: '22px',
-  width: '100%'
+  width: '100%',
+  minHeight: 'auto'
 };
 
 const brandStyle = {
@@ -168,7 +172,7 @@ const brandStyle = {
 };
 
 const titleStyle = {
-  fontSize: '28px',
+  fontSize: 'clamp(24px, 7vw, 30px)',
   fontWeight: 900,
   letterSpacing: 0,
   marginBottom: '6px'
@@ -213,7 +217,8 @@ const primaryButtonStyle = {
   fontWeight: 900,
   gap: '8px',
   justifyContent: 'center',
-  minHeight: '46px'
+  minHeight: '48px',
+  touchAction: 'manipulation'
 };
 
 const secondaryButtonStyle = {
@@ -234,7 +239,8 @@ const statusStyle = {
 const viewerStyle = {
   border: '1px solid #E2E8F0',
   borderRadius: '8px',
-  overflow: 'hidden'
+  overflow: 'hidden',
+  marginTop: '12px'
 };
 
 const viewerHeaderStyle = {
@@ -255,7 +261,9 @@ const mediaBoxStyle = {
   display: 'flex',
   flexDirection: 'column',
   justifyContent: 'center',
-  padding: '12px'
+  minHeight: '220px',
+  overflow: 'hidden',
+  padding: '10px'
 };
 
 const participantsStyle = {
@@ -272,3 +280,45 @@ const sectionTitleStyle = {
   gap: '8px',
   marginBottom: '8px'
 };
+
+const responsiveStyles = `
+  @media (max-width: 640px) {
+    body {
+      overflow: auto !important;
+    }
+
+    #root {
+      min-height: 100vh;
+    }
+
+    .join-actions {
+      bottom: 0;
+      grid-template-columns: 1fr 1fr !important;
+      left: 0;
+      padding: 10px 0 0;
+      position: sticky;
+      z-index: 10;
+    }
+
+    .viewer-section {
+      margin-left: -10px;
+      margin-right: -10px;
+    }
+
+    .media-box {
+      aspect-ratio: 9 / 16 !important;
+      min-height: min(68vh, 620px) !important;
+      padding: 8px !important;
+    }
+
+    .media-box video {
+      max-height: 68vh !important;
+      object-fit: contain;
+    }
+
+    input,
+    button {
+      font-size: 16px !important;
+    }
+  }
+`;
