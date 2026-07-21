@@ -24,7 +24,16 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  const { roomCode, participantName } = req.body || {};
+  let body = req.body || {};
+  if (typeof body === 'string') {
+    try {
+      body = JSON.parse(body || '{}');
+    } catch (err) {
+      res.status(400).json({ error: 'Invalid JSON body.' });
+      return;
+    }
+  }
+  const { roomCode, participantName } = body;
   const room = String(roomCode || '').trim().toUpperCase();
   const name = String(participantName || 'Guest').trim().slice(0, 48);
 
