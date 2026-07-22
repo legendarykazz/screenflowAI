@@ -1190,9 +1190,10 @@ export default function LiveCall() {
               <span style={connectionPillStyle(isLiveKitConnected)}>{isLiveKitConnected ? 'Online' : 'Offline'}</span>
             </div>
             <div style={inviteCompactStyle}>
-              <div>
+              <div style={inviteTextStyle}>
+                <span style={inviteLabelStyle}>Invite link</span>
                 <strong>{roomCode}</strong>
-                <span>{inviteLink}</span>
+                <span style={inviteUrlStyle}>{inviteLink}</span>
               </div>
               <button onClick={copyInvite} style={compactButtonStyle}><Copy size={15} /> {copiedInvite ? 'Copied' : 'Copy'}</button>
             </div>
@@ -1266,7 +1267,7 @@ export default function LiveCall() {
                 ))}
               </div>
             )}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '9px' }}>
+            <div style={notesCompactStyle}>
               {notes.slice(0, 3).map((note) => (
                 <p key={note} style={noteStyle}>{note}</p>
               ))}
@@ -1303,15 +1304,15 @@ function getBox(start, end, width, height) {
 }
 
 const pageStyle = {
-  background: '#F6F7F9',
+  background: '#F4F6F8',
   color: '#172033',
   display: 'flex',
   flexDirection: 'column',
   fontFamily: 'var(--font-sans)',
-  gap: '18px',
+  gap: '16px',
   margin: '-32px',
   minHeight: '100%',
-  padding: '24px'
+  padding: '22px'
 };
 
 const presenterPageStyle = {
@@ -1350,7 +1351,7 @@ const workspaceStyle = {
   alignItems: 'start',
   display: 'grid',
   gap: '16px',
-  gridTemplateColumns: 'minmax(0, 1fr) 360px'
+  gridTemplateColumns: 'minmax(0, 1fr) 340px'
 };
 
 const presenterWorkspaceStyle = {
@@ -1442,9 +1443,9 @@ const statusRowStyle = {
 
 const sidePanelStyle = {
   display: 'grid',
-  gap: '14px',
+  gap: '16px',
   gridColumn: '1 / -1',
-  gridTemplateColumns: 'minmax(280px, 0.9fr) minmax(420px, 1.4fr)'
+  gridTemplateColumns: '360px minmax(0, 1fr)'
 };
 
 const presenterSidePanelStyle = {
@@ -1455,10 +1456,10 @@ const presenterSidePanelStyle = {
 
 const callCardStyle = {
   background: '#FFFFFF',
-  border: '1px solid #E2E8F0',
+  border: '1px solid #DDE4EE',
   borderRadius: '8px',
-  boxShadow: '0 6px 18px rgba(15, 23, 42, 0.035)',
-  padding: '14px'
+  boxShadow: '0 10px 26px rgba(15, 23, 42, 0.035)',
+  padding: '18px'
 };
 
 const sourceControlCardStyle = {
@@ -1566,7 +1567,7 @@ const sideTitleStyle = {
   fontSize: '14px',
   fontWeight: 900,
   gap: '8px',
-  marginBottom: '12px'
+  marginBottom: 0
 };
 
 const participantStyle = {
@@ -1580,18 +1581,18 @@ const participantStyle = {
 };
 
 const participantsInlineStyle = {
-  borderTop: '1px solid #E8EDF5',
+  borderTop: '1px solid #E6EBF2',
   display: 'flex',
   flexWrap: 'wrap',
   gap: '8px',
-  marginTop: '12px',
-  paddingTop: '12px'
+  marginTop: '14px',
+  paddingTop: '14px'
 };
 
 const participantChipStyle = {
   alignItems: 'center',
-  background: '#F8FAFF',
-  border: '1px solid #E8EDF5',
+  background: '#FFFFFF',
+  border: '1px solid #DDE4EE',
   borderRadius: '999px',
   color: '#26344D',
   display: 'inline-flex',
@@ -1632,7 +1633,7 @@ const hiddenPreviewStyle = {
 };
 
 const smallTextStyle = {
-  color: '#647087',
+  color: '#667085',
   fontSize: '12px',
   lineHeight: 1.45,
   marginTop: '10px'
@@ -1660,13 +1661,37 @@ const inviteBoxStyle = {
 
 const inviteCompactStyle = {
   alignItems: 'center',
-  background: '#F8FAFF',
-  border: '1px solid #E8EDF5',
+  background: '#F8FAFC',
+  border: '1px solid #DDE4EE',
   borderRadius: '8px',
   display: 'grid',
   gap: '12px',
   gridTemplateColumns: 'minmax(0, 1fr) auto',
   padding: '12px'
+};
+
+const inviteTextStyle = {
+  display: 'grid',
+  gap: '3px',
+  overflow: 'hidden',
+  minWidth: 0
+};
+
+const inviteLabelStyle = {
+  color: '#667085',
+  fontSize: '11px',
+  fontWeight: 900,
+  textTransform: 'uppercase'
+};
+
+const inviteUrlStyle = {
+  color: '#344054',
+  display: 'block',
+  fontSize: '13px',
+  fontWeight: 700,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap'
 };
 
 const formGridStyle = {
@@ -1693,13 +1718,14 @@ const callActionsStyle = {
 };
 
 const sourceBoxStyle = {
-  background: '#F8FAFF',
-  border: '1px solid #E8EDF5',
+  background: '#F8FAFC',
+  border: '1px solid #DDE4EE',
   borderRadius: '8px',
   display: 'flex',
   flexDirection: 'column',
   gap: '5px',
-  padding: '12px'
+  padding: '12px',
+  marginTop: '10px'
 };
 
 const sourceListStyle = {
@@ -1714,8 +1740,8 @@ const sourceListStyle = {
 
 const sourceItemStyle = (active) => ({
   alignItems: 'center',
-  background: active ? '#172033' : '#F8FAFF',
-  border: `1px solid ${active ? '#172033' : '#E2E8F0'}`,
+  background: active ? '#172033' : '#FFFFFF',
+  border: `1px solid ${active ? '#172033' : '#DDE4EE'}`,
   borderRadius: '8px',
   color: active ? '#FFFFFF' : '#26344D',
   cursor: 'pointer',
@@ -1723,9 +1749,9 @@ const sourceItemStyle = (active) => ({
   fontSize: '12px',
   fontWeight: 800,
   gap: '10px',
-  gridTemplateColumns: '56px minmax(0, 1fr)',
-  minHeight: '54px',
-  padding: '7px',
+  gridTemplateColumns: '48px minmax(0, 1fr)',
+  minHeight: '48px',
+  padding: '6px',
   textAlign: 'left'
 });
 
@@ -1734,7 +1760,7 @@ const sourceThumbStyle = {
   background: '#0B0F19',
   borderRadius: '6px',
   objectFit: 'cover',
-  width: '56px'
+  width: '48px'
 };
 
 const sourceThumbFallbackStyle = {
@@ -1744,11 +1770,11 @@ const sourceThumbFallbackStyle = {
   borderRadius: '6px',
   display: 'flex',
   justifyContent: 'center',
-  width: '56px'
+  width: '48px'
 };
 
 const segmentedStyle = {
-  background: '#EEF2F8',
+  background: '#EEF2F6',
   borderRadius: '8px',
   display: 'grid',
   gap: '6px',
@@ -1770,18 +1796,24 @@ const segmentButtonStyle = (active) => ({
 });
 
 const noteStyle = {
-  background: '#F8FAFF',
-  border: '1px solid #E8EDF5',
+  background: '#F8FAFC',
+  border: '1px solid #E6EBF2',
   borderRadius: '8px',
   color: '#4E5A70',
   fontSize: '12px',
   lineHeight: 1.45,
-  padding: '10px'
+  padding: '9px 10px'
+};
+
+const notesCompactStyle = {
+  display: 'grid',
+  gap: '8px',
+  marginTop: '10px'
 };
 
 const inputStyle = {
   background: '#FFFFFF',
-  border: '1px solid #DCE3EF',
+  border: '1px solid #D8E0EA',
   borderRadius: '8px',
   color: '#172033',
   fontSize: '13px',
