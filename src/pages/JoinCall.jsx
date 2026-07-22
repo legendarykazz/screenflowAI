@@ -42,7 +42,13 @@ export default function JoinCall() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ roomCode, participantName: name, role: 'participant' })
       });
-      const result = await response.json();
+      const text = await response.text();
+      let result = {};
+      try {
+        result = text ? JSON.parse(text) : {};
+      } catch (error) {
+        throw new Error(`Token endpoint returned an invalid response (${response.status}).`);
+      }
       if (!response.ok) throw new Error(result.error || 'Unable to get LiveKit token.');
 
       setStatus('Connecting...');
@@ -81,8 +87,8 @@ export default function JoinCall() {
         localCameraStreamRef.current = null;
         localMicStreamRef.current = null;
         if (localCameraRef.current) localCameraRef.current.srcObject = null;
-        if (mediaRef.current) mediaRef.current.innerHTML = '';
-        if (cameraRef.current) cameraRef.current.innerHTML = '';
+        mediaRef.current?.querySelectorAll('[data-track-sid]').forEach((element) => element.remove());
+        cameraRef.current?.querySelectorAll('[data-face-tile="true"]').forEach((element) => element.remove());
       });
 
       await room.connect(result.url, result.token);
