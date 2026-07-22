@@ -237,15 +237,24 @@ export default function JoinCall() {
 
   const updateParticipants = (room = roomRef.current) => {
     if (!room) return;
-    setParticipants(Array.from(room.remoteParticipants.values()).map((participant) => participant.name || participant.identity));
+    const remoteParticipants = getRemoteParticipants(room);
+    setParticipants(remoteParticipants.map((participant) => participant.name || participant.identity));
   };
 
   const attachExistingTracks = (room) => {
-    room.remoteParticipants.forEach((participant) => {
+    getRemoteParticipants(room).forEach((participant) => {
       participant.trackPublications.forEach((publication) => {
         if (publication.track) attachTrack(publication.track);
       });
     });
+  };
+
+  const getRemoteParticipants = (room) => {
+    const remotes = room?.remoteParticipants;
+    if (!remotes) return [];
+    if (typeof remotes.values === 'function') return Array.from(remotes.values());
+    if (Array.isArray(remotes)) return remotes;
+    return Object.values(remotes);
   };
 
   const attachTrack = (track, participant) => {
