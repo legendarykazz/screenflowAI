@@ -1026,10 +1026,9 @@ export default function LiveCall() {
       <header style={headerStyle}>
         <div>
           <h1 style={titleStyle}>Live Call Studio</h1>
-          <p style={subtitleStyle}>Human calls with an AI notetaker and a presenter-controlled screen feed.</p>
+          <p style={subtitleStyle}>{participantName} presenting in room {roomCode}</p>
         </div>
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-          <span style={roomBadgeStyle}><Users size={15} /> {roomCode}</span>
           <button onClick={copyInvite} style={secondaryHeaderButtonStyle}><Copy size={16} /> {copiedInvite ? 'Copied' : 'Invite'}</button>
           {presenterMode ? (
             <button onClick={exitPresenterMode} style={secondaryHeaderButtonStyle}><Expand size={16} /> Exit Fullscreen</button>
@@ -1064,6 +1063,48 @@ export default function LiveCall() {
             </div>
             <div ref={remoteMediaRef} style={remoteGridStyle}>
               {!remoteParticipants.length && <div style={emptyTileStyle}>Waiting for people to join</div>}
+            </div>
+          </div>
+          <div style={meetControlDockStyle}>
+            <button onClick={toggleMic} style={dockButtonStyle(micOn)} className="tooltip" data-tooltip={micOn ? 'Mute microphone' : 'Turn microphone on'}>
+              <Mic size={18} />
+            </button>
+            <button onClick={toggleCamera} style={dockButtonStyle(cameraOn)} className="tooltip" data-tooltip={cameraOn ? 'Turn camera off' : 'Turn camera on'}>
+              <Camera size={18} />
+            </button>
+            <button onClick={() => switchScreen(selectedSourceId)} style={dockButtonStyle(isLive)} className="tooltip" data-tooltip="Share screen">
+              <ScreenShare size={18} />
+            </button>
+            <button onClick={isLiveKitConnected ? disconnectLiveKit : connectLiveKit} style={dockButtonStyle(isLiveKitConnected)} className="tooltip" data-tooltip={isLiveKitConnected ? 'Disconnect room' : 'Go online'}>
+              <Users size={18} />
+            </button>
+            <button onClick={isLive ? stopRoom : () => startRoom()} style={dockLeaveButtonStyle} className="tooltip" data-tooltip={isLive ? 'End call' : 'Start live room'}>
+              {isLive ? <PhoneOff size={19} /> : <Play size={19} />}
+            </button>
+            <div style={moreMenuWrapStyle}>
+              <button onClick={() => setMoreMenuOpen((open) => !open)} style={dockButtonStyle(moreMenuOpen)} className="tooltip" data-tooltip="More">
+                <MoreHorizontal size={19} />
+              </button>
+              {moreMenuOpen && (
+                <div style={dockMenuStyle}>
+                  <button onClick={copyInvite} style={menuItemStyle}><Copy size={15} /> Copy Invite</button>
+                  <button onClick={askAi} style={menuItemStyle}><Bot size={15} /> Ask AI</button>
+                  <button
+                    onClick={captionRecording ? stopCallCaptionRecording : startCallCaptionRecording}
+                    disabled={captionGenerating}
+                    style={menuItemStyle}
+                  >
+                    <Type size={15} /> {captionGenerating ? 'Generating Captions' : captionRecording ? 'Stop & Transcribe' : 'Meeting Captions'}
+                  </button>
+                  <button
+                    onClick={meetingRecording ? stopMeetingRecording : startMeetingRecording}
+                    disabled={meetingSaving}
+                    style={menuItemStyle}
+                  >
+                    {meetingRecording ? <Square size={15} /> : <Play size={15} />} {meetingSaving ? 'Saving Meeting' : meetingRecording ? 'Stop Recording' : 'Record Meeting'}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </section>
@@ -1209,7 +1250,7 @@ export default function LiveCall() {
 
           <section style={controlCenterCardStyle}>
             <div style={cardHeaderRowStyle}>
-              <h2 style={sideTitleStyle}><Users size={17} /> Call Control</h2>
+              <h2 style={sideTitleStyle}><Users size={17} /> Room</h2>
               <span style={connectionPillStyle(isLiveKitConnected)}>{isLiveKitConnected ? 'Online' : 'Offline'}</span>
             </div>
             <div style={inviteCompactStyle}>
@@ -1238,40 +1279,6 @@ export default function LiveCall() {
                   style={inputStyle}
                 />
               </label>
-            </div>
-            <div style={callControlsBarStyle}>
-              <button onClick={connectLiveKit} style={secondaryButtonStyle(isLiveKitConnected)}>
-                <Users size={16} /> {isLiveKitConnected ? 'Connected' : 'Go Online'}
-              </button>
-              <button onClick={disconnectLiveKit} style={secondaryButtonStyle(false)}>
-                <PhoneOff size={16} /> Leave
-              </button>
-              <button onClick={toggleMic} style={secondaryButtonStyle(micOn)}><Mic size={16} /> {micOn ? 'Mute' : 'Mic'}</button>
-              <button onClick={toggleCamera} style={secondaryButtonStyle(cameraOn)}><Camera size={16} /> {cameraOn ? 'Camera On' : 'Camera'}</button>
-              <div style={moreMenuWrapStyle}>
-                <button onClick={() => setMoreMenuOpen((open) => !open)} style={iconMenuButtonStyle}>
-                  <MoreHorizontal size={18} />
-                </button>
-                {moreMenuOpen && (
-                  <div style={moreMenuStyle}>
-                    <button onClick={askAi} style={menuItemStyle}><Bot size={15} /> Ask AI</button>
-                    <button
-                      onClick={captionRecording ? stopCallCaptionRecording : startCallCaptionRecording}
-                      disabled={captionGenerating}
-                      style={menuItemStyle}
-                    >
-                      <Type size={15} /> {captionGenerating ? 'Generating Captions' : captionRecording ? 'Stop & Transcribe' : 'Meeting Captions'}
-                    </button>
-                    <button
-                      onClick={meetingRecording ? stopMeetingRecording : startMeetingRecording}
-                      disabled={meetingSaving}
-                      style={menuItemStyle}
-                    >
-                      {meetingRecording ? <Square size={15} /> : <Play size={15} />} {meetingSaving ? 'Saving Meeting' : meetingRecording ? 'Stop Recording' : 'Record Meeting'}
-                    </button>
-                  </div>
-                )}
-              </div>
             </div>
             <div style={participantsInlineStyle}>
               {[
@@ -1565,8 +1572,47 @@ const peopleGridStyle = {
   display: 'grid',
   gap: '12px',
   gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-  minHeight: '430px',
+  minHeight: '400px',
   padding: '12px'
+};
+
+const meetControlDockStyle = {
+  alignItems: 'center',
+  alignSelf: 'center',
+  background: '#FFFFFF',
+  border: '1px solid #DDE4EE',
+  borderRadius: '999px',
+  boxShadow: '0 18px 42px rgba(15, 23, 42, 0.12)',
+  display: 'flex',
+  gap: '8px',
+  marginTop: '2px',
+  padding: '8px'
+};
+
+const dockButtonStyle = (active) => ({
+  alignItems: 'center',
+  background: active ? '#172033' : '#F8FAFC',
+  border: `1px solid ${active ? '#172033' : '#DDE4EE'}`,
+  borderRadius: '999px',
+  color: active ? '#FFFFFF' : '#26344D',
+  cursor: 'pointer',
+  display: 'flex',
+  height: '44px',
+  justifyContent: 'center',
+  width: '44px'
+});
+
+const dockLeaveButtonStyle = {
+  alignItems: 'center',
+  background: '#B42318',
+  border: '1px solid #B42318',
+  borderRadius: '999px',
+  color: '#FFFFFF',
+  cursor: 'pointer',
+  display: 'flex',
+  height: '44px',
+  justifyContent: 'center',
+  width: '58px'
 };
 
 const localPresenterTileStyle = {
@@ -1769,14 +1815,6 @@ const compactLabelStyle = {
   gap: '7px'
 };
 
-const callControlsBarStyle = {
-  alignItems: 'center',
-  display: 'grid',
-  gap: '8px',
-  gridTemplateColumns: 'repeat(4, minmax(110px, 1fr)) 44px',
-  marginTop: '12px'
-};
-
 const sourceBoxStyle = {
   background: '#F8FAFC',
   border: '1px solid #DDE4EE',
@@ -1882,19 +1920,6 @@ const moreMenuWrapStyle = {
   position: 'relative'
 };
 
-const iconMenuButtonStyle = {
-  alignItems: 'center',
-  background: '#FFFFFF',
-  border: '1px solid #D8E0EA',
-  borderRadius: '8px',
-  color: '#26344D',
-  cursor: 'pointer',
-  display: 'flex',
-  height: '42px',
-  justifyContent: 'center',
-  width: '42px'
-};
-
 const moreMenuStyle = {
   background: '#FFFFFF',
   border: '1px solid #DDE4EE',
@@ -1908,6 +1933,12 @@ const moreMenuStyle = {
   right: 0,
   top: '48px',
   zIndex: 20
+};
+
+const dockMenuStyle = {
+  ...moreMenuStyle,
+  bottom: '54px',
+  top: 'auto'
 };
 
 const menuItemStyle = {
@@ -1943,21 +1974,6 @@ const secondaryHeaderButtonStyle = {
   gap: '8px',
   minHeight: '42px',
   padding: '0 13px',
-  whiteSpace: 'nowrap'
-};
-
-const roomBadgeStyle = {
-  alignItems: 'center',
-  background: '#FFFFFF',
-  border: '1px solid #E2E8F0',
-  borderRadius: '8px',
-  color: '#26344D',
-  display: 'inline-flex',
-  fontSize: '13px',
-  fontWeight: 900,
-  gap: '8px',
-  minHeight: '42px',
-  padding: '0 12px',
   whiteSpace: 'nowrap'
 };
 
