@@ -1115,6 +1115,7 @@ export default function LiveCall() {
             <span style={{ color: isLive ? '#00A878' : '#647087', fontWeight: 800 }}>{isLive ? 'Live output active' : 'Waiting'}</span>
             <span>{presenterMode ? 'Presenter controls are visible only to you. Viewers receive the clean canvas feed.' : `${status} ${remoteParticipants.length} participant${remoteParticipants.length === 1 ? '' : 's'} joined.`}</span>
           </div>
+          <video ref={outputVideoRef} autoPlay muted playsInline style={hiddenPreviewStyle} />
         </div>
 
         <section style={conferenceStageStyle}>
@@ -1263,12 +1264,6 @@ export default function LiveCall() {
           </section>
 
           <section style={callCardStyle}>
-            <h2 style={sideTitleStyle}><Play size={17} /> Viewer Feed</h2>
-            <video ref={outputVideoRef} autoPlay muted playsInline style={previewVideoStyle} />
-            <p style={smallTextStyle}>This is the processed stream that can be published to a real conference provider.</p>
-          </section>
-
-          <section style={callCardStyle}>
             <h2 style={sideTitleStyle}><Sparkles size={17} /> AI Notes</h2>
             {callCaptions.length > 0 && (
               <div style={{ border: '1px solid #E2E8F0', borderRadius: '8px', marginBottom: '12px', maxHeight: '180px', overflowY: 'auto', padding: '10px' }}>
@@ -1313,15 +1308,15 @@ function getBox(start, end, width, height) {
 }
 
 const pageStyle = {
-  background: '#F8FAFF',
+  background: '#F6F7F9',
   color: '#172033',
   display: 'flex',
   flexDirection: 'column',
   fontFamily: 'var(--font-sans)',
-  gap: '22px',
+  gap: '18px',
   margin: '-32px',
   minHeight: '100%',
-  padding: '28px'
+  padding: '24px'
 };
 
 const presenterPageStyle = {
@@ -1339,13 +1334,13 @@ const headerStyle = {
   alignItems: 'center',
   display: 'flex',
   justifyContent: 'space-between',
-  gap: '18px'
+  gap: '14px'
 };
 
 const titleStyle = {
   color: '#172033',
   fontFamily: 'var(--font-display)',
-  fontSize: '28px',
+  fontSize: '26px',
   fontWeight: 850,
   letterSpacing: 0
 };
@@ -1359,8 +1354,8 @@ const subtitleStyle = {
 const workspaceStyle = {
   alignItems: 'start',
   display: 'grid',
-  gap: '20px',
-  gridTemplateColumns: 'minmax(0, 1fr) 340px'
+  gap: '16px',
+  gridTemplateColumns: 'minmax(0, 1fr) 360px'
 };
 
 const presenterWorkspaceStyle = {
@@ -1372,7 +1367,9 @@ const stagePanelStyle = {
   background: '#FFFFFF',
   border: '1px solid #E2E8F0',
   borderRadius: '8px',
-  boxShadow: '0 12px 28px rgba(15, 23, 42, 0.06)',
+  boxShadow: '0 8px 22px rgba(15, 23, 42, 0.04)',
+  gridColumn: '1',
+  gridRow: '1',
   overflow: 'hidden'
 };
 
@@ -1388,6 +1385,7 @@ const toolBarStyle = {
   display: 'flex',
   gap: '8px',
   minHeight: '64px',
+  overflowX: 'auto',
   padding: '10px 14px'
 };
 
@@ -1448,9 +1446,10 @@ const statusRowStyle = {
 };
 
 const sidePanelStyle = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '14px'
+  display: 'grid',
+  gap: '14px',
+  gridColumn: '1 / -1',
+  gridTemplateColumns: 'repeat(3, minmax(0, 1fr))'
 };
 
 const presenterSidePanelStyle = {
@@ -1463,18 +1462,20 @@ const callCardStyle = {
   background: '#FFFFFF',
   border: '1px solid #E2E8F0',
   borderRadius: '8px',
-  boxShadow: '0 8px 22px rgba(15, 23, 42, 0.05)',
-  padding: '16px'
+  boxShadow: '0 6px 18px rgba(15, 23, 42, 0.035)',
+  padding: '14px'
 };
 
 const conferenceStageStyle = {
   background: '#FFFFFF',
   border: '1px solid #E2E8F0',
   borderRadius: '8px',
-  boxShadow: '0 8px 22px rgba(15, 23, 42, 0.05)',
+  boxShadow: '0 6px 18px rgba(15, 23, 42, 0.035)',
   display: 'flex',
   flexDirection: 'column',
   gap: '12px',
+  gridColumn: '2',
+  gridRow: '1',
   padding: '16px'
 };
 
@@ -1485,12 +1486,12 @@ const conferenceHeaderStyle = {
 };
 
 const peopleGridStyle = {
-  background: '#090B12',
-  border: '1px solid #26344D',
+  background: '#0A0B0F',
+  border: '1px solid #DDE5F1',
   borderRadius: '8px',
   display: 'grid',
   gap: '10px',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
   minHeight: '190px',
   padding: '10px'
 };
@@ -1498,7 +1499,7 @@ const peopleGridStyle = {
 const localPresenterTileStyle = {
   aspectRatio: '16 / 9',
   background: '#090B12',
-  border: '1px solid #26344D',
+  border: '1px solid #2A3446',
   borderRadius: '8px',
   minHeight: '170px',
   overflow: 'hidden',
@@ -1520,7 +1521,7 @@ const stageVideoStyle = {
 const emptyTileStyle = {
   alignItems: 'center',
   background: '#090B12',
-  border: '1px solid #26344D',
+  border: '1px solid #2A3446',
   borderRadius: '8px',
   color: '#CBD5E1',
   display: 'flex',
@@ -1584,6 +1585,14 @@ const previewVideoStyle = {
   display: 'block',
   objectFit: 'cover',
   width: '100%'
+};
+
+const hiddenPreviewStyle = {
+  height: 0,
+  opacity: 0,
+  pointerEvents: 'none',
+  position: 'absolute',
+  width: 0
 };
 
 const smallTextStyle = {
@@ -1705,7 +1714,7 @@ const inputStyle = {
 
 const primaryButtonStyle = {
   alignItems: 'center',
-  background: 'linear-gradient(135deg, #7C3AED 0%, #FF4D7E 100%)',
+  background: '#172033',
   border: 'none',
   borderRadius: '8px',
   color: '#FFFFFF',
@@ -1714,12 +1723,13 @@ const primaryButtonStyle = {
   fontWeight: 900,
   gap: '8px',
   minHeight: '42px',
-  padding: '0 16px'
+  padding: '0 16px',
+  whiteSpace: 'nowrap'
 };
 
 const dangerButtonStyle = {
   ...primaryButtonStyle,
-  background: '#EF4444'
+  background: '#B42318'
 };
 
 const secondaryHeaderButtonStyle = {
@@ -1733,7 +1743,8 @@ const secondaryHeaderButtonStyle = {
   fontWeight: 900,
   gap: '8px',
   minHeight: '42px',
-  padding: '0 13px'
+  padding: '0 13px',
+  whiteSpace: 'nowrap'
 };
 
 const roomBadgeStyle = {
@@ -1747,7 +1758,8 @@ const roomBadgeStyle = {
   fontWeight: 900,
   gap: '8px',
   minHeight: '42px',
-  padding: '0 12px'
+  padding: '0 12px',
+  whiteSpace: 'nowrap'
 };
 
 const dividerStyle = {
