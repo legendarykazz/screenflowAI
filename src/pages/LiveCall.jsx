@@ -1517,7 +1517,36 @@ const conferenceStageStyle = {
 const conferenceHeaderStyle = {
   alignItems: 'center',
   display: 'flex',
+  gap: '12px',
   justifyContent: 'space-between'
+};
+
+const stageTitleStyle = {
+  alignItems: 'center',
+  color: '#172033',
+  display: 'flex',
+  fontSize: '18px',
+  fontWeight: 900,
+  gap: '8px',
+  margin: 0
+};
+
+const stageSubtitleStyle = {
+  color: '#667085',
+  fontSize: '13px',
+  lineHeight: 1.4,
+  marginTop: '4px'
+};
+
+const meetingCountStyle = {
+  background: '#F8FAFC',
+  border: '1px solid #DDE4EE',
+  borderRadius: '999px',
+  color: '#26344D',
+  flexShrink: 0,
+  fontSize: '12px',
+  fontWeight: 900,
+  padding: '7px 10px'
 };
 
 const peopleGridStyle = {
