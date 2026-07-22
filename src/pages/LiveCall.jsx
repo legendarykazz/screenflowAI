@@ -102,6 +102,7 @@ export default function LiveCall() {
   const [meetingRecording, setMeetingRecording] = useState(false);
   const [meetingSaving, setMeetingSaving] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [shareExpanded, setShareExpanded] = useState(false);
   const isBrowserPresenter = !window.navigator?.userAgent?.toLowerCase?.().includes('electron') && !window.electron?.getAppVersion;
 
   const [roomCode, setRoomCode] = useState(() => `SF-${Math.random().toString(36).slice(2, 7).toUpperCase()}`);
@@ -1051,27 +1052,38 @@ export default function LiveCall() {
               <span style={tileLabelStyle}>You - Host</span>
             </div>
             {(isLive || shareMode === 'whiteboard') && (
-              <div style={shareTileStyle}>
-                <div style={compactToolBarStyle}>
-                  {toolOptions.map((item) => {
-                    const Icon = item.icon;
-                    return (
-                      <button
-                        aria-label={item.label}
-                        className="tooltip"
-                        data-tooltip={item.label}
-                        key={item.id}
-                        onClick={() => setTool((current) => current === item.id ? 'pointer' : item.id)}
-                        style={miniIconButtonStyle(tool === item.id)}
-                      >
-                        <Icon size={15} />
-                      </button>
-                    );
-                  })}
-                  <button aria-label="Zoom out" className="tooltip" data-tooltip="Zoom out" onClick={() => adjustZoom(-0.2)} style={miniIconButtonStyle(false)}><Minus size={15} /></button>
-                  <span style={miniZoomPillStyle}>{zoom.toFixed(1)}x</span>
-                  <button aria-label="Zoom in" className="tooltip" data-tooltip="Zoom in" onClick={() => adjustZoom(0.2)} style={miniIconButtonStyle(false)}><Plus size={15} /></button>
-                </div>
+              <div style={shareTileStyle(shareExpanded)}>
+                <button
+                  onClick={() => setShareExpanded((expanded) => !expanded)}
+                  style={shareExpandButtonStyle}
+                  className="tooltip"
+                  data-tooltip={shareExpanded ? 'Shrink share' : 'Enlarge share'}
+                >
+                  <Expand size={16} />
+                  {shareExpanded ? 'Shrink' : 'Enlarge'}
+                </button>
+                {shareExpanded && (
+                  <div style={compactToolBarStyle}>
+                    {toolOptions.map((item) => {
+                      const Icon = item.icon;
+                      return (
+                        <button
+                          aria-label={item.label}
+                          className="tooltip"
+                          data-tooltip={item.label}
+                          key={item.id}
+                          onClick={() => setTool((current) => current === item.id ? 'pointer' : item.id)}
+                          style={miniIconButtonStyle(tool === item.id)}
+                        >
+                          <Icon size={15} />
+                        </button>
+                      );
+                    })}
+                    <button aria-label="Zoom out" className="tooltip" data-tooltip="Zoom out" onClick={() => adjustZoom(-0.2)} style={miniIconButtonStyle(false)}><Minus size={15} /></button>
+                    <span style={miniZoomPillStyle}>{zoom.toFixed(1)}x</span>
+                    <button aria-label="Zoom in" className="tooltip" data-tooltip="Zoom in" onClick={() => adjustZoom(0.2)} style={miniIconButtonStyle(false)}><Plus size={15} /></button>
+                  </div>
+                )}
                 <div
                   onKeyDown={handleBoardKeyDown}
                   onPointerDown={(event) => event.currentTarget.focus()}
@@ -1547,10 +1559,29 @@ const localPresenterTileStyle = {
   position: 'relative'
 };
 
-const shareTileStyle = {
+const shareTileStyle = (expanded) => ({
   ...localPresenterTileStyle,
-  gridColumn: 'span 2',
-  minHeight: '300px'
+  gridColumn: expanded ? '1 / -1' : 'span 2',
+  minHeight: expanded ? '560px' : '300px'
+});
+
+const shareExpandButtonStyle = {
+  alignItems: 'center',
+  background: 'rgba(15, 23, 42, 0.86)',
+  border: '1px solid rgba(255,255,255,0.16)',
+  borderRadius: '999px',
+  color: '#FFFFFF',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  fontSize: '12px',
+  fontWeight: 900,
+  gap: '7px',
+  minHeight: '34px',
+  padding: '0 12px',
+  position: 'absolute',
+  right: '12px',
+  top: '12px',
+  zIndex: 4
 };
 
 const compactToolBarStyle = {
@@ -1560,12 +1591,13 @@ const compactToolBarStyle = {
   borderRadius: '999px',
   display: 'flex',
   gap: '5px',
-  left: '12px',
+  left: '50%',
   maxWidth: 'calc(100% - 24px)',
   overflowX: 'auto',
   padding: '6px',
   position: 'absolute',
   top: '12px',
+  transform: 'translateX(-50%)',
   zIndex: 3
 };
 
