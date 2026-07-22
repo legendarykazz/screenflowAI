@@ -44,8 +44,6 @@ const noteSeeds = [
   'Ask AI can summarize the current call context for participants.'
 ];
 
-const boardColors = ['#111827', '#FF4D7E', '#00E0FF', '#FFB800', '#00C48C'];
-
 export default function LiveCall() {
   const canvasRef = useRef(null);
   const outputVideoRef = useRef(null);
@@ -903,15 +901,6 @@ export default function LiveCall() {
     });
   };
 
-  const clearMarks = () => {
-    pathsRef.current = [];
-    hideZonesRef.current = [];
-    spotlightRef.current = null;
-    textNotesRef.current = [];
-    draftRef.current = null;
-    setNotes((current) => ['Presenter cleared all live annotations.', ...current]);
-  };
-
   const askAi = () => {
     setNotes((current) => [
       'AI draft: The presenter is walking through a live screen with guided zoom and visibility controls. Current follow-up: connect this canvas stream to the call provider.',
@@ -1061,6 +1050,76 @@ export default function LiveCall() {
               )}
               <span style={tileLabelStyle}>You - Host</span>
             </div>
+            {(isLive || shareMode === 'whiteboard') && (
+              <div style={shareTileStyle}>
+                <div style={compactToolBarStyle}>
+                  {toolOptions.map((item) => {
+                    const Icon = item.icon;
+                    return (
+                      <button
+                        aria-label={item.label}
+                        className="tooltip"
+                        data-tooltip={item.label}
+                        key={item.id}
+                        onClick={() => setTool((current) => current === item.id ? 'pointer' : item.id)}
+                        style={miniIconButtonStyle(tool === item.id)}
+                      >
+                        <Icon size={15} />
+                      </button>
+                    );
+                  })}
+                  <button aria-label="Zoom out" className="tooltip" data-tooltip="Zoom out" onClick={() => adjustZoom(-0.2)} style={miniIconButtonStyle(false)}><Minus size={15} /></button>
+                  <span style={miniZoomPillStyle}>{zoom.toFixed(1)}x</span>
+                  <button aria-label="Zoom in" className="tooltip" data-tooltip="Zoom in" onClick={() => adjustZoom(0.2)} style={miniIconButtonStyle(false)}><Plus size={15} /></button>
+                </div>
+                <div
+                  onKeyDown={handleBoardKeyDown}
+                  onPointerDown={(event) => event.currentTarget.focus()}
+                  tabIndex={0}
+                  style={shareCanvasWrapStyle}
+                >
+                  <canvas
+                    ref={canvasRef}
+                    onPointerDown={handlePointerDown}
+                    onPointerUp={handlePointerUp}
+                    onPointerLeave={handlePointerUp}
+                    onPointerMove={(event) => {
+                      if (shareMode === 'whiteboard') {
+                        setKeyboardTextAnchor(eventToPoint(event));
+                      }
+                      handlePointerMove(event);
+                    }}
+                    style={canvasStyle}
+                  />
+                  {textDraft && (
+                    <textarea
+                      autoFocus
+                      key={`${textDraft.x}-${textDraft.y}`}
+                      value={textDraft.text}
+                      onChange={(event) => setTextDraft((draft) => ({ ...draft, text: event.target.value }))}
+                      onBlur={() => commitTextDraft()}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' && !event.shiftKey) {
+                          event.preventDefault();
+                          commitTextDraft({ continueTyping: true });
+                        }
+                        if (event.key === 'Escape') {
+                          setTextDraft(null);
+                        }
+                      }}
+                      placeholder="Type point"
+                      style={{
+                        ...whiteboardTextInputStyle,
+                        color: textDraft.color,
+                        left: `${textDraft.x * 100}%`,
+                        top: `${textDraft.y * 100}%`
+                      }}
+                    />
+                  )}
+                </div>
+                <span style={tileLabelStyle}>Host Share - {sourceName}</span>
+              </div>
+            )}
             <div ref={remoteMediaRef} style={remoteGridStyle}>
               {!remoteParticipants.length && <div style={emptyTileStyle}>Waiting for people to join</div>}
             </div>
@@ -1109,98 +1168,7 @@ export default function LiveCall() {
           </div>
         </section>
 
-        <div style={presenterMode ? presenterStagePanelStyle : stagePanelStyle}>
-          <div style={toolBarStyle}>
-            {toolOptions.map((item) => {
-              const Icon = item.icon;
-              return (
-                <button
-                  aria-label={item.label}
-                  className="tooltip"
-                  data-tooltip={item.label}
-                  key={item.id}
-                  onClick={() => setTool((current) => current === item.id ? 'pointer' : item.id)}
-                  style={iconButtonStyle(tool === item.id)}
-                >
-                  <Icon size={18} />
-                </button>
-              );
-            })}
-            <div style={dividerStyle} />
-            {boardColors.map((swatch) => (
-              <button
-                aria-label={`Use ${swatch}`}
-                key={swatch}
-                onClick={() => setColor(swatch)}
-                style={swatchStyle(swatch, color === swatch)}
-              />
-            ))}
-            <div style={dividerStyle} />
-            <button aria-label="Zoom out" className="tooltip" data-tooltip="Zoom out" onClick={() => adjustZoom(-0.2)} style={iconButtonStyle(false)}><Minus size={18} /></button>
-            <span style={zoomPillStyle}>{zoom.toFixed(1)}x</span>
-            <button aria-label="Zoom in" className="tooltip" data-tooltip="Zoom in" onClick={() => adjustZoom(0.2)} style={iconButtonStyle(false)}><Plus size={18} /></button>
-            <button aria-label="Clear" className="tooltip" data-tooltip="Clear marks" onClick={clearMarks} style={iconButtonStyle(false)}><RotateCcw size={18} /></button>
-          </div>
-
-          <div
-            onKeyDown={handleBoardKeyDown}
-            onPointerDown={(event) => event.currentTarget.focus()}
-            tabIndex={0}
-            style={canvasWrapStyle}
-          >
-            <canvas
-              ref={canvasRef}
-              onPointerDown={handlePointerDown}
-              onPointerUp={handlePointerUp}
-              onPointerLeave={handlePointerUp}
-              onPointerMove={(event) => {
-                if (shareMode === 'whiteboard') {
-                  setKeyboardTextAnchor(eventToPoint(event));
-                }
-                handlePointerMove(event);
-              }}
-              style={canvasStyle}
-            />
-            {textDraft && (
-              <textarea
-                autoFocus
-                key={`${textDraft.x}-${textDraft.y}`}
-                value={textDraft.text}
-                onChange={(event) => setTextDraft((draft) => ({ ...draft, text: event.target.value }))}
-                onBlur={() => commitTextDraft()}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey) {
-                    event.preventDefault();
-                    commitTextDraft({ continueTyping: true });
-                  }
-                  if (event.key === 'Escape') {
-                    setTextDraft(null);
-                  }
-                }}
-                placeholder="Type point"
-                style={{
-                  ...whiteboardTextInputStyle,
-                  color: textDraft.color,
-                  left: `${textDraft.x * 100}%`,
-                  top: `${textDraft.y * 100}%`
-                }}
-              />
-            )}
-            {!isLive && shareMode !== 'whiteboard' && (
-              <div style={emptyStateStyle}>
-                <Video size={42} />
-                <strong>Optional screen share appears here</strong>
-                <span>Start sharing only when you need the room to see your screen, whiteboard, zoom, or annotations.</span>
-              </div>
-            )}
-          </div>
-
-          <div style={statusRowStyle}>
-            <span style={{ color: isLive ? '#00A878' : '#647087', fontWeight: 800 }}>{isLive ? 'Live output active' : 'Waiting'}</span>
-            <span>{presenterMode ? 'Presenter controls are visible only to you. Viewers receive the clean canvas feed.' : `${status} ${remoteParticipants.length} participant${remoteParticipants.length === 1 ? '' : 's'} joined.`}</span>
-          </div>
-          <video ref={outputVideoRef} autoPlay muted playsInline style={hiddenPreviewStyle} />
-        </div>
+        <video ref={outputVideoRef} autoPlay muted playsInline style={hiddenPreviewStyle} />
 
         <aside style={presenterMode ? presenterSidePanelStyle : sidePanelStyle}>
           <section style={sourceControlCardStyle}>
@@ -1396,57 +1364,11 @@ const presenterWorkspaceStyle = {
   gridTemplateColumns: '1fr'
 };
 
-const stagePanelStyle = {
-  background: '#FFFFFF',
-  border: '1px solid #E2E8F0',
-  borderRadius: '8px',
-  boxShadow: '0 8px 22px rgba(15, 23, 42, 0.04)',
-  gridColumn: '1 / -1',
-  gridRow: '2',
-  overflow: 'hidden'
-};
-
-const presenterStagePanelStyle = {
-  ...stagePanelStyle,
-  alignSelf: 'stretch'
-};
-
-const toolBarStyle = {
-  alignItems: 'center',
-  background: '#FFFFFF',
-  borderBottom: '1px solid #E8EDF5',
-  display: 'flex',
-  gap: '8px',
-  minHeight: '64px',
-  overflowX: 'auto',
-  padding: '10px 14px'
-};
-
-const canvasWrapStyle = {
-  aspectRatio: '16 / 9',
-  background: '#090B12',
-  position: 'relative',
-  width: '100%'
-};
-
 const canvasStyle = {
   cursor: 'crosshair',
   display: 'block',
   height: '100%',
   width: '100%'
-};
-
-const emptyStateStyle = {
-  alignItems: 'center',
-  color: '#D8E0F0',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '10px',
-  inset: 0,
-  justifyContent: 'center',
-  padding: '24px',
-  position: 'absolute',
-  textAlign: 'center'
 };
 
 const whiteboardTextInputStyle = {
@@ -1623,6 +1545,58 @@ const localPresenterTileStyle = {
   minHeight: '210px',
   overflow: 'hidden',
   position: 'relative'
+};
+
+const shareTileStyle = {
+  ...localPresenterTileStyle,
+  gridColumn: 'span 2',
+  minHeight: '300px'
+};
+
+const compactToolBarStyle = {
+  alignItems: 'center',
+  background: 'rgba(255, 255, 255, 0.94)',
+  border: '1px solid rgba(221, 228, 238, 0.9)',
+  borderRadius: '999px',
+  display: 'flex',
+  gap: '5px',
+  left: '12px',
+  maxWidth: 'calc(100% - 24px)',
+  overflowX: 'auto',
+  padding: '6px',
+  position: 'absolute',
+  top: '12px',
+  zIndex: 3
+};
+
+const shareCanvasWrapStyle = {
+  background: '#090B12',
+  height: '100%',
+  position: 'relative',
+  width: '100%'
+};
+
+const miniIconButtonStyle = (active) => ({
+  alignItems: 'center',
+  background: active ? '#172033' : '#FFFFFF',
+  border: `1px solid ${active ? '#172033' : '#DDE4EE'}`,
+  borderRadius: '999px',
+  color: active ? '#FFFFFF' : '#4E5A70',
+  cursor: 'pointer',
+  display: 'flex',
+  flexShrink: 0,
+  height: '30px',
+  justifyContent: 'center',
+  width: '30px'
+});
+
+const miniZoomPillStyle = {
+  color: '#26344D',
+  flexShrink: 0,
+  fontSize: '12px',
+  fontWeight: 900,
+  minWidth: '38px',
+  textAlign: 'center'
 };
 
 const remoteGridStyle = {
@@ -1977,34 +1951,6 @@ const secondaryHeaderButtonStyle = {
   whiteSpace: 'nowrap'
 };
 
-const dividerStyle = {
-  background: '#E8EDF5',
-  height: '30px',
-  margin: '0 4px',
-  width: '1px'
-};
-
-const zoomPillStyle = {
-  color: '#26344D',
-  fontSize: '13px',
-  fontWeight: 900,
-  minWidth: '44px',
-  textAlign: 'center'
-};
-
-const iconButtonStyle = (active) => ({
-  alignItems: 'center',
-  background: active ? '#172033' : '#F8FAFF',
-  border: `1px solid ${active ? '#172033' : '#DDE5F1'}`,
-  borderRadius: '8px',
-  color: active ? '#FFFFFF' : '#4E5A70',
-  cursor: 'pointer',
-  display: 'inline-flex',
-  height: '38px',
-  justifyContent: 'center',
-  width: '38px'
-});
-
 const secondaryButtonStyle = (active) => ({
   alignItems: 'center',
   background: active ? '#172033' : '#F8FAFF',
@@ -2018,14 +1964,4 @@ const secondaryButtonStyle = (active) => ({
   gap: '8px',
   justifyContent: 'center',
   minHeight: '40px'
-});
-
-const swatchStyle = (swatch, active) => ({
-  background: swatch,
-  border: active ? '3px solid #172033' : '3px solid #FFFFFF',
-  borderRadius: '999px',
-  boxShadow: '0 3px 10px rgba(15,23,42,0.16)',
-  cursor: 'pointer',
-  height: '26px',
-  width: '26px'
 });
