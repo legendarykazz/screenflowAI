@@ -26,12 +26,28 @@ export default function JoinCall() {
   const [micOn, setMicOn] = useState(false);
   const [screenOn, setScreenOn] = useState(false);
   const [participants, setParticipants] = useState([]);
+  const [fatalError, setFatalError] = useState('');
 
   useEffect(() => {
     if (localCameraRef.current) {
       localCameraRef.current.srcObject = cameraOn ? localCameraStreamRef.current : null;
     }
   }, [cameraOn]);
+
+  useEffect(() => {
+    const handleError = (event) => {
+      setFatalError(event.error?.message || event.message || 'The call page hit an unexpected error.');
+    };
+    const handleRejection = (event) => {
+      setFatalError(event.reason?.message || String(event.reason || 'The call page hit an unexpected error.'));
+    };
+    window.addEventListener('error', handleError);
+    window.addEventListener('unhandledrejection', handleRejection);
+    return () => {
+      window.removeEventListener('error', handleError);
+      window.removeEventListener('unhandledrejection', handleRejection);
+    };
+  }, []);
 
   const joinRoom = async () => {
     try {
@@ -56,15 +72,23 @@ export default function JoinCall() {
       roomRef.current = room;
 
       room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
-        attachTrack(track, participant);
+        try {
+          attachTrack(track, participant);
+        } catch (error) {
+          setStatus(error.message || 'Could not attach participant media.');
+        }
       });
 
       room.on(RoomEvent.TrackUnsubscribed, (track) => {
-        track.detach().forEach((element) => {
-          const tile = element.closest?.('[data-face-tile="true"]');
-          if (tile) tile.remove();
-          else element.remove();
-        });
+        try {
+          track.detach().forEach((element) => {
+            const tile = element.closest?.('[data-face-tile="true"]');
+            if (tile) tile.remove();
+            else element.remove();
+          });
+        } catch (error) {
+          setStatus(error.message || 'Could not clean up participant media.');
+        }
         if (activeVideoSidRef.current === track.sid) activeVideoSidRef.current = null;
         if (activeCameraSidRef.current === track.sid) activeCameraSidRef.current = null;
       });
@@ -297,6 +321,12 @@ export default function JoinCall() {
     <div style={pageStyle}>
       <style>{responsiveStyles}</style>
       <main style={panelStyle}>
+        {fatalError && (
+          <section style={fatalErrorStyle}>
+            <strong>Call page error</strong>
+            <span>{fatalError}</span>
+          </section>
+        )}
         <div style={topBarStyle}>
           <div>
             <div style={brandStyle}>ScreenFlow AI</div>
@@ -392,6 +422,19 @@ const panelStyle = {
   padding: '18px',
   width: '100%',
   minHeight: 'auto'
+};
+
+const fatalErrorStyle = {
+  background: '#2A0F12',
+  border: '1px solid #7F1D1D',
+  borderRadius: '8px',
+  color: '#FEE2E2',
+  display: 'grid',
+  fontSize: '13px',
+  gap: '6px',
+  lineHeight: 1.45,
+  marginBottom: '14px',
+  padding: '12px'
 };
 
 const topBarStyle = {
