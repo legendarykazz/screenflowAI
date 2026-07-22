@@ -583,6 +583,7 @@ export default function LiveCall() {
   const attachRemoteTrack = (track, participant) => {
     if (!remoteMediaRef.current) return;
     const participantId = participant?.identity || 'remote';
+    const isRemoteScreen = track.kind === 'video' && track.name?.includes('screen');
     let tile = remoteMediaRef.current.querySelector(`[data-participant-id="${participantId}"]`);
     if (!tile) {
       tile = document.createElement('div');
@@ -594,8 +595,23 @@ export default function LiveCall() {
       tile.style.minHeight = '150px';
       tile.style.overflow = 'hidden';
       tile.style.position = 'relative';
+      tile.style.cursor = 'pointer';
+      tile.onclick = () => {
+        const isExpanded = tile.dataset.expanded === 'true';
+        Array.from(remoteMediaRef.current.querySelectorAll('[data-participant-id]')).forEach((item) => {
+          item.dataset.expanded = 'false';
+          item.style.gridColumn = 'auto';
+          item.style.gridRow = 'auto';
+          item.style.minHeight = '180px';
+        });
+        tile.dataset.expanded = isExpanded ? 'false' : 'true';
+        tile.style.gridColumn = isExpanded ? 'auto' : 'span 2';
+        tile.style.gridRow = isExpanded ? 'auto' : 'span 2';
+        tile.style.minHeight = isExpanded ? '180px' : '360px';
+      };
 
       const label = document.createElement('div');
+      label.dataset.tileLabel = 'true';
       label.textContent = participant?.name || participantId;
       label.style.background = 'rgba(9, 11, 18, 0.72)';
       label.style.borderRadius = '999px';
@@ -617,11 +633,13 @@ export default function LiveCall() {
     element.style.height = track.kind === 'video' ? '100%' : '0';
     element.style.background = '#0B0F19';
     element.style.display = track.kind === 'video' ? 'block' : 'none';
-    element.style.objectFit = 'cover';
+    element.style.objectFit = isRemoteScreen ? 'contain' : 'cover';
     if (track.kind === 'audio') element.style.display = 'none';
 
     if (track.kind === 'video') {
       Array.from(tile.querySelectorAll('video')).forEach((video) => video.remove());
+      const label = tile.querySelector('[data-tile-label="true"]');
+      if (label) label.textContent = `${participant?.name || participantId}${isRemoteScreen ? ' - Screen' : ''}`;
     }
     tile.appendChild(element);
     element.play?.().catch(() => {});
@@ -1025,6 +1043,29 @@ export default function LiveCall() {
       </header>
 
       <section style={presenterMode ? presenterWorkspaceStyle : workspaceStyle}>
+        <section style={conferenceStageStyle}>
+          <div style={conferenceHeaderStyle}>
+            <div>
+              <h2 style={stageTitleStyle}><Users size={18} /> Meeting Room</h2>
+              <p style={stageSubtitleStyle}>Everyone appears here. Click any participant tile to focus it.</p>
+            </div>
+            <span style={meetingCountStyle}>{remoteParticipants.length + 1} in call</span>
+          </div>
+          <div style={peopleGridStyle}>
+            <div style={localPresenterTileStyle}>
+              {cameraOn ? (
+                <video ref={cameraPreviewRef} autoPlay muted playsInline style={stageVideoStyle} />
+              ) : (
+                <div style={emptyTileStyle}>Camera is off</div>
+              )}
+              <span style={tileLabelStyle}>You - Host</span>
+            </div>
+            <div ref={remoteMediaRef} style={remoteGridStyle}>
+              {!remoteParticipants.length && <div style={emptyTileStyle}>Waiting for people to join</div>}
+            </div>
+          </div>
+        </section>
+
         <div style={presenterMode ? presenterStagePanelStyle : stagePanelStyle}>
           <div style={toolBarStyle}>
             {toolOptions.map((item) => {
@@ -1105,8 +1146,8 @@ export default function LiveCall() {
             {!isLive && shareMode !== 'whiteboard' && (
               <div style={emptyStateStyle}>
                 <Video size={42} />
-                <strong>Enhanced live output appears here</strong>
-                <span>Start the room, choose a screen, then draw, zoom, spotlight, or hide parts while viewers watch.</span>
+                <strong>Optional screen share appears here</strong>
+                <span>Start sharing only when you need the room to see your screen, whiteboard, zoom, or annotations.</span>
               </div>
             )}
           </div>
@@ -1117,26 +1158,6 @@ export default function LiveCall() {
           </div>
           <video ref={outputVideoRef} autoPlay muted playsInline style={hiddenPreviewStyle} />
         </div>
-
-        <section style={conferenceStageStyle}>
-          <div style={conferenceHeaderStyle}>
-            <h2 style={sideTitleStyle}><Users size={17} /> People</h2>
-            <span style={smallTextStyle}>{remoteParticipants.length + 1} in call</span>
-          </div>
-          <div style={peopleGridStyle}>
-            <div style={localPresenterTileStyle}>
-              {cameraOn ? (
-                <video ref={cameraPreviewRef} autoPlay muted playsInline style={stageVideoStyle} />
-              ) : (
-                <div style={emptyTileStyle}>Camera is off</div>
-              )}
-              <span style={tileLabelStyle}>You - Host</span>
-            </div>
-            <div ref={remoteMediaRef} style={remoteGridStyle}>
-              {!remoteParticipants.length && <div style={emptyTileStyle}>People will appear here when they join with camera or audio.</div>}
-            </div>
-          </div>
-        </section>
 
         <aside style={presenterMode ? presenterSidePanelStyle : sidePanelStyle}>
           <section style={sourceControlCardStyle}>
@@ -1351,12 +1372,12 @@ const workspaceStyle = {
   alignItems: 'start',
   display: 'grid',
   gap: '16px',
-  gridTemplateColumns: 'minmax(0, 1fr) 340px'
+  gridTemplateColumns: '1fr'
 };
 
 const presenterWorkspaceStyle = {
   ...workspaceStyle,
-  gridTemplateColumns: 'minmax(0, 1fr) 300px'
+  gridTemplateColumns: '1fr'
 };
 
 const stagePanelStyle = {
@@ -1364,8 +1385,8 @@ const stagePanelStyle = {
   border: '1px solid #E2E8F0',
   borderRadius: '8px',
   boxShadow: '0 8px 22px rgba(15, 23, 42, 0.04)',
-  gridColumn: '1',
-  gridRow: '1',
+  gridColumn: '1 / -1',
+  gridRow: '2',
   overflow: 'hidden'
 };
 
@@ -1488,9 +1509,9 @@ const conferenceStageStyle = {
   display: 'flex',
   flexDirection: 'column',
   gap: '12px',
-  gridColumn: '2',
+  gridColumn: '1 / -1',
   gridRow: '1',
-  padding: '16px'
+  padding: '18px'
 };
 
 const conferenceHeaderStyle = {
@@ -1504,10 +1525,10 @@ const peopleGridStyle = {
   border: '1px solid #DDE5F1',
   borderRadius: '8px',
   display: 'grid',
-  gap: '10px',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-  minHeight: '190px',
-  padding: '10px'
+  gap: '12px',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+  minHeight: '430px',
+  padding: '12px'
 };
 
 const localPresenterTileStyle = {
@@ -1515,7 +1536,7 @@ const localPresenterTileStyle = {
   background: '#090B12',
   border: '1px solid #2A3446',
   borderRadius: '8px',
-  minHeight: '170px',
+  minHeight: '210px',
   overflow: 'hidden',
   position: 'relative'
 };

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Room, RoomEvent, Track } from 'livekit-client';
-import { Camera, Mic, PhoneOff, Play, Users, Video } from 'lucide-react';
+import { Camera, Mic, PhoneOff, Play, ScreenShare, Users, Video } from 'lucide-react';
 
 export default function JoinCall() {
   const roomRef = useRef(null);
@@ -11,6 +11,7 @@ export default function JoinCall() {
   const localMicStreamRef = useRef(null);
   const publishedCameraTrackRef = useRef(null);
   const publishedMicTrackRef = useRef(null);
+  const publishedScreenTrackRef = useRef(null);
   const activeVideoSidRef = useRef(null);
   const activeCameraSidRef = useRef(null);
   const roomCode = useMemo(() => {
@@ -23,6 +24,7 @@ export default function JoinCall() {
   const [connected, setConnected] = useState(false);
   const [cameraOn, setCameraOn] = useState(false);
   const [micOn, setMicOn] = useState(false);
+  const [screenOn, setScreenOn] = useState(false);
   const [participants, setParticipants] = useState([]);
 
   useEffect(() => {
@@ -73,6 +75,7 @@ export default function JoinCall() {
         activeCameraSidRef.current = null;
         publishedCameraTrackRef.current = null;
         publishedMicTrackRef.current = null;
+        publishedScreenTrackRef.current = null;
         localCameraStreamRef.current?.getTracks().forEach((track) => track.stop());
         localMicStreamRef.current?.getTracks().forEach((track) => track.stop());
         localCameraStreamRef.current = null;
@@ -162,6 +165,46 @@ export default function JoinCall() {
     }
   };
 
+  const toggleScreenShare = async () => {
+    const room = roomRef.current;
+    if (!room) return;
+
+    if (screenOn) {
+      if (publishedScreenTrackRef.current) await room.localParticipant.unpublishTrack(publishedScreenTrackRef.current);
+      publishedScreenTrackRef.current?.stop?.();
+      publishedScreenTrackRef.current = null;
+      setScreenOn(false);
+      return;
+    }
+
+    try {
+      if (!navigator.mediaDevices?.getDisplayMedia) {
+        setStatus('Screen sharing is not available in this mobile browser.');
+        return;
+      }
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      const screenTrack = stream.getVideoTracks()[0];
+      screenTrack.onended = () => {
+        publishedScreenTrackRef.current = null;
+        setScreenOn(false);
+      };
+      publishedScreenTrackRef.current = screenTrack;
+      await room.localParticipant.publishTrack(screenTrack, {
+        name: 'participant-screen',
+        source: Track.Source.ScreenShare,
+        simulcast: false,
+        videoEncoding: {
+          maxBitrate: 2_000_000,
+          maxFramerate: 24
+        }
+      });
+      setScreenOn(true);
+      setStatus('Sharing your screen.');
+    } catch (error) {
+      setStatus(error.message || 'Screen share permission was not granted.');
+    }
+  };
+
   const updateParticipants = (room = roomRef.current) => {
     if (!room) return;
     setParticipants(Array.from(room.remoteParticipants.values()).map((participant) => participant.name || participant.identity));
@@ -177,7 +220,7 @@ export default function JoinCall() {
 
   const attachTrack = (track, participant) => {
     if (!mediaRef.current) return;
-    const isScreen = track.kind === 'video' && track.name === 'screenflow-enhanced-output';
+    const isScreen = track.kind === 'video' && track.name?.includes('screen');
     const isCamera = track.kind === 'video' && !isScreen;
     const targetRef = isCamera ? cameraRef : mediaRef;
     if (!targetRef.current) return;
@@ -277,6 +320,9 @@ export default function JoinCall() {
             </button>
             <button onClick={toggleCamera} style={secondaryButtonStyle}>
               <Camera size={17} /> {cameraOn ? 'Camera On' : 'Camera'}
+            </button>
+            <button onClick={toggleScreenShare} style={secondaryButtonStyle}>
+              <ScreenShare size={17} /> {screenOn ? 'Stop Share' : 'Share Screen'}
             </button>
           </div>
         )}
