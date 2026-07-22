@@ -9,6 +9,7 @@ import {
 export default function SettingsPage({ license, onActivateLicense }) {
   const [activeTab, setActiveTab] = useState('general');
   const [apiKey, setApiKey] = useState('');
+  const [geminiApiKey, setGeminiApiKey] = useState('');
   const [licenseKey, setLicenseKey] = useState('');
   const [statusMessage, setStatusMessage] = useState({ text: '', type: 'success' });
   const [logs, setLogs] = useState('Initializing activity log viewer...');
@@ -49,8 +50,16 @@ export default function SettingsPage({ license, onActivateLicense }) {
   const cursorColors = ['#FF4D7E', '#00E0FF', '#FFB800', '#00C48C', '#7C3AED'];
 
   useEffect(() => {
-    const savedKey = localStorage.getItem('openai_api_key');
-    if (savedKey) setApiKey(savedKey);
+    const loadSavedKeys = async () => {
+      const savedKey = localStorage.getItem('openai_api_key');
+      if (savedKey) setApiKey(savedKey);
+      const savedGeminiKey = localStorage.getItem('gemini_api_key');
+      if (savedGeminiKey) setGeminiApiKey(savedGeminiKey);
+      const storedKeys = await window.electron?.getAIKeys?.();
+      if (storedKeys?.openai) setApiKey(storedKeys.openai);
+      if (storedKeys?.gemini) setGeminiApiKey(storedKeys.gemini);
+    };
+    loadSavedKeys();
     if (license?.key) setLicenseKey(license.key);
     loadLogs();
   }, [license]);
@@ -69,9 +78,16 @@ export default function SettingsPage({ license, onActivateLicense }) {
     setTimeout(() => setStatusMessage({ text: '', type: 'success' }), 3000);
   };
 
-  const handleSaveAPIKey = () => {
+  const handleSaveAPIKey = async () => {
     localStorage.setItem('openai_api_key', apiKey);
+    await window.electron?.saveAIKeys?.({ openai: apiKey });
     showStatus('OpenAI API key saved successfully.');
+  };
+
+  const handleSaveGeminiAPIKey = async () => {
+    localStorage.setItem('gemini_api_key', geminiApiKey);
+    await window.electron?.saveAIKeys?.({ gemini: geminiApiKey });
+    showStatus('Gemini API key saved successfully.');
   };
 
   const handleLicenseSubmit = async () => {
@@ -415,8 +431,31 @@ export default function SettingsPage({ license, onActivateLicense }) {
 
               {/* OpenAI API Key */}
               <div style={{ borderTop: '1px solid #F1F5F9', paddingTop: '24px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <label style={{ fontSize: '13px', fontWeight: 700 }}>Gemini API Key</label>
+                <p style={{ fontSize: '12px', color: '#8A94A6' }}>Used first for AI Captions transcription from your recording audio.</p>
+                <div style={{ display: 'flex', gap: '12px' }}>
+                  <input 
+                    type="password" 
+                    placeholder="AIza..." 
+                    value={geminiApiKey}
+                    onChange={e => setGeminiApiKey(e.target.value)}
+                    style={{ 
+                      padding: '12px 16px', border: '1px solid #E2E8F0', borderRadius: '12px', 
+                      background: '#FFF', flex: 1, fontSize: '14px', outline: 'none', color: '#1A1F36'
+                    }}
+                  />
+                  <button onClick={handleSaveGeminiAPIKey} style={{
+                    background: '#F8FAFF', border: '1px solid #E2E8F0', borderRadius: '12px', 
+                    color: '#1A1F36', padding: '12px 20px', fontWeight: 700, fontSize: '13px', cursor: 'pointer', flexShrink: 0
+                  }}>
+                    Save Key
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ borderTop: '1px solid #F1F5F9', paddingTop: '24px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 <label style={{ fontSize: '13px', fontWeight: 700 }}>OpenAI Whisper API Key</label>
-                <p style={{ fontSize: '12px', color: '#8A94A6' }}>Required for AI Captions transcription feature.</p>
+                <p style={{ fontSize: '12px', color: '#8A94A6' }}>Optional fallback for AI Captions.</p>
                 <div style={{ display: 'flex', gap: '12px' }}>
                   <input 
                     type="password" 

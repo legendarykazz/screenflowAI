@@ -104,6 +104,7 @@ function createWidgetWindow() {
 
 // License file path
 const licenseFilePath = path.join(app.getPath('userData'), 'license.json');
+const aiKeysFilePath = path.join(app.getPath('userData'), 'ai_keys.json');
 
 // Log file path
 const logFilePath = path.join(app.getPath('userData'), 'activity.log');
@@ -142,6 +143,10 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 function getLicense() {
+  if (process.env.SCREENFLOW_DESIGN_PRO !== '0') {
+    return { plan: 'pro', key: 'SF-PRO-DESIGN-MODE' };
+  }
+
   if (fs.existsSync(licenseFilePath)) {
     try {
       return JSON.parse(fs.readFileSync(licenseFilePath, 'utf-8'));
@@ -154,6 +159,21 @@ function getLicense() {
 
 function saveLicense(license) {
   fs.writeFileSync(licenseFilePath, JSON.stringify(license, null, 2), 'utf-8');
+}
+
+function getAIKeys() {
+  if (fs.existsSync(aiKeysFilePath)) {
+    try {
+      return JSON.parse(fs.readFileSync(aiKeysFilePath, 'utf-8'));
+    } catch (e) {
+      return {};
+    }
+  }
+  return {};
+}
+
+function saveAIKeys(keys) {
+  fs.writeFileSync(aiKeysFilePath, JSON.stringify(keys, null, 2), 'utf-8');
 }
 
 function normalizeExistingPath(filePath) {
@@ -181,7 +201,7 @@ function getAllowedMediaPaths() {
 
   try {
     for (const project of db.getProjects()) {
-      for (const key of ['video_path', 'audio_path', 'webcam_path']) {
+      for (const key of ['video_path', 'raw_video_path', 'audio_path', 'webcam_path']) {
         const normalized = normalizeExistingPath(project[key]);
         if (normalized) allowedFiles.add(normalized);
       }
@@ -221,6 +241,95 @@ function getMediaContentType(filePath) {
   if (ext === '.wav') return 'audio/wav';
   if (ext === '.ogg' || ext === '.opus') return 'audio/ogg';
   return 'application/octet-stream';
+}
+
+function extractJsonArray(text) {
+  if (!text || typeof text !== 'string') return null;
+  const trimmed = text.trim().replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```$/i, '').trim();
+  try {
+    return JSON.parse(trimmed);
+  } catch (e) {
+    const start = trimmed.indexOf('[');
+    const end = trimmed.lastIndexOf(']');
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(trimmed.slice(start, end + 1));
+      } catch (inner) {}
+    }
+  }
+  return null;
+}
+
+async function generateGeminiCaptionsForMedia(mediaPath, apiKey, duration = 0) {
+  if (!mediaPath) {
+    return { success: false, error: 'Recording media file not found.' };
+  }
+
+  const stat = fs.statSync(mediaPath);
+  if (stat.size > 18 * 1024 * 1024) {
+    return { success: false, error: 'This recording is too large for inline Gemini captions. Export a shorter clip or use OpenAI Whisper for larger files.' };
+  }
+
+  const mimeType = getMediaContentType(mediaPath);
+  const base64Media = fs.readFileSync(mediaPath).toString('base64');
+  const prompt = `Transcribe the spoken words in this recording into caption segments.
+Return only a valid JSON array. Do not wrap it in markdown.
+Each item must use this exact shape:
+{"start_time": number, "end_time": number, "text": string}
+Use seconds for start_time and end_time. Keep each caption short enough for on-screen subtitles.
+If there is no speech, return an empty array.`;
+
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{
+        parts: [
+          { text: prompt },
+          {
+            inlineData: {
+              mimeType,
+              data: base64Media
+            }
+          }
+        ]
+      }],
+      generationConfig: {
+        responseMimeType: 'application/json'
+      }
+    })
+  });
+
+  const responseBody = await response.json();
+  if (!response.ok) {
+    throw new Error(responseBody.error?.message || `Gemini transcription failed with status ${response.status}`);
+  }
+
+  const text = responseBody.candidates?.[0]?.content?.parts?.map(part => part.text || '').join('\n') || '';
+  const parsed = extractJsonArray(text);
+  if (!Array.isArray(parsed)) {
+    throw new Error('Gemini returned a response that could not be parsed as caption JSON.');
+  }
+
+  duration = Math.max(0, Number(duration || 0));
+  const captions = parsed
+    .map((item) => ({
+      start_time: Math.max(0, Number(item.start_time ?? item.start ?? 0)),
+      end_time: Math.max(0, Number(item.end_time ?? item.end ?? 0)),
+      text: String(item.text || '').trim()
+    }))
+    .filter((item) => item.text && item.end_time > item.start_time)
+    .map((item) => ({
+      ...item,
+      end_time: duration ? Math.min(duration, item.end_time) : item.end_time
+    }));
+
+  return { success: true, captions };
+}
+
+async function generateGeminiCaptions(project, apiKey) {
+  const mediaPath = normalizeExistingPath(project.audio_path) || normalizeExistingPath(project.raw_video_path) || normalizeExistingPath(project.video_path);
+  return generateGeminiCaptionsForMedia(mediaPath, apiKey, project.duration);
 }
 
 function transcodeRecordingForPreview(inputPath) {
@@ -350,7 +459,9 @@ app.whenReady().then(() => {
           'Content-Range': `bytes ${start}-${boundedEnd}/${fileSize}`,
           'Accept-Ranges': 'bytes',
           'Content-Length': String(chunksize),
-          'Content-Type': contentType
+          'Content-Type': contentType,
+          'Access-Control-Allow-Origin': '*',
+          'Cache-Control': 'no-store'
         });
         
         return new Response(slicedBuffer, {
@@ -361,7 +472,9 @@ app.whenReady().then(() => {
       } else {
         const headers = new Headers({
           'Content-Length': String(fileSize),
-          'Content-Type': contentType
+          'Content-Type': contentType,
+          'Access-Control-Allow-Origin': '*',
+          'Cache-Control': 'no-store'
         });
         return new Response(buffer, {
           status: 200,
@@ -476,6 +589,14 @@ ipcMain.handle('license:activate', (_, key) => {
   }
   logActivity('LICENSE_ACTIVATION_FAILED', 'Invalid key attempt.');
   return { plan: 'free', key: '' };
+});
+
+ipcMain.handle('ai-keys:get', () => getAIKeys());
+ipcMain.handle('ai-keys:save', (_, keys) => {
+  const existing = getAIKeys();
+  const next = { ...existing, ...(keys || {}) };
+  saveAIKeys(next);
+  return { success: true };
 });
 
 // IPC - Activity logs manager
@@ -769,26 +890,36 @@ ipcMain.handle('recording:save-file', async (_, arrayBuffer) => {
 });
 
 // IPC - AI Captions Generation (OpenAI Whisper)
-ipcMain.handle('ai:generate-captions', async (_, projectId, apiKey) => {
+ipcMain.handle('ai:generate-captions', async (_, projectId, apiKey, provider = 'openai') => {
   logActivity('AI_CAPTIONS_START', `Generating Whisper captions for Project ID: ${projectId}`);
   const project = db.getProject(projectId);
   if (!project) {
     return { success: false, error: 'Project not found' };
   }
 
+  const storedKeys = getAIKeys();
   if (!apiKey) {
-    // Return mock captions if no API key is specified (for demo/development)
-    const duration = Math.max(16, Number(project.duration || 16));
-    const step = Math.max(3, duration / 4);
-    const mockCaptions = [
-      { start_time: 0.5, end_time: Math.min(duration, step), text: `Opening section for ${project.name || 'this recording'}.` },
-      { start_time: step, end_time: Math.min(duration, step * 2), text: "Main point detected from the recording timeline." },
-      { start_time: step * 2, end_time: Math.min(duration, step * 3), text: "Important moment marked for review and editing." },
-      { start_time: step * 3, end_time: Math.min(duration, step * 4), text: "Closing takeaway ready for captions or chapters." }
-    ];
-    db.saveCaptions(projectId, mockCaptions);
-    logActivity('AI_CAPTIONS_MOCK', `Generated local fallback captions for Project ID: ${projectId}`);
-    return { success: true, captions: mockCaptions };
+    apiKey = storedKeys.gemini || storedKeys.openai || '';
+    provider = storedKeys.gemini ? 'gemini' : 'openai';
+  }
+
+  if (!apiKey) {
+    return { success: false, error: 'Add a Gemini or OpenAI API key in Settings before generating captions.' };
+  }
+
+  const selectedProvider = provider === 'gemini' || apiKey.startsWith('AIza') ? 'gemini' : 'openai';
+  if (selectedProvider === 'gemini') {
+    try {
+      const result = await generateGeminiCaptions(project, apiKey);
+      if (result.success) {
+        db.saveCaptions(projectId, result.captions);
+        logActivity('AI_CAPTIONS_GEMINI_SUCCESS', `Generated ${result.captions.length} Gemini captions for Project ID: ${projectId}`);
+      }
+      return result;
+    } catch (err) {
+      logActivity('AI_CAPTIONS_GEMINI_ERROR', `Gemini transcription failed: ${err.message}`);
+      return { success: false, error: err.message };
+    }
   }
 
   // Real OpenAI Whisper integration
@@ -829,6 +960,30 @@ ipcMain.handle('ai:generate-captions', async (_, projectId, apiKey) => {
     return { success: true, captions };
   } catch (err) {
     logActivity('AI_CAPTIONS_ERROR', `Whisper transcription failed: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('ai:generate-call-captions', async (_, arrayBuffer, mimeType = 'audio/webm', duration = 0, apiKey = '') => {
+  const storedKeys = getAIKeys();
+  const geminiKey = apiKey || storedKeys.gemini || '';
+  if (!geminiKey) {
+    return { success: false, error: 'Add a Gemini API key in Settings before generating call captions.' };
+  }
+
+  try {
+    const buffer = Buffer.from(arrayBuffer);
+    const callsDir = path.join(app.getPath('userData'), 'call-captions');
+    if (!fs.existsSync(callsDir)) fs.mkdirSync(callsDir, { recursive: true });
+    const ext = mimeType.includes('mp4') ? 'mp4' : mimeType.includes('ogg') ? 'ogg' : 'webm';
+    const filePath = path.join(callsDir, `call_audio_${Date.now()}.${ext}`);
+    fs.writeFileSync(filePath, buffer);
+
+    const result = await generateGeminiCaptionsForMedia(filePath, geminiKey, duration);
+    logActivity('AI_CALL_CAPTIONS_GEMINI', `Generated ${result.captions?.length || 0} call captions.`);
+    return result;
+  } catch (err) {
+    logActivity('AI_CALL_CAPTIONS_ERROR', `Call transcription failed: ${err.message}`);
     return { success: false, error: err.message };
   }
 });
@@ -939,14 +1094,18 @@ const mediaServer = http.createServer((req, res) => {
         'Content-Range': `bytes ${start}-${boundedEnd}/${fileSize}`,
         'Accept-Ranges': 'bytes',
         'Content-Length': String(chunksize),
-        'Content-Type': contentType
+        'Content-Type': contentType,
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'no-store'
       });
       fileStream.pipe(res);
     } else {
       const fileStream = fs.createReadStream(filePath);
       res.writeHead(200, {
         'Content-Length': String(fileSize),
-        'Content-Type': contentType
+        'Content-Type': contentType,
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'no-store'
       });
       fileStream.pipe(res);
     }

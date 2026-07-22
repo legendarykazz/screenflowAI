@@ -158,32 +158,32 @@ body {
 }
 
 .editor-inspector {
-  background: linear-gradient(180deg, #171b2e 0%, #111625 100%);
-  border-left: 1px solid rgba(255,255,255,0.08);
+  background: #0b0b0b;
+  border-left: 1px solid #262626;
 }
 
 .editor-inspector .glass-card {
-  background: linear-gradient(180deg, rgba(65,70,96,0.96) 0%, rgba(47,52,76,0.98) 100%);
-  border: 1px solid rgba(255,255,255,0.12);
-  border-radius: 18px;
-  box-shadow: 0 18px 42px rgba(4, 7, 18, 0.28);
-  color: #f7f8ff;
+  background: #171717;
+  border: 1px solid #333333;
+  border-radius: 12px;
+  box-shadow: none;
+  color: #f5f5f5;
 }
 
 .editor-inspector .glass-card:hover {
   transform: none;
-  border-color: rgba(167,139,250,0.36);
-  box-shadow: 0 18px 42px rgba(4, 7, 18, 0.32);
+  border-color: #525252;
+  box-shadow: none;
 }
 
 .editor-inspector .input-control {
   appearance: none;
-  background-color: rgba(18, 22, 38, 0.92);
-  border: 1px solid rgba(167,139,250,0.38);
-  border-radius: 14px;
+  background-color: #0a0a0a;
+  border: 1px solid #404040;
+  border-radius: 10px;
   color: #ffffff;
   font-weight: 700;
-  min-height: 48px;
+  min-height: 44px;
   color-scheme: dark;
 }
 
@@ -200,9 +200,9 @@ body {
 }
 
 .editor-inspector .input-control:focus {
-  border-color: #a855f7;
-  box-shadow: 0 0 0 4px rgba(168,85,247,0.22);
-  background-color: rgba(22, 26, 45, 0.98);
+  border-color: #ffffff;
+  box-shadow: 0 0 0 3px rgba(255,255,255,0.14);
+  background-color: #111111;
 }
 
 .editor-inspector input[type="range"] {
@@ -213,8 +213,8 @@ body {
 .editor-inspector input[type="range"]::-webkit-slider-thumb {
   width: 20px;
   height: 20px;
-  background: #8b5cf6;
-  box-shadow: 0 0 0 5px rgba(139,92,246,0.22);
+  background: #ffffff;
+  box-shadow: 0 0 0 5px rgba(255,255,255,0.14);
 }
 
 .editor-inspector input[type="number"] {

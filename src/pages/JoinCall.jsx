@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Room, RoomEvent, Track } from 'livekit-client';
 import { Camera, Mic, PhoneOff, Play, Users, Video } from 'lucide-react';
 
@@ -25,6 +25,12 @@ export default function JoinCall() {
   const [micOn, setMicOn] = useState(false);
   const [participants, setParticipants] = useState([]);
 
+  useEffect(() => {
+    if (localCameraRef.current) {
+      localCameraRef.current.srcObject = cameraOn ? localCameraStreamRef.current : null;
+    }
+  }, [cameraOn]);
+
   const joinRoom = async () => {
     try {
       setStatus('Getting access token...');
@@ -41,12 +47,16 @@ export default function JoinCall() {
       const room = new Room({ adaptiveStream: true, dynacast: true });
       roomRef.current = room;
 
-      room.on(RoomEvent.TrackSubscribed, (track) => {
-        attachTrack(track);
+      room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+        attachTrack(track, participant);
       });
 
       room.on(RoomEvent.TrackUnsubscribed, (track) => {
-        track.detach().forEach((element) => element.remove());
+        track.detach().forEach((element) => {
+          const tile = element.closest?.('[data-face-tile="true"]');
+          if (tile) tile.remove();
+          else element.remove();
+        });
         if (activeVideoSidRef.current === track.sid) activeVideoSidRef.current = null;
         if (activeCameraSidRef.current === track.sid) activeCameraSidRef.current = null;
       });
@@ -165,9 +175,10 @@ export default function JoinCall() {
     });
   };
 
-  const attachTrack = (track) => {
+  const attachTrack = (track, participant) => {
     if (!mediaRef.current) return;
-    const isCamera = track.kind === 'video' && track.name === 'presenter-camera';
+    const isScreen = track.kind === 'video' && track.name === 'screenflow-enhanced-output';
+    const isCamera = track.kind === 'video' && !isScreen;
     const targetRef = isCamera ? cameraRef : mediaRef;
     if (!targetRef.current) return;
 
@@ -181,7 +192,7 @@ export default function JoinCall() {
     element.style.borderRadius = '8px';
     element.style.background = '#090B12';
     element.style.marginTop = '0';
-    element.style.objectFit = 'contain';
+    element.style.objectFit = isCamera ? 'cover' : 'contain';
     if (track.kind === 'audio') element.style.display = 'none';
 
     const alreadyAttached = Array.from(targetRef.current.children).some((child) => child.dataset?.trackSid === track.sid);
@@ -192,15 +203,44 @@ export default function JoinCall() {
 
     if (track.kind === 'video') {
       if (isCamera) activeCameraSidRef.current = track.sid;
-      else activeVideoSidRef.current = track.sid;
-      Array.from(targetRef.current.querySelectorAll('video')).forEach((video) => {
-        video.remove();
-      });
+      else {
+        activeVideoSidRef.current = track.sid;
+        Array.from(targetRef.current.querySelectorAll('video')).forEach((video) => {
+          video.remove();
+        });
+      }
       element.muted = false;
       element.play?.().catch(() => {});
     }
 
-    targetRef.current.style.display = track.kind === 'video' ? 'block' : targetRef.current.style.display;
+    if (isCamera) {
+      const tile = document.createElement('div');
+      tile.dataset.trackSid = track.sid;
+      tile.dataset.faceTile = 'true';
+      tile.style.aspectRatio = '1 / 1';
+      tile.style.background = '#050505';
+      tile.style.border = '1px solid #2A2A2A';
+      tile.style.borderRadius = '8px';
+      tile.style.overflow = 'hidden';
+      tile.style.position = 'relative';
+      tile.appendChild(element);
+
+      const label = document.createElement('span');
+      label.textContent = participant?.name || participant?.identity || 'Guest';
+      label.style.background = 'rgba(0,0,0,0.7)';
+      label.style.borderRadius = '999px';
+      label.style.bottom = '8px';
+      label.style.color = '#FFFFFF';
+      label.style.fontSize = '12px';
+      label.style.fontWeight = '900';
+      label.style.left = '8px';
+      label.style.padding = '5px 8px';
+      label.style.position = 'absolute';
+      tile.appendChild(label);
+      targetRef.current.appendChild(tile);
+      return;
+    }
+
     targetRef.current.appendChild(element);
   };
 
@@ -208,9 +248,13 @@ export default function JoinCall() {
     <div style={pageStyle}>
       <style>{responsiveStyles}</style>
       <main style={panelStyle}>
-        <div style={brandStyle}>ScreenFlow AI</div>
-        <h1 style={titleStyle}>Join Live Call</h1>
-        <p style={mutedStyle}>Room <strong>{roomCode}</strong></p>
+        <div style={topBarStyle}>
+          <div>
+            <div style={brandStyle}>ScreenFlow AI</div>
+            <h1 style={titleStyle}>Conference Call</h1>
+          </div>
+          <span style={roomPillStyle}>{roomCode}</span>
+        </div>
 
         <label style={labelStyle}>
           Your name
@@ -242,7 +286,7 @@ export default function JoinCall() {
         <section className="viewer-section" style={viewerStyle}>
           <div style={viewerHeaderStyle}>
             <Video size={18} />
-            Presenter Feed
+            Host Screen
           </div>
           <div className="media-box" ref={mediaRef} style={mediaBoxStyle}>
             {!connected && <span data-placeholder="true">Join to view the live screen or whiteboard.</span>}
@@ -252,12 +296,16 @@ export default function JoinCall() {
         <section style={viewerStyle}>
           <div style={viewerHeaderStyle}>
             <Camera size={18} />
-            Camera
+            People
           </div>
-          {connected && (
-            <video ref={localCameraRef} autoPlay muted playsInline style={localCameraStyle} />
-          )}
           <div className="camera-box" ref={cameraRef} style={cameraBoxStyle}>
+            {connected && (
+              <div style={localFaceTileStyle}>
+                <video ref={localCameraRef} autoPlay muted playsInline style={{ ...localCameraStyle, display: cameraOn ? 'block' : 'none' }} />
+                {!cameraOn && <div style={faceOffStyle}>Your camera is off</div>}
+                <span style={faceLabelStyle}>You</span>
+              </div>
+            )}
             <span data-placeholder="true">Camera appears here when the presenter turns it on.</span>
           </div>
         </section>
@@ -273,7 +321,7 @@ export default function JoinCall() {
 
 const pageStyle = {
   alignItems: 'flex-start',
-  background: '#0B0F19',
+  background: '#000000',
   color: '#F8FAFC',
   display: 'flex',
   fontFamily: 'Inter, system-ui, sans-serif',
@@ -284,38 +332,57 @@ const pageStyle = {
 };
 
 const panelStyle = {
-  background: '#FFFFFF',
+  background: '#0D0D0D',
+  border: '1px solid #242424',
   borderRadius: '8px',
-  color: '#172033',
-  maxWidth: '720px',
-  padding: '22px',
+  color: '#FFFFFF',
+  maxWidth: '760px',
+  padding: '18px',
   width: '100%',
   minHeight: 'auto'
 };
 
+const topBarStyle = {
+  alignItems: 'center',
+  display: 'flex',
+  justifyContent: 'space-between',
+  gap: '14px',
+  marginBottom: '14px'
+};
+
 const brandStyle = {
-  color: '#7C3AED',
+  color: '#A3A3A3',
   fontSize: '13px',
   fontWeight: 900,
-  marginBottom: '8px'
+  marginBottom: '4px'
 };
 
 const titleStyle = {
   fontSize: 'clamp(24px, 7vw, 30px)',
   fontWeight: 900,
   letterSpacing: 0,
-  marginBottom: '6px'
+  marginBottom: 0
 };
 
 const mutedStyle = {
-  color: '#647087',
+  color: '#A3A3A3',
   fontSize: '14px',
   lineHeight: 1.45,
   margin: '0 0 16px'
 };
 
+const roomPillStyle = {
+  background: '#FFFFFF',
+  borderRadius: '999px',
+  color: '#000000',
+  flexShrink: 0,
+  fontSize: '12px',
+  fontWeight: 900,
+  padding: '7px 10px'
+};
+
 const labelStyle = {
-  color: '#26344D',
+  color: '#D4D4D4',
   display: 'flex',
   flexDirection: 'column',
   fontSize: '13px',
@@ -325,9 +392,10 @@ const labelStyle = {
 };
 
 const inputStyle = {
-  border: '1px solid #DCE3EF',
+  background: '#000000',
+  border: '1px solid #333333',
   borderRadius: '8px',
-  color: '#172033',
+  color: '#FFFFFF',
   fontSize: '16px',
   fontWeight: 800,
   minHeight: '44px',
@@ -337,10 +405,10 @@ const inputStyle = {
 
 const primaryButtonStyle = {
   alignItems: 'center',
-  background: 'linear-gradient(135deg, #7C3AED 0%, #FF4D7E 100%)',
+  background: '#FFFFFF',
   border: 'none',
   borderRadius: '8px',
-  color: '#FFFFFF',
+  color: '#000000',
   cursor: 'pointer',
   display: 'inline-flex',
   fontWeight: 900,
@@ -352,13 +420,13 @@ const primaryButtonStyle = {
 
 const secondaryButtonStyle = {
   ...primaryButtonStyle,
-  background: '#F8FAFF',
-  border: '1px solid #DCE3EF',
-  color: '#26344D'
+  background: '#000000',
+  border: '1px solid #333333',
+  color: '#FFFFFF'
 };
 
 const statusStyle = {
-  color: '#4E5A70',
+  color: '#D4D4D4',
   fontSize: '13px',
   fontWeight: 700,
   lineHeight: 1.45,
@@ -366,7 +434,8 @@ const statusStyle = {
 };
 
 const viewerStyle = {
-  border: '1px solid #E2E8F0',
+  background: '#050505',
+  border: '1px solid #2A2A2A',
   borderRadius: '8px',
   overflow: 'hidden',
   marginTop: '12px'
@@ -374,7 +443,7 @@ const viewerStyle = {
 
 const viewerHeaderStyle = {
   alignItems: 'center',
-  borderBottom: '1px solid #E2E8F0',
+  borderBottom: '1px solid #2A2A2A',
   display: 'flex',
   fontSize: '14px',
   fontWeight: 900,
@@ -385,8 +454,8 @@ const viewerHeaderStyle = {
 const mediaBoxStyle = {
   alignItems: 'center',
   aspectRatio: '16 / 9',
-  background: '#090B12',
-  color: '#CBD5E1',
+  background: '#000000',
+  color: '#D4D4D4',
   display: 'flex',
   flexDirection: 'column',
   justifyContent: 'center',
@@ -397,27 +466,60 @@ const mediaBoxStyle = {
 
 const cameraBoxStyle = {
   alignItems: 'center',
-  aspectRatio: '16 / 9',
-  background: '#090B12',
-  color: '#CBD5E1',
-  display: 'flex',
-  flexDirection: 'column',
-  justifyContent: 'center',
+  background: '#000000',
+  color: '#D4D4D4',
+  display: 'grid',
+  gap: '10px',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
+  justifyContent: 'stretch',
   minHeight: '150px',
   overflow: 'hidden',
   padding: '10px'
 };
 
 const localCameraStyle = {
-  aspectRatio: '16 / 9',
-  background: '#090B12',
+  background: '#000000',
   display: 'block',
   objectFit: 'cover',
+  height: '100%',
   width: '100%'
 };
 
+const localFaceTileStyle = {
+  aspectRatio: '1 / 1',
+  background: '#050505',
+  border: '1px solid #2A2A2A',
+  borderRadius: '8px',
+  overflow: 'hidden',
+  position: 'relative'
+};
+
+const faceOffStyle = {
+  alignItems: 'center',
+  color: '#D4D4D4',
+  display: 'flex',
+  fontSize: '13px',
+  fontWeight: 900,
+  height: '100%',
+  justifyContent: 'center',
+  padding: '12px',
+  textAlign: 'center'
+};
+
+const faceLabelStyle = {
+  background: 'rgba(0,0,0,0.7)',
+  borderRadius: '999px',
+  bottom: '8px',
+  color: '#FFFFFF',
+  fontSize: '12px',
+  fontWeight: 900,
+  left: '8px',
+  padding: '5px 8px',
+  position: 'absolute'
+};
+
 const participantsStyle = {
-  borderTop: '1px solid #E2E8F0',
+  borderTop: '1px solid #2A2A2A',
   marginTop: '16px',
   paddingTop: '16px'
 };

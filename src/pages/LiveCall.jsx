@@ -59,6 +59,12 @@ export default function LiveCall() {
   const liveKitVideoTrackRef = useRef(null);
   const liveKitAudioTrackRef = useRef(null);
   const liveKitCameraTrackRef = useRef(null);
+  const callCaptionRecorderRef = useRef(null);
+  const callCaptionChunksRef = useRef([]);
+  const callCaptionStartedAtRef = useRef(0);
+  const meetingRecorderRef = useRef(null);
+  const meetingChunksRef = useRef([]);
+  const meetingStartedAtRef = useRef(0);
   const remoteMediaRef = useRef(null);
   const pathsRef = useRef([]);
   const draftRef = useRef(null);
@@ -91,6 +97,11 @@ export default function LiveCall() {
   const [liveKitStatus, setLiveKitStatus] = useState('Not connected');
   const [remoteParticipants, setRemoteParticipants] = useState([]);
   const [isLiveKitConnected, setIsLiveKitConnected] = useState(false);
+  const [captionRecording, setCaptionRecording] = useState(false);
+  const [captionGenerating, setCaptionGenerating] = useState(false);
+  const [callCaptions, setCallCaptions] = useState([]);
+  const [meetingRecording, setMeetingRecording] = useState(false);
+  const [meetingSaving, setMeetingSaving] = useState(false);
   const isBrowserPresenter = !window.navigator?.userAgent?.toLowerCase?.().includes('electron') && !window.electron?.getAppVersion;
 
   const [roomCode, setRoomCode] = useState(() => `SF-${Math.random().toString(36).slice(2, 7).toUpperCase()}`);
@@ -190,6 +201,9 @@ export default function LiveCall() {
 
   const toggleMic = async () => {
     if (micOn) {
+      if (captionRecording) {
+        await stopCallCaptionRecording();
+      }
       if (liveKitAudioTrackRef.current && liveKitRoomRef.current) {
         await liveKitRoomRef.current.localParticipant.unpublishTrack(liveKitAudioTrackRef.current);
         liveKitAudioTrackRef.current = null;
@@ -242,6 +256,12 @@ export default function LiveCall() {
   };
 
   const stopRoom = () => {
+    if (captionRecording) {
+      stopCallCaptionRecording();
+    }
+    if (meetingRecording) {
+      stopMeetingRecording();
+    }
     if (animationRef.current) cancelAnimationFrame(animationRef.current);
     animationRef.current = null;
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -260,6 +280,172 @@ export default function LiveCall() {
     setSourceName(shareMode === 'whiteboard' ? 'Whiteboard' : 'No screen selected');
     setStatus('Live room ended.');
   };
+
+  const getCaptionMimeType = () => {
+    const types = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'];
+    return types.find((type) => window.MediaRecorder?.isTypeSupported?.(type)) || '';
+  };
+
+  const getMeetingMimeType = () => {
+    const types = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
+    return types.find((type) => window.MediaRecorder?.isTypeSupported?.(type)) || '';
+  };
+
+  const startMeetingRecording = async () => {
+    try {
+      const outputTracks = outputStreamRef.current?.getVideoTracks?.() || [];
+      if (!outputTracks.length) {
+        setStatus('Start the live room before recording the meeting.');
+        return;
+      }
+
+      const tracks = [...outputTracks];
+      const audioTrack = audioStreamRef.current?.getAudioTracks?.()[0];
+      if (audioTrack) tracks.push(audioTrack);
+
+      meetingChunksRef.current = [];
+      const mimeType = getMeetingMimeType();
+      const recorder = new MediaRecorder(new MediaStream(tracks), mimeType ? { mimeType } : undefined);
+      meetingRecorderRef.current = recorder;
+      meetingStartedAtRef.current = Date.now();
+      recorder.ondataavailable = (event) => {
+        if (event.data?.size) meetingChunksRef.current.push(event.data);
+      };
+      recorder.start(1000);
+      setMeetingRecording(true);
+      setNotes((current) => ['Host recording started. ScreenFlow is saving the presenter feed and host mic.', ...current]);
+    } catch (error) {
+      setStatus(error?.message || 'Could not start meeting recording.');
+    }
+  };
+
+  const stopMeetingRecording = async () => (
+    new Promise((resolve) => {
+      const recorder = meetingRecorderRef.current;
+      if (!recorder || recorder.state === 'inactive') {
+        setMeetingRecording(false);
+        resolve();
+        return;
+      }
+
+      recorder.onstop = async () => {
+        setMeetingRecording(false);
+        setMeetingSaving(true);
+        try {
+          const blob = new Blob(meetingChunksRef.current, { type: recorder.mimeType || 'video/webm' });
+          if (!blob.size) {
+            setNotes((current) => ['No meeting video was captured.', ...current]);
+            return;
+          }
+
+          const duration = (Date.now() - meetingStartedAtRef.current) / 1000;
+          const saved = await window.electron?.saveRecordedFile?.(await blob.arrayBuffer());
+          if (!saved?.success) {
+            setNotes((current) => [`Meeting recording failed: ${saved?.error || 'Unable to save file.'}`, ...current]);
+            return;
+          }
+
+          const project = await window.electron?.createProject?.(`Conference Recording - ${new Date().toLocaleTimeString()}`);
+          if (project?.id) {
+            await window.electron?.updateProject?.(project.id, {
+              video_path: saved.filePath,
+              raw_video_path: saved.rawFilePath || saved.filePath,
+              audio_path: saved.filePath,
+              duration,
+              resolution: '1080p',
+              fps: 30,
+              captions: callCaptions,
+              chapters: []
+            });
+          }
+
+          setNotes((current) => [
+            project?.id
+              ? 'Meeting recording saved as an editable project.'
+              : `Meeting recording saved: ${saved.filePath}`,
+            ...current
+          ]);
+        } catch (error) {
+          setNotes((current) => [`Meeting recording failed: ${error.message}`, ...current]);
+        } finally {
+          setMeetingSaving(false);
+          meetingRecorderRef.current = null;
+          meetingChunksRef.current = [];
+          resolve();
+        }
+      };
+      recorder.stop();
+    })
+  );
+
+  const startCallCaptionRecording = async () => {
+    try {
+      let audioStream = audioStreamRef.current;
+      if (!audioStream?.getAudioTracks?.().length) {
+        audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioStreamRef.current = audioStream;
+        setMicOn(true);
+        await publishMicStream(audioStream);
+      }
+
+      callCaptionChunksRef.current = [];
+      const mimeType = getCaptionMimeType();
+      const recorder = new MediaRecorder(audioStream, mimeType ? { mimeType } : undefined);
+      callCaptionRecorderRef.current = recorder;
+      callCaptionStartedAtRef.current = Date.now();
+      recorder.ondataavailable = (event) => {
+        if (event.data?.size) callCaptionChunksRef.current.push(event.data);
+      };
+      recorder.start(1000);
+      setCaptionRecording(true);
+      setNotes((current) => ['Meeting captions are listening to your microphone.', ...current]);
+    } catch (error) {
+      setStatus(error?.message || 'Could not start meeting captions.');
+    }
+  };
+
+  const stopCallCaptionRecording = async () => (
+    new Promise((resolve) => {
+      const recorder = callCaptionRecorderRef.current;
+      if (!recorder || recorder.state === 'inactive') {
+        setCaptionRecording(false);
+        resolve();
+        return;
+      }
+
+      recorder.onstop = async () => {
+        setCaptionRecording(false);
+        setCaptionGenerating(true);
+        try {
+          const mimeType = recorder.mimeType || 'audio/webm';
+          const blob = new Blob(callCaptionChunksRef.current, { type: mimeType });
+          if (!blob.size) {
+            setNotes((current) => ['No call audio was captured for captions.', ...current]);
+            return;
+          }
+          const duration = (Date.now() - callCaptionStartedAtRef.current) / 1000;
+          const result = await window.electron?.generateCallCaptions?.(await blob.arrayBuffer(), mimeType, duration);
+          if (!result?.success) {
+            setNotes((current) => [`Caption transcription failed: ${result?.error || 'Unknown error'}`, ...current]);
+            return;
+          }
+          setCallCaptions(result.captions || []);
+          setNotes((current) => [
+            `Generated ${result.captions?.length || 0} real captions from the call audio.`,
+            ...current
+          ]);
+        } catch (error) {
+          setNotes((current) => [`Caption transcription failed: ${error.message}`, ...current]);
+        } finally {
+          setCaptionGenerating(false);
+          callCaptionRecorderRef.current = null;
+          callCaptionChunksRef.current = [];
+          resolve();
+        }
+      };
+      recorder.stop();
+    })
+  );
 
   const connectLiveKit = async () => {
     if (liveKitRoomRef.current) return liveKitRoomRef.current;
@@ -933,19 +1119,21 @@ export default function LiveCall() {
 
         <section style={conferenceStageStyle}>
           <div style={conferenceHeaderStyle}>
-            <h2 style={sideTitleStyle}><Users size={17} /> Call Stage</h2>
+            <h2 style={sideTitleStyle}><Users size={17} /> People</h2>
             <span style={smallTextStyle}>{remoteParticipants.length + 1} in call</span>
           </div>
-          <div style={localPresenterTileStyle}>
-            {cameraOn ? (
-              <video ref={cameraPreviewRef} autoPlay muted playsInline style={stageVideoStyle} />
-            ) : (
-              <div style={emptyTileStyle}>Turn on Camera to show your face.</div>
-            )}
-            <span style={tileLabelStyle}>You - Presenter</span>
-          </div>
-          <div ref={remoteMediaRef} style={remoteGridStyle}>
-            {!remoteParticipants.length && <div style={emptyTileStyle}>Joined participants will appear here with camera and sound.</div>}
+          <div style={peopleGridStyle}>
+            <div style={localPresenterTileStyle}>
+              {cameraOn ? (
+                <video ref={cameraPreviewRef} autoPlay muted playsInline style={stageVideoStyle} />
+              ) : (
+                <div style={emptyTileStyle}>Camera is off</div>
+              )}
+              <span style={tileLabelStyle}>You - Host</span>
+            </div>
+            <div ref={remoteMediaRef} style={remoteGridStyle}>
+              {!remoteParticipants.length && <div style={emptyTileStyle}>People will appear here when they join with camera or audio.</div>}
+            </div>
           </div>
         </section>
 
@@ -1058,6 +1246,20 @@ export default function LiveCall() {
               <button onClick={toggleCamera} style={secondaryButtonStyle(cameraOn)}><Camera size={16} /> {cameraOn ? 'Camera On' : 'Camera'}</button>
             </div>
             <button onClick={askAi} style={{ ...secondaryButtonStyle(false), width: '100%', marginTop: '10px' }}><Bot size={16} /> Ask AI</button>
+            <button
+              onClick={captionRecording ? stopCallCaptionRecording : startCallCaptionRecording}
+              disabled={captionGenerating}
+              style={{ ...secondaryButtonStyle(captionRecording), width: '100%', marginTop: '10px' }}
+            >
+              <Type size={16} /> {captionGenerating ? 'Generating Captions...' : captionRecording ? 'Stop & Transcribe' : 'Start Meeting Captions'}
+            </button>
+            <button
+              onClick={meetingRecording ? stopMeetingRecording : startMeetingRecording}
+              disabled={meetingSaving}
+              style={{ ...secondaryButtonStyle(meetingRecording), width: '100%', marginTop: '10px' }}
+            >
+              {meetingRecording ? <Square size={16} /> : <Play size={16} />} {meetingSaving ? 'Saving Meeting...' : meetingRecording ? 'Stop Recording' : 'Record Meeting'}
+            </button>
           </section>
 
           <section style={callCardStyle}>
@@ -1068,6 +1270,15 @@ export default function LiveCall() {
 
           <section style={callCardStyle}>
             <h2 style={sideTitleStyle}><Sparkles size={17} /> AI Notes</h2>
+            {callCaptions.length > 0 && (
+              <div style={{ border: '1px solid #E2E8F0', borderRadius: '8px', marginBottom: '12px', maxHeight: '180px', overflowY: 'auto', padding: '10px' }}>
+                {callCaptions.map((caption, index) => (
+                  <p key={`${caption.start_time}-${index}`} style={{ ...noteStyle, marginBottom: '8px' }}>
+                    <strong>{Number(caption.start_time || 0).toFixed(1)}s</strong> {caption.text}
+                  </p>
+                ))}
+              </div>
+            )}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '9px' }}>
               {notes.slice(0, 5).map((note) => (
                 <p key={note} style={noteStyle}>{note}</p>
@@ -1261,22 +1472,33 @@ const conferenceStageStyle = {
   border: '1px solid #E2E8F0',
   borderRadius: '8px',
   boxShadow: '0 8px 22px rgba(15, 23, 42, 0.05)',
-  display: 'grid',
+  display: 'flex',
+  flexDirection: 'column',
   gap: '12px',
-  gridTemplateColumns: 'minmax(220px, 0.8fr) minmax(0, 1.2fr)',
   padding: '16px'
 };
 
 const conferenceHeaderStyle = {
   alignItems: 'center',
   display: 'flex',
-  gridColumn: '1 / -1',
   justifyContent: 'space-between'
+};
+
+const peopleGridStyle = {
+  background: '#090B12',
+  border: '1px solid #26344D',
+  borderRadius: '8px',
+  display: 'grid',
+  gap: '10px',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+  minHeight: '190px',
+  padding: '10px'
 };
 
 const localPresenterTileStyle = {
   aspectRatio: '16 / 9',
   background: '#090B12',
+  border: '1px solid #26344D',
   borderRadius: '8px',
   minHeight: '170px',
   overflow: 'hidden',
@@ -1284,10 +1506,7 @@ const localPresenterTileStyle = {
 };
 
 const remoteGridStyle = {
-  display: 'grid',
-  gap: '10px',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-  minHeight: '170px'
+  display: 'contents'
 };
 
 const stageVideoStyle = {

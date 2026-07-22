@@ -40,7 +40,8 @@ contextBridge.exposeInMainWorld('electron', {
   },
   
   // AI Tools
-  generateAICaptions: (projectId, apiKey) => ipcRenderer.invoke('ai:generate-captions', projectId, apiKey),
+  generateAICaptions: (projectId, apiKey, provider) => ipcRenderer.invoke('ai:generate-captions', projectId, apiKey, provider),
+  generateCallCaptions: (arrayBuffer, mimeType, duration, apiKey) => ipcRenderer.invoke('ai:generate-call-captions', arrayBuffer, mimeType, duration, apiKey),
   detectSilence: (projectId, sensitivity) => ipcRenderer.invoke('ai:detect-silence', projectId, sensitivity),
   
   // System utils
@@ -51,6 +52,8 @@ contextBridge.exposeInMainWorld('electron', {
   // Licensing
   checkLicense: () => ipcRenderer.invoke('license:check'),
   activateLicense: (key) => ipcRenderer.invoke('license:activate', key),
+  getAIKeys: () => ipcRenderer.invoke('ai-keys:get'),
+  saveAIKeys: (keys) => ipcRenderer.invoke('ai-keys:save', keys),
   
   // Activity Logging
   getActivityLogs: () => ipcRenderer.invoke('logs:get'),

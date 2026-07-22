@@ -99,7 +99,10 @@ export default function AITools({ navigateTo }) {
       let message = '';
 
       if (tool.id === 'captions') {
-        const result = await window.electron.generateAICaptions(project.id, '');
+        const storedKeys = await window.electron?.getAIKeys?.();
+        const geminiKey = storedKeys?.gemini || localStorage.getItem('gemini_api_key') || '';
+        const openAIKey = storedKeys?.openai || localStorage.getItem('openai_api_key') || '';
+        const result = await window.electron.generateAICaptions(project.id, geminiKey || openAIKey, geminiKey ? 'gemini' : 'openai');
         if (!result?.success) throw new Error(result?.error || 'Caption generation failed.');
         message = `${result.captions?.length || 0} captions generated and saved to the editor.`;
       } else if (tool.id === 'silence') {

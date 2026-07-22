@@ -3,9 +3,7 @@ import {
   Camera,
   Check,
   Clapperboard,
-  Crown,
   Focus,
-  Gauge,
   Laptop,
   Mic,
   Monitor,
@@ -118,8 +116,6 @@ export default function Recording({ onOpenProject, license }) {
   const latestZoomLabelAtRef = useRef(0);
 
   const activePreset = cinematicPresets.find((preset) => preset.id === presetId) || cinematicPresets[0];
-  const isPro = license?.plan === 'pro';
-
   const withTimeout = (promise, ms, label) => (
     Promise.race([
       promise,
@@ -196,8 +192,10 @@ export default function Recording({ onOpenProject, license }) {
   }, []);
 
   const loadDevices = async () => {
+    let foundSources = 0;
     if (window.electron?.getSources) {
       const srcList = await window.electron.getSources();
+      foundSources = srcList.length;
       setSources(srcList);
       if (srcList.length > 0) setSelectedSource(srcList[0].id);
     }
@@ -210,8 +208,10 @@ export default function Recording({ onOpenProject, license }) {
       setCameras(cams);
       if (mics.length > 0) setSelectedMic(mics[0].deviceId);
       if (cams.length > 0) setSelectedCamera(cams[0].deviceId);
+      setStatusMessage(`Devices refreshed: ${foundSources || sources.length || 0} capture sources, ${mics.length} microphones, ${cams.length} cameras.`);
     } catch (error) {
       console.warn('Failed to list media devices:', error);
+      setStatusMessage('Device refresh failed. You can still use the system screen picker.');
     }
   };
 
@@ -1007,28 +1007,45 @@ export default function Recording({ onOpenProject, license }) {
     background: '#FFFFFF',
     border: '1px solid #E5EAF4',
     borderRadius: '8px',
-    boxShadow: '0 10px 28px rgba(15, 23, 42, 0.06)'
+    boxShadow: '0 10px 28px rgba(15, 23, 42, 0.05)'
   };
+
+  const selectedSourceName = sources.find((source) => source.id === selectedSource)?.name || 'System picker';
+  const selectedMicName = selectedMic === 'default'
+    ? 'Default microphone'
+    : microphones.find((mic) => mic.deviceId === selectedMic)?.label || 'Selected microphone';
+  const selectedCameraName = selectedCamera === 'default'
+    ? 'Default camera'
+    : cameras.find((camera) => camera.deviceId === selectedCamera)?.label || 'Selected camera';
+
+  const captureSummary = [
+    ['Source', recordingMode === 'Custom Area' ? 'Custom area after start' : selectedSourceName],
+    ['Quality', resolution],
+    ['Microphone', selectedMicName],
+    ['System audio', systemAudio ? 'On' : 'Off'],
+    ['Webcam', webcamEnabled ? selectedCameraName : 'Off'],
+    ['Cursor', showCursor ? 'Recorded with highlight' : 'Hidden']
+  ];
 
   return (
     <div style={{
-      background: '#F6F8FC',
+      background: '#F5F7FB',
       color: '#172033',
       display: 'flex',
       flexDirection: 'column',
       fontFamily: 'var(--font-sans)',
-      gap: '24px',
+      gap: '20px',
       margin: '-32px',
       minHeight: '100%',
       padding: '28px 32px'
     }}>
-      <header style={{ alignItems: 'center', display: 'flex', justifyContent: 'space-between', gap: '24px' }}>
+      <header style={{ alignItems: 'flex-start', display: 'flex', justifyContent: 'space-between', gap: '24px' }}>
         <div>
-          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '28px', fontWeight: 800 }}>
-            Cinematic Recorder
+          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '26px', fontWeight: 800, letterSpacing: 0 }}>
+            Recorder
           </h1>
           <p style={{ color: '#5A657B', fontSize: '14px', marginTop: '4px' }}>
-            Capture your screen with cursor data, audio, and zoom-ready edit settings.
+            Choose the source, audio, cursor, and optional camera before recording.
           </p>
         </div>
         <button
@@ -1047,22 +1064,22 @@ export default function Recording({ onOpenProject, license }) {
           }}
         >
           <RefreshCw size={16} />
-          Refresh Devices
+          Refresh
         </button>
       </header>
 
-      <section style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 360px', gap: '24px', alignItems: 'start' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+      <section style={{ display: 'grid', gridTemplateColumns: 'minmax(520px, 1fr) 340px', gap: '22px', alignItems: 'start' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           <div style={{ ...controlCard, padding: '22px' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', marginBottom: '16px' }}>
               <div>
-                <h2 style={{ fontSize: '16px', fontWeight: 800 }}>Capture Source</h2>
-                <p style={{ color: '#647087', fontSize: '13px', marginTop: '3px' }}>Pick how the recording starts. The system picker appears after Start.</p>
+                <h2 style={{ fontSize: '16px', fontWeight: 800 }}>Capture</h2>
+                <p style={{ color: '#647087', fontSize: '13px', marginTop: '3px' }}>Pick what to record. Custom area asks you to draw the crop after Start.</p>
               </div>
-              <Clapperboard size={22} color="#7C3AED" />
+              <Clapperboard size={21} color="#334155" />
             </div>
 
-            <div style={{ background: '#EEF2F8', borderRadius: '8px', display: 'grid', gap: '6px', gridTemplateColumns: 'repeat(3, 1fr)', padding: '6px' }}>
+            <div style={{ background: '#EEF2F8', borderRadius: '8px', display: 'grid', gap: '6px', gridTemplateColumns: 'repeat(3, 1fr)', padding: '5px' }}>
               {[
                 ['Fullscreen', Monitor],
                 ['Window', Laptop],
@@ -1083,7 +1100,7 @@ export default function Recording({ onOpenProject, license }) {
                     fontWeight: 800,
                     gap: '8px',
                     justifyContent: 'center',
-                    minHeight: '44px'
+                    minHeight: '42px'
                   }}
                 >
                   <Icon size={16} />
@@ -1093,7 +1110,7 @@ export default function Recording({ onOpenProject, license }) {
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginTop: '18px' }}>
-              <Field label="Detected Source">
+              <Field label="Source">
                 <select value={selectedSource || ''} onChange={(event) => setSelectedSource(event.target.value)} style={selectStyle}>
                   {sources.length > 0 ? sources.map((source) => (
                     <option key={source.id} value={source.id}>{source.name}</option>
@@ -1115,13 +1132,13 @@ export default function Recording({ onOpenProject, license }) {
           <div style={{ ...controlCard, padding: '22px' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', marginBottom: '16px' }}>
               <div>
-                <h2 style={{ fontSize: '16px', fontWeight: 800 }}>Cinematic Treatment</h2>
-                <p style={{ color: '#647087', fontSize: '13px', marginTop: '3px' }}>These settings are saved into the project for zooms, cursor styling, and export composition.</p>
+                <h2 style={{ fontSize: '16px', fontWeight: 800 }}>Motion preset</h2>
+                <p style={{ color: '#647087', fontSize: '13px', marginTop: '3px' }}>Saved with the project for cursor emphasis and the edit preset.</p>
               </div>
-              <Wand2 size={22} color="#FF4D7E" />
+              <Wand2 size={21} color="#334155" />
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '10px' }}>
               {cinematicPresets.map((preset) => (
                 <button
                   key={preset.id}
@@ -1132,8 +1149,8 @@ export default function Recording({ onOpenProject, license }) {
                     borderRadius: '8px',
                     color: presetId === preset.id ? '#FFFFFF' : '#172033',
                     cursor: 'pointer',
-                    minHeight: '118px',
-                    padding: '14px',
+                    minHeight: '104px',
+                    padding: '13px',
                     textAlign: 'left'
                   }}
                 >
@@ -1150,8 +1167,8 @@ export default function Recording({ onOpenProject, license }) {
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '18px', marginTop: '20px' }}>
-              <ToggleRow checked={showCursor} icon={MousePointer2} label="Record cursor path" onChange={setShowCursor} />
-              <ToggleRow checked={countdown} icon={Timer} label="Countdown before capture" onChange={setCountdown} />
+              <ToggleRow checked={showCursor} icon={MousePointer2} label="Cursor highlight" onChange={setShowCursor} />
+              <ToggleRow checked={countdown} icon={Timer} label="5 second countdown" onChange={setCountdown} />
             </div>
 
             {brandKit && (
@@ -1170,7 +1187,7 @@ export default function Recording({ onOpenProject, license }) {
 
             {showCursor && (
               <div style={{ borderTop: '1px solid #EDF1F7', marginTop: '18px', paddingTop: '18px' }}>
-                <span style={{ color: '#26344D', display: 'block', fontSize: '13px', fontWeight: 800, marginBottom: '10px' }}>Cursor highlight color</span>
+                <span style={{ color: '#26344D', display: 'block', fontSize: '13px', fontWeight: 800, marginBottom: '10px' }}>Cursor color</span>
                 <div style={{ display: 'flex', gap: '10px' }}>
                   {cursorColors.map((color) => (
                     <button
@@ -1194,6 +1211,10 @@ export default function Recording({ onOpenProject, license }) {
           </div>
 
           <div style={{ ...controlCard, padding: '22px' }}>
+            <div style={{ marginBottom: '16px' }}>
+              <h2 style={{ fontSize: '16px', fontWeight: 800 }}>Audio and camera</h2>
+              <p style={{ color: '#647087', fontSize: '13px', marginTop: '3px' }}>Choose what gets recorded into the edit.</p>
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
               <Field icon={Mic} label="Microphone">
                 <select value={selectedMic} onChange={(event) => setSelectedMic(event.target.value)} style={selectStyle}>
@@ -1222,70 +1243,62 @@ export default function Recording({ onOpenProject, license }) {
           </div>
         </div>
 
-        <aside style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <div style={{ ...controlCard, overflow: 'hidden' }}>
-            <div style={{
-              background: activePreset.settings.background_value,
-              color: '#FFFFFF',
-              minHeight: '190px',
-              padding: '22px',
-              position: 'relative'
-            }}>
-              <div style={{ alignItems: 'center', display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ background: 'rgba(255,255,255,0.16)', borderRadius: '999px', fontSize: '12px', fontWeight: 800, padding: '7px 10px' }}>
-                  {activePreset.name}
-                </span>
-                {isPro ? <Crown size={18} /> : <Gauge size={18} />}
+        <aside style={{ display: 'flex', flexDirection: 'column', gap: '16px', position: 'sticky', top: '0' }}>
+          <div style={{ ...controlCard, padding: '20px' }}>
+            <div style={{ alignItems: 'center', display: 'flex', justifyContent: 'space-between', gap: '14px' }}>
+              <div>
+                <span style={{ color: '#647087', fontSize: '12px', fontWeight: 800, textTransform: 'uppercase' }}>Status</span>
+                <h2 style={{ fontSize: '18px', fontWeight: 900, marginTop: '4px' }}>{isRecording ? 'Recording now' : 'Ready to record'}</h2>
               </div>
-              <div style={{
-                background: 'rgba(255,255,255,0.9)',
-                borderRadius: '8px',
-                bottom: '22px',
-                boxShadow: '0 18px 40px rgba(0,0,0,0.24)',
-                height: '74px',
-                left: '22px',
-                position: 'absolute',
-                right: '22px'
+              <span style={{
+                background: isRecording ? '#FEE2E2' : '#DCFCE7',
+                borderRadius: '999px',
+                color: isRecording ? '#991B1B' : '#166534',
+                fontSize: '12px',
+                fontWeight: 900,
+                padding: '7px 10px'
               }}>
-                <div style={{ background: '#E5EAF4', borderRadius: '6px', height: '10px', left: '14px', position: 'absolute', right: '72px', top: '16px' }} />
-                <div style={{ background: cursorColor, borderRadius: '999px', height: '18px', left: '58%', position: 'absolute', top: '38px', width: '18px' }} />
-              </div>
+                {isRecording ? 'Live' : 'Idle'}
+              </span>
             </div>
 
-            <div style={{ padding: '24px', textAlign: 'center' }}>
-              <span style={{ color: '#647087', fontSize: '12px', fontWeight: 800, textTransform: 'uppercase' }}>Capture Timer</span>
-              <div style={{ fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace', fontSize: '42px', fontWeight: 900, marginTop: '8px' }}>
+            <div style={{ fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace', fontSize: '38px', fontWeight: 900, marginTop: '18px' }}>
                 {formatTime(recordTime)}
-              </div>
-              <p style={{ color: '#647087', fontSize: '13px', lineHeight: 1.45, margin: '8px 0 18px' }}>{statusMessage}</p>
+            </div>
+            <p style={{ color: '#647087', fontSize: '13px', lineHeight: 1.45, margin: '8px 0 18px' }}>{statusMessage}</p>
 
-              {isRecording ? (
-                <button onClick={handleStop} style={recordButtonStyle('#EF4444')}>
-                  <Square size={17} fill="#FFFFFF" />
-                  Stop Recording
-                </button>
-              ) : (
-                <button onClick={handleStart} style={recordButtonStyle('#FF4D7E')}>
-                  <Play size={17} fill="#FFFFFF" />
-                  Start Cinematic Capture
-                </button>
-              )}
+            {isRecording ? (
+              <button onClick={handleStop} style={recordButtonStyle('#DC2626')}>
+                <Square size={17} fill="#FFFFFF" />
+                Stop recording
+              </button>
+            ) : (
+              <button onClick={handleStart} style={recordButtonStyle('#172033')}>
+                <Play size={17} fill="#FFFFFF" />
+                Start recording
+              </button>
+            )}
+          </div>
+
+          <div style={{ ...controlCard, padding: '18px' }}>
+            <h3 style={{ fontSize: '14px', fontWeight: 900, marginBottom: '12px' }}>Current setup</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {captureSummary.map(([label, value]) => (
+                <div key={label} style={{ alignItems: 'flex-start', display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+                  <span style={{ color: '#647087', fontSize: '12px', fontWeight: 800 }}>{label}</span>
+                  <span style={{ color: '#172033', fontSize: '12px', fontWeight: 800, lineHeight: 1.35, maxWidth: '190px', textAlign: 'right' }}>{value}</span>
+                </div>
+              ))}
             </div>
           </div>
 
           <div style={{ ...controlCard, padding: '18px' }}>
-            <h3 style={{ fontSize: '14px', fontWeight: 900, marginBottom: '12px' }}>What gets saved</h3>
-            {[
-              'Screen video as editable project media',
-              'Mouse movement timeline and click moments',
-              'Auto zoom and cursor styling preset',
-              'Audio and webcam choices for the edit'
-            ].map((item) => (
-              <div key={item} style={{ alignItems: 'center', display: 'flex', gap: '10px', marginTop: '10px' }}>
-                <Check size={15} color="#00A878" />
-                <span style={{ color: '#4E5A70', fontSize: '13px', lineHeight: 1.35 }}>{item}</span>
-              </div>
-            ))}
+            <h3 style={{ fontSize: '14px', fontWeight: 900 }}>{activePreset.name}</h3>
+            <p style={{ color: '#647087', fontSize: '13px', lineHeight: 1.45, marginTop: '6px' }}>{activePreset.description}</p>
+            <div style={{ alignItems: 'center', display: 'flex', gap: '8px', marginTop: '14px' }}>
+              <span style={{ background: cursorColor, border: '2px solid #FFFFFF', borderRadius: '999px', boxShadow: '0 4px 12px rgba(15,23,42,0.14)', height: '24px', width: '24px' }} />
+              <span style={{ color: '#647087', fontSize: '12px', fontWeight: 800 }}>{showCursor ? 'Cursor highlight enabled' : 'Cursor highlight disabled'}</span>
+            </div>
           </div>
         </aside>
       </section>
