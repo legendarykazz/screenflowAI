@@ -105,7 +105,7 @@ export default function LiveCall() {
   const isBrowserPresenter = !window.navigator?.userAgent?.toLowerCase?.().includes('electron') && !window.electron?.getAppVersion;
 
   const [roomCode, setRoomCode] = useState(() => `SF-${Math.random().toString(36).slice(2, 7).toUpperCase()}`);
-  const joinBaseUrl = import.meta.env.VITE_JOIN_BASE_URL || 'https://screenflow.ai';
+  const joinBaseUrl = import.meta.env.VITE_JOIN_BASE_URL || 'https://screenflow-ai.vercel.app';
   const inviteLink = useMemo(() => `${joinBaseUrl.replace(/\/$/, '')}/join/${roomCode}`, [joinBaseUrl, roomCode]);
 
   useEffect(() => {
