@@ -1139,8 +1139,13 @@ export default function LiveCall() {
         </section>
 
         <aside style={presenterMode ? presenterSidePanelStyle : sidePanelStyle}>
-          <section style={callCardStyle}>
-            <h2 style={sideTitleStyle}><Monitor size={17} /> Share Source</h2>
+          <section style={sourceControlCardStyle}>
+            <div style={cardHeaderRowStyle}>
+              <h2 style={sideTitleStyle}><Monitor size={17} /> Setup</h2>
+              <button onClick={loadSources} style={compactButtonStyle}>
+                <RotateCcw size={15} /> Refresh
+              </button>
+            </div>
             <div style={segmentedStyle}>
               <button onClick={() => {
                 shareModeRef.current = 'screen';
@@ -1173,98 +1178,85 @@ export default function LiveCall() {
             <button onClick={() => switchScreen(selectedSourceId)} style={{ ...secondaryButtonStyle(false), width: '100%', marginTop: '10px' }}>
               <ScreenShare size={16} /> {shareMode === 'whiteboard' ? (isLive ? 'Switch To Whiteboard' : 'Share Whiteboard') : (isLive ? 'Switch To Selected' : 'Share Selected')}
             </button>
-            {shareMode === 'screen' && <button onClick={loadSources} style={{ ...secondaryButtonStyle(false), width: '100%', marginTop: '8px' }}>
-              <RotateCcw size={16} /> Refresh Sources
-            </button>}
             <div style={segmentedStyle}>
               <button onClick={() => setOutputMode('enhanced')} style={segmentButtonStyle(outputMode === 'enhanced')}>Enhanced</button>
               <button onClick={() => setOutputMode('raw')} style={segmentButtonStyle(outputMode === 'raw')}>Raw</button>
             </div>
-            <p style={smallTextStyle}>
-              {outputMode === 'enhanced'
-                ? 'Viewers see zoom, circles, underlines, spotlight, and hidden areas.'
-                : 'Raw mode is planned for sending the unedited screen feed when you do not need presentation tools.'}
-            </p>
           </section>
 
-          <section style={callCardStyle}>
-            <h2 style={sideTitleStyle}><Users size={17} /> Join Call</h2>
-            <div style={inviteBoxStyle}>
-              <strong>{roomCode}</strong>
-              <span>{isLiveKitConnected ? 'Use this room code in another ScreenFlowAI app.' : inviteLink}</span>
+          <section style={controlCenterCardStyle}>
+            <div style={cardHeaderRowStyle}>
+              <h2 style={sideTitleStyle}><Users size={17} /> Call Control</h2>
+              <span style={connectionPillStyle(isLiveKitConnected)}>{isLiveKitConnected ? 'Online' : 'Offline'}</span>
             </div>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '7px', marginTop: '10px' }}>
-              <span style={{ color: '#26344D', fontSize: '12px', fontWeight: 900 }}>Room code</span>
-              <input
-                value={roomCode}
-                onChange={(event) => setRoomCode(event.target.value.trim().toUpperCase())}
-                disabled={isLiveKitConnected}
-                style={inputStyle}
-              />
-            </label>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '7px', marginTop: '10px' }}>
-              <span style={{ color: '#26344D', fontSize: '12px', fontWeight: 900 }}>Your name</span>
-              <input
-                value={participantName}
-                onChange={(event) => setParticipantName(event.target.value)}
-                style={inputStyle}
-              />
-            </label>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '10px' }}>
+            <div style={inviteCompactStyle}>
+              <div>
+                <strong>{roomCode}</strong>
+                <span>{inviteLink}</span>
+              </div>
+              <button onClick={copyInvite} style={compactButtonStyle}><Copy size={15} /> {copiedInvite ? 'Copied' : 'Copy'}</button>
+            </div>
+            <div style={formGridStyle}>
+              <label style={compactLabelStyle}>
+                Room
+                <input
+                  value={roomCode}
+                  onChange={(event) => setRoomCode(event.target.value.trim().toUpperCase())}
+                  disabled={isLiveKitConnected}
+                  style={inputStyle}
+                />
+              </label>
+              <label style={compactLabelStyle}>
+                Name
+                <input
+                  value={participantName}
+                  onChange={(event) => setParticipantName(event.target.value)}
+                  style={inputStyle}
+                />
+              </label>
+            </div>
+            <div style={callActionsStyle}>
               <button onClick={connectLiveKit} style={secondaryButtonStyle(isLiveKitConnected)}>
                 <Users size={16} /> {isLiveKitConnected ? 'Connected' : 'Go Online'}
               </button>
               <button onClick={disconnectLiveKit} style={secondaryButtonStyle(false)}>
                 <PhoneOff size={16} /> Leave
               </button>
-            </div>
-            <button onClick={copyInvite} style={{ ...secondaryButtonStyle(false), width: '100%', marginTop: '10px' }}>
-              <Copy size={16} /> {copiedInvite ? 'Invite Copied' : 'Copy Invite Link'}
-            </button>
-            <p style={smallTextStyle}>LiveKit: {liveKitStatus}</p>
-            {isBrowserPresenter && (
-              <p style={smallTextStyle}>Web presenter mode works best in Chrome/Edge desktop. If it disconnects, use the desktop app as presenter and the website as viewer.</p>
-            )}
-          </section>
-
-          <section style={callCardStyle}>
-            <h2 style={sideTitleStyle}><Users size={17} /> Participants</h2>
-            {[
-              { name: 'You - Presenter', kind: 'presenter' },
-              ...remoteParticipants.map((participant) => ({ name: participant.name, kind: 'remote' })),
-              { name: 'AI Notetaker', kind: 'ai' }
-            ].map((participant) => (
-              <div key={participant.name} style={participantStyle}>
-                <div style={{ ...avatarStyle, background: participant.kind === 'ai' ? '#172033' : participant.kind === 'presenter' ? '#7C3AED' : '#00A878' }}>
-                  {participant.kind === 'ai' ? <Bot size={16} /> : participant.name.slice(0, 1)}
-                </div>
-                <span>{participant.name}</span>
-                {participant.kind === 'ai' && <Sparkles size={14} color="#FFB800" />}
-              </div>
-            ))}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginTop: '14px' }}>
               <button onClick={toggleMic} style={secondaryButtonStyle(micOn)}><Mic size={16} /> {micOn ? 'Mute' : 'Mic'}</button>
               <button onClick={toggleCamera} style={secondaryButtonStyle(cameraOn)}><Camera size={16} /> {cameraOn ? 'Camera On' : 'Camera'}</button>
+              <button onClick={askAi} style={secondaryButtonStyle(false)}><Bot size={16} /> Ask AI</button>
             </div>
-            <button onClick={askAi} style={{ ...secondaryButtonStyle(false), width: '100%', marginTop: '10px' }}><Bot size={16} /> Ask AI</button>
+            <div style={callActionsStyle}>
             <button
               onClick={captionRecording ? stopCallCaptionRecording : startCallCaptionRecording}
               disabled={captionGenerating}
-              style={{ ...secondaryButtonStyle(captionRecording), width: '100%', marginTop: '10px' }}
+              style={secondaryButtonStyle(captionRecording)}
             >
               <Type size={16} /> {captionGenerating ? 'Generating Captions...' : captionRecording ? 'Stop & Transcribe' : 'Start Meeting Captions'}
             </button>
             <button
               onClick={meetingRecording ? stopMeetingRecording : startMeetingRecording}
               disabled={meetingSaving}
-              style={{ ...secondaryButtonStyle(meetingRecording), width: '100%', marginTop: '10px' }}
+              style={secondaryButtonStyle(meetingRecording)}
             >
               {meetingRecording ? <Square size={16} /> : <Play size={16} />} {meetingSaving ? 'Saving Meeting...' : meetingRecording ? 'Stop Recording' : 'Record Meeting'}
             </button>
-          </section>
-
-          <section style={callCardStyle}>
-            <h2 style={sideTitleStyle}><Sparkles size={17} /> AI Notes</h2>
+            </div>
+            <div style={participantsInlineStyle}>
+              {[
+                { name: 'You - Host', kind: 'presenter' },
+                ...remoteParticipants.map((participant) => ({ name: participant.name, kind: 'remote' })),
+                { name: 'AI Notetaker', kind: 'ai' }
+              ].map((participant) => (
+                <div key={participant.name} style={participantChipStyle}>
+                  <div style={{ ...avatarStyle, background: participant.kind === 'ai' ? '#172033' : participant.kind === 'presenter' ? '#111827' : '#2F855A' }}>
+                    {participant.kind === 'ai' ? <Bot size={14} /> : participant.name.slice(0, 1)}
+                  </div>
+                  <span>{participant.name}</span>
+                </div>
+              ))}
+            </div>
+            <p style={smallTextStyle}>LiveKit: {liveKitStatus}</p>
             {callCaptions.length > 0 && (
               <div style={{ border: '1px solid #E2E8F0', borderRadius: '8px', marginBottom: '12px', maxHeight: '180px', overflowY: 'auto', padding: '10px' }}>
                 {callCaptions.map((caption, index) => (
@@ -1275,10 +1267,13 @@ export default function LiveCall() {
               </div>
             )}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '9px' }}>
-              {notes.slice(0, 5).map((note) => (
+              {notes.slice(0, 3).map((note) => (
                 <p key={note} style={noteStyle}>{note}</p>
               ))}
             </div>
+            {isBrowserPresenter && (
+              <p style={smallTextStyle}>Web presenter mode works best in Chrome/Edge desktop.</p>
+            )}
           </section>
         </aside>
       </section>
@@ -1449,7 +1444,7 @@ const sidePanelStyle = {
   display: 'grid',
   gap: '14px',
   gridColumn: '1 / -1',
-  gridTemplateColumns: 'repeat(3, minmax(0, 1fr))'
+  gridTemplateColumns: 'minmax(280px, 0.9fr) minmax(420px, 1.4fr)'
 };
 
 const presenterSidePanelStyle = {
@@ -1464,6 +1459,24 @@ const callCardStyle = {
   borderRadius: '8px',
   boxShadow: '0 6px 18px rgba(15, 23, 42, 0.035)',
   padding: '14px'
+};
+
+const sourceControlCardStyle = {
+  ...callCardStyle,
+  alignSelf: 'start'
+};
+
+const controlCenterCardStyle = {
+  ...callCardStyle,
+  alignSelf: 'start'
+};
+
+const cardHeaderRowStyle = {
+  alignItems: 'center',
+  display: 'flex',
+  gap: '10px',
+  justifyContent: 'space-between',
+  marginBottom: '10px'
 };
 
 const conferenceStageStyle = {
@@ -1566,6 +1579,29 @@ const participantStyle = {
   minHeight: '42px'
 };
 
+const participantsInlineStyle = {
+  borderTop: '1px solid #E8EDF5',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: '8px',
+  marginTop: '12px',
+  paddingTop: '12px'
+};
+
+const participantChipStyle = {
+  alignItems: 'center',
+  background: '#F8FAFF',
+  border: '1px solid #E8EDF5',
+  borderRadius: '999px',
+  color: '#26344D',
+  display: 'inline-flex',
+  fontSize: '12px',
+  fontWeight: 900,
+  gap: '8px',
+  minHeight: '34px',
+  padding: '4px 10px 4px 4px'
+};
+
 const avatarStyle = {
   alignItems: 'center',
   borderRadius: '999px',
@@ -1602,6 +1638,16 @@ const smallTextStyle = {
   marginTop: '10px'
 };
 
+const connectionPillStyle = (active) => ({
+  background: active ? '#E9F8F0' : '#F2F4F7',
+  border: `1px solid ${active ? '#BFE8CF' : '#E2E8F0'}`,
+  borderRadius: '999px',
+  color: active ? '#05603A' : '#647087',
+  fontSize: '12px',
+  fontWeight: 900,
+  padding: '6px 10px'
+});
+
 const inviteBoxStyle = {
   background: '#F8FAFF',
   border: '1px solid #E8EDF5',
@@ -1610,6 +1656,40 @@ const inviteBoxStyle = {
   flexDirection: 'column',
   gap: '5px',
   padding: '12px'
+};
+
+const inviteCompactStyle = {
+  alignItems: 'center',
+  background: '#F8FAFF',
+  border: '1px solid #E8EDF5',
+  borderRadius: '8px',
+  display: 'grid',
+  gap: '12px',
+  gridTemplateColumns: 'minmax(0, 1fr) auto',
+  padding: '12px'
+};
+
+const formGridStyle = {
+  display: 'grid',
+  gap: '10px',
+  gridTemplateColumns: '1fr 1fr',
+  marginTop: '10px'
+};
+
+const compactLabelStyle = {
+  color: '#26344D',
+  display: 'flex',
+  flexDirection: 'column',
+  fontSize: '12px',
+  fontWeight: 900,
+  gap: '7px'
+};
+
+const callActionsStyle = {
+  display: 'grid',
+  gap: '8px',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+  marginTop: '10px'
 };
 
 const sourceBoxStyle = {
@@ -1627,7 +1707,7 @@ const sourceListStyle = {
   flexDirection: 'column',
   gap: '8px',
   marginTop: '10px',
-  maxHeight: '190px',
+  maxHeight: '168px',
   overflowY: 'auto',
   paddingRight: '2px'
 };
@@ -1724,6 +1804,22 @@ const primaryButtonStyle = {
   gap: '8px',
   minHeight: '42px',
   padding: '0 16px',
+  whiteSpace: 'nowrap'
+};
+
+const compactButtonStyle = {
+  alignItems: 'center',
+  background: '#FFFFFF',
+  border: '1px solid #DDE5F1',
+  borderRadius: '8px',
+  color: '#26344D',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  fontSize: '12px',
+  fontWeight: 900,
+  gap: '7px',
+  minHeight: '34px',
+  padding: '0 10px',
   whiteSpace: 'nowrap'
 };
 
