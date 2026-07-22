@@ -9,6 +9,7 @@ import {
   Expand,
   EyeOff,
   Highlighter,
+  MoreHorizontal,
   Monitor,
   Mic,
   Minus,
@@ -102,6 +103,7 @@ export default function LiveCall() {
   const [callCaptions, setCallCaptions] = useState([]);
   const [meetingRecording, setMeetingRecording] = useState(false);
   const [meetingSaving, setMeetingSaving] = useState(false);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const isBrowserPresenter = !window.navigator?.userAgent?.toLowerCase?.().includes('electron') && !window.electron?.getAppVersion;
 
   const [roomCode, setRoomCode] = useState(() => `SF-${Math.random().toString(36).slice(2, 7).toUpperCase()}`);
@@ -1179,23 +1181,23 @@ export default function LiveCall() {
               <span>Current source</span>
               <strong>{sourceName}</strong>
             </div>
-            {shareMode === 'screen' && <div style={sourceListStyle}>
-              {sources.map((source) => (
-                <button
-                  key={source.id}
-                  onClick={() => selectSource(source)}
-                  onDoubleClick={() => switchScreen(source.id)}
-                  style={sourceItemStyle(selectedSourceId === source.id)}
+            {shareMode === 'screen' && (
+              <label style={compactLabelStyle}>
+                Source
+                <select
+                  value={selectedSourceId}
+                  onChange={(event) => {
+                    const source = sources.find((item) => item.id === event.target.value);
+                    if (source) selectSource(source);
+                  }}
+                  style={selectStyle}
                 >
-                  {source.thumbnail ? (
-                    <img alt="" src={source.thumbnail} style={sourceThumbStyle} />
-                  ) : (
-                    <span style={sourceThumbFallbackStyle}><Monitor size={18} /></span>
-                  )}
-                  <span>{source.name}</span>
-                </button>
-              ))}
-            </div>}
+                  {sources.map((source) => (
+                    <option key={source.id} value={source.id}>{source.name}</option>
+                  ))}
+                </select>
+              </label>
+            )}
             <button onClick={() => switchScreen(selectedSourceId)} style={{ ...secondaryButtonStyle(false), width: '100%', marginTop: '10px' }}>
               <ScreenShare size={16} /> {shareMode === 'whiteboard' ? (isLive ? 'Switch To Whiteboard' : 'Share Whiteboard') : (isLive ? 'Switch To Selected' : 'Share Selected')}
             </button>
@@ -1237,7 +1239,7 @@ export default function LiveCall() {
                 />
               </label>
             </div>
-            <div style={callActionsStyle}>
+            <div style={callControlsBarStyle}>
               <button onClick={connectLiveKit} style={secondaryButtonStyle(isLiveKitConnected)}>
                 <Users size={16} /> {isLiveKitConnected ? 'Connected' : 'Go Online'}
               </button>
@@ -1246,23 +1248,30 @@ export default function LiveCall() {
               </button>
               <button onClick={toggleMic} style={secondaryButtonStyle(micOn)}><Mic size={16} /> {micOn ? 'Mute' : 'Mic'}</button>
               <button onClick={toggleCamera} style={secondaryButtonStyle(cameraOn)}><Camera size={16} /> {cameraOn ? 'Camera On' : 'Camera'}</button>
-              <button onClick={askAi} style={secondaryButtonStyle(false)}><Bot size={16} /> Ask AI</button>
-            </div>
-            <div style={callActionsStyle}>
-            <button
-              onClick={captionRecording ? stopCallCaptionRecording : startCallCaptionRecording}
-              disabled={captionGenerating}
-              style={secondaryButtonStyle(captionRecording)}
-            >
-              <Type size={16} /> {captionGenerating ? 'Generating Captions...' : captionRecording ? 'Stop & Transcribe' : 'Start Meeting Captions'}
-            </button>
-            <button
-              onClick={meetingRecording ? stopMeetingRecording : startMeetingRecording}
-              disabled={meetingSaving}
-              style={secondaryButtonStyle(meetingRecording)}
-            >
-              {meetingRecording ? <Square size={16} /> : <Play size={16} />} {meetingSaving ? 'Saving Meeting...' : meetingRecording ? 'Stop Recording' : 'Record Meeting'}
-            </button>
+              <div style={moreMenuWrapStyle}>
+                <button onClick={() => setMoreMenuOpen((open) => !open)} style={iconMenuButtonStyle}>
+                  <MoreHorizontal size={18} />
+                </button>
+                {moreMenuOpen && (
+                  <div style={moreMenuStyle}>
+                    <button onClick={askAi} style={menuItemStyle}><Bot size={15} /> Ask AI</button>
+                    <button
+                      onClick={captionRecording ? stopCallCaptionRecording : startCallCaptionRecording}
+                      disabled={captionGenerating}
+                      style={menuItemStyle}
+                    >
+                      <Type size={15} /> {captionGenerating ? 'Generating Captions' : captionRecording ? 'Stop & Transcribe' : 'Meeting Captions'}
+                    </button>
+                    <button
+                      onClick={meetingRecording ? stopMeetingRecording : startMeetingRecording}
+                      disabled={meetingSaving}
+                      style={menuItemStyle}
+                    >
+                      {meetingRecording ? <Square size={15} /> : <Play size={15} />} {meetingSaving ? 'Saving Meeting' : meetingRecording ? 'Stop Recording' : 'Record Meeting'}
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
             <div style={participantsInlineStyle}>
               {[
@@ -1760,11 +1769,12 @@ const compactLabelStyle = {
   gap: '7px'
 };
 
-const callActionsStyle = {
+const callControlsBarStyle = {
+  alignItems: 'center',
   display: 'grid',
   gap: '8px',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-  marginTop: '10px'
+  gridTemplateColumns: 'repeat(4, minmax(110px, 1fr)) 44px',
+  marginTop: '12px'
 };
 
 const sourceBoxStyle = {
@@ -1776,51 +1786,6 @@ const sourceBoxStyle = {
   gap: '5px',
   padding: '12px',
   marginTop: '10px'
-};
-
-const sourceListStyle = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '8px',
-  marginTop: '10px',
-  maxHeight: '168px',
-  overflowY: 'auto',
-  paddingRight: '2px'
-};
-
-const sourceItemStyle = (active) => ({
-  alignItems: 'center',
-  background: active ? '#172033' : '#FFFFFF',
-  border: `1px solid ${active ? '#172033' : '#DDE4EE'}`,
-  borderRadius: '8px',
-  color: active ? '#FFFFFF' : '#26344D',
-  cursor: 'pointer',
-  display: 'grid',
-  fontSize: '12px',
-  fontWeight: 800,
-  gap: '10px',
-  gridTemplateColumns: '48px minmax(0, 1fr)',
-  minHeight: '48px',
-  padding: '6px',
-  textAlign: 'left'
-});
-
-const sourceThumbStyle = {
-  aspectRatio: '16 / 10',
-  background: '#0B0F19',
-  borderRadius: '6px',
-  objectFit: 'cover',
-  width: '48px'
-};
-
-const sourceThumbFallbackStyle = {
-  alignItems: 'center',
-  aspectRatio: '16 / 10',
-  background: '#E8EDF5',
-  borderRadius: '6px',
-  display: 'flex',
-  justifyContent: 'center',
-  width: '48px'
 };
 
 const segmentedStyle = {
@@ -1874,6 +1839,14 @@ const inputStyle = {
   width: '100%'
 };
 
+const selectStyle = {
+  ...inputStyle,
+  appearance: 'none',
+  background: '#FFFFFF',
+  cursor: 'pointer',
+  marginTop: 0
+};
+
 const primaryButtonStyle = {
   alignItems: 'center',
   background: '#172033',
@@ -1903,6 +1876,54 @@ const compactButtonStyle = {
   minHeight: '34px',
   padding: '0 10px',
   whiteSpace: 'nowrap'
+};
+
+const moreMenuWrapStyle = {
+  position: 'relative'
+};
+
+const iconMenuButtonStyle = {
+  alignItems: 'center',
+  background: '#FFFFFF',
+  border: '1px solid #D8E0EA',
+  borderRadius: '8px',
+  color: '#26344D',
+  cursor: 'pointer',
+  display: 'flex',
+  height: '42px',
+  justifyContent: 'center',
+  width: '42px'
+};
+
+const moreMenuStyle = {
+  background: '#FFFFFF',
+  border: '1px solid #DDE4EE',
+  borderRadius: '8px',
+  boxShadow: '0 18px 36px rgba(15, 23, 42, 0.14)',
+  display: 'grid',
+  gap: '4px',
+  minWidth: '230px',
+  padding: '6px',
+  position: 'absolute',
+  right: 0,
+  top: '48px',
+  zIndex: 20
+};
+
+const menuItemStyle = {
+  alignItems: 'center',
+  background: 'transparent',
+  border: 'none',
+  borderRadius: '6px',
+  color: '#172033',
+  cursor: 'pointer',
+  display: 'flex',
+  fontSize: '13px',
+  fontWeight: 900,
+  gap: '9px',
+  minHeight: '38px',
+  padding: '0 10px',
+  textAlign: 'left'
 };
 
 const dangerButtonStyle = {
