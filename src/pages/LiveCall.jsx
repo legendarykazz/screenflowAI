@@ -1182,10 +1182,10 @@ export default function LiveCall() {
           ) : (
             <button onClick={enterPresenterMode} style={secondaryHeaderButtonStyle}><Expand size={16} /> Fullscreen</button>
           )}
-          {isLive ? (
-            <button onClick={endCallForEveryone} style={dangerButtonStyle}><PhoneOff size={17} /> End Call</button>
+          {isLiveKitConnected ? (
+            <button onClick={endCallForEveryone} style={dangerButtonStyle}><PhoneOff size={17} /> End Live Room</button>
           ) : (
-            <button onClick={() => startRoom()} style={primaryButtonStyle}><ScreenShare size={17} /> Start Live Room</button>
+            <button onClick={connectLiveKit} style={primaryButtonStyle}><Users size={17} /> Start Live Room</button>
           )}
         </div>
       </header>
@@ -1326,8 +1326,8 @@ export default function LiveCall() {
             <button onClick={isLiveKitConnected ? disconnectLiveKit : connectLiveKit} style={dockButtonStyle(isLiveKitConnected)} className="tooltip" data-tooltip={isLiveKitConnected ? 'Disconnect room' : 'Go online'}>
               <Users size={18} />
             </button>
-            <button onClick={isLive ? endCallForEveryone : () => startRoom()} style={dockLeaveButtonStyle} className="tooltip" data-tooltip={isLive ? 'End call' : 'Start live room'}>
-              {isLive ? <PhoneOff size={19} /> : <Play size={19} />}
+            <button onClick={isLiveKitConnected ? endCallForEveryone : connectLiveKit} style={dockLeaveButtonStyle} className="tooltip" data-tooltip={isLiveKitConnected ? 'End live room' : 'Start live room'}>
+              {isLiveKitConnected ? <PhoneOff size={19} /> : <Play size={19} />}
             </button>
             <div style={moreMenuWrapStyle}>
               <button onClick={() => setMoreMenuOpen((open) => !open)} style={dockButtonStyle(moreMenuOpen)} className="tooltip" data-tooltip="More">
