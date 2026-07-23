@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Room, RoomEvent, Track } from 'livekit-client';
-import { Camera, Mic, PhoneOff, Play, Users, Video } from 'lucide-react';
+import { Camera, Mic, PhoneOff, Play, ScreenShare, SquarePen, Users, Video } from 'lucide-react';
 
 export default function JoinCall() {
   const roomRef = useRef(null);
@@ -11,7 +11,14 @@ export default function JoinCall() {
   const localMicStreamRef = useRef(null);
   const publishedCameraTrackRef = useRef(null);
   const publishedMicTrackRef = useRef(null);
+  const publishedScreenTrackRef = useRef(null);
+  const whiteboardCanvasRef = useRef(null);
+  const whiteboardAnimationRef = useRef(null);
   const audioRef = useRef(null);
+  const micOnRef = useRef(false);
+  const cameraOnRef = useRef(false);
+  const screenOnRef = useRef(false);
+  const localIdentityRef = useRef('');
   const activeVideoSidRef = useRef(null);
   const activeCameraSidRef = useRef(null);
   const roomCode = useMemo(() => {
@@ -24,6 +31,8 @@ export default function JoinCall() {
   const [connected, setConnected] = useState(false);
   const [cameraOn, setCameraOn] = useState(false);
   const [micOn, setMicOn] = useState(false);
+  const [screenOn, setScreenOn] = useState(false);
+  const [hasHostScreen, setHasHostScreen] = useState(false);
   const [participants, setParticipants] = useState([]);
   const [fatalError, setFatalError] = useState('');
 
@@ -34,11 +43,23 @@ export default function JoinCall() {
   }, [cameraOn]);
 
   useEffect(() => {
+    micOnRef.current = micOn;
+  }, [micOn]);
+
+  useEffect(() => {
+    cameraOnRef.current = cameraOn;
+  }, [cameraOn]);
+
+  useEffect(() => {
+    screenOnRef.current = screenOn;
+  }, [screenOn]);
+
+  useEffect(() => {
     const handleError = (event) => {
-      setFatalError(event.error?.message || event.message || 'The call page hit an unexpected error.');
+      setFatalError(getErrorMessage(event.error || event, 'The call page hit an unexpected error.'));
     };
     const handleRejection = (event) => {
-      setFatalError(event.reason?.message || String(event.reason || 'The call page hit an unexpected error.'));
+      setFatalError(getErrorMessage(event.reason || event, 'The call page hit an unexpected error.'));
     };
     window.addEventListener('error', handleError);
     window.addEventListener('unhandledrejection', handleRejection);
@@ -78,6 +99,9 @@ export default function JoinCall() {
           setStatus(error.message || 'Could not attach participant media.');
         }
       });
+      room.on(RoomEvent.DataReceived, (payload, participant) => {
+        handleRoomCommand(payload, participant);
+      });
 
       room.on(RoomEvent.TrackUnsubscribed, (track) => {
         try {
@@ -91,6 +115,7 @@ export default function JoinCall() {
         }
         if (activeVideoSidRef.current === track.sid) activeVideoSidRef.current = null;
         if (activeCameraSidRef.current === track.sid) activeCameraSidRef.current = null;
+        if (activeVideoSidRef.current === null) setHasHostScreen(Boolean(mediaRef.current?.querySelector('video')));
       });
 
       room.on(RoomEvent.ParticipantConnected, () => {
@@ -112,23 +137,29 @@ export default function JoinCall() {
         setConnected(false);
         setStatus('Disconnected');
         setParticipants([]);
+        localIdentityRef.current = '';
         setCameraOn(false);
         setMicOn(false);
+        setScreenOn(false);
+        setHasHostScreen(false);
         activeVideoSidRef.current = null;
         activeCameraSidRef.current = null;
         publishedCameraTrackRef.current = null;
         publishedMicTrackRef.current = null;
+        publishedScreenTrackRef.current = null;
         localCameraStreamRef.current?.getTracks().forEach((track) => track.stop());
         localMicStreamRef.current?.getTracks().forEach((track) => track.stop());
         localCameraStreamRef.current = null;
         localMicStreamRef.current = null;
         if (localCameraRef.current) localCameraRef.current.srcObject = null;
         if (audioRef.current) audioRef.current.innerHTML = '';
+        stopGuestWhiteboard();
         mediaRef.current?.querySelectorAll('[data-track-sid]').forEach((element) => element.remove());
         cameraRef.current?.querySelectorAll('[data-face-tile="true"]').forEach((element) => element.remove());
       });
 
       await room.connect(result.url, result.token);
+      localIdentityRef.current = result.identity || room.localParticipant?.identity || '';
       setConnected(true);
       setStatus('Connected. Waiting for presenter output if nothing is visible yet.');
       attachExistingTracks(room);
@@ -147,12 +178,13 @@ export default function JoinCall() {
     const room = roomRef.current;
     if (!room) return;
 
-    if (micOn) {
+    if (micOnRef.current) {
       if (publishedMicTrackRef.current) await room.localParticipant.unpublishTrack(publishedMicTrackRef.current);
       localMicStreamRef.current?.getTracks().forEach((track) => track.stop());
       localMicStreamRef.current = null;
       publishedMicTrackRef.current = null;
       setMicOn(false);
+      setStatus('Microphone is muted.');
       return;
     }
 
@@ -176,13 +208,14 @@ export default function JoinCall() {
     const room = roomRef.current;
     if (!room) return;
 
-    if (cameraOn) {
+    if (cameraOnRef.current) {
       if (publishedCameraTrackRef.current) await room.localParticipant.unpublishTrack(publishedCameraTrackRef.current);
       localCameraStreamRef.current?.getTracks().forEach((track) => track.stop());
       localCameraStreamRef.current = null;
       publishedCameraTrackRef.current = null;
       if (localCameraRef.current) localCameraRef.current.srcObject = null;
       setCameraOn(false);
+      setStatus('Camera is off.');
       return;
     }
 
@@ -210,6 +243,154 @@ export default function JoinCall() {
     }
   };
 
+  const toggleScreenShare = async () => {
+    const room = roomRef.current;
+    if (!room) return;
+
+    if (screenOnRef.current) {
+      await stopPublishingScreen(room);
+      setStatus('Screen sharing stopped.');
+      return;
+    }
+
+    try {
+      if (!navigator.mediaDevices?.getDisplayMedia) {
+        setStatus('Screen sharing is not available in this browser.');
+        return;
+      }
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      const screenTrack = stream.getVideoTracks()[0];
+      screenTrack.onended = () => {
+        publishedScreenTrackRef.current = null;
+        setScreenOn(false);
+      };
+      publishedScreenTrackRef.current = screenTrack;
+      await room.localParticipant.publishTrack(screenTrack, {
+        name: 'participant-screen',
+        source: Track.Source.ScreenShare,
+        simulcast: false,
+        videoEncoding: {
+          maxBitrate: 2_000_000,
+          maxFramerate: 24
+        }
+      });
+      setScreenOn(true);
+      setStatus('Sharing your screen.');
+    } catch (error) {
+      setStatus(getErrorMessage(error, 'Screen share permission was not granted.'));
+    }
+  };
+
+  const toggleWhiteboard = async () => {
+    const room = roomRef.current;
+    if (!room) return;
+
+    if (screenOnRef.current) {
+      await stopPublishingScreen(room);
+      setStatus('Whiteboard sharing stopped.');
+      return;
+    }
+
+    try {
+      const canvas = whiteboardCanvasRef.current;
+      if (!canvas?.captureStream) {
+        setStatus('Whiteboard sharing is not available in this browser.');
+        return;
+      }
+      canvas.width = 1280;
+      canvas.height = 720;
+      renderGuestWhiteboard();
+      const stream = canvas.captureStream(15);
+      const whiteboardTrack = stream.getVideoTracks()[0];
+      whiteboardTrack.onended = () => {
+        stopGuestWhiteboard();
+        publishedScreenTrackRef.current = null;
+        setScreenOn(false);
+      };
+      publishedScreenTrackRef.current = whiteboardTrack;
+      await room.localParticipant.publishTrack(whiteboardTrack, {
+        name: 'participant-whiteboard',
+        source: Track.Source.ScreenShare,
+        simulcast: false
+      });
+      setScreenOn(true);
+      setStatus('Sharing your whiteboard.');
+    } catch (error) {
+      setStatus(getErrorMessage(error, 'Could not share whiteboard.'));
+    }
+  };
+
+  const stopPublishingScreen = async (room = roomRef.current) => {
+    if (publishedScreenTrackRef.current && room) {
+      await room.localParticipant.unpublishTrack(publishedScreenTrackRef.current);
+    }
+    publishedScreenTrackRef.current?.stop?.();
+    publishedScreenTrackRef.current = null;
+    stopGuestWhiteboard();
+    setScreenOn(false);
+  };
+
+  const renderGuestWhiteboard = () => {
+    const canvas = whiteboardCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = '#E5E7EB';
+    ctx.lineWidth = 1;
+    for (let x = 0; x <= canvas.width; x += 40) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, canvas.height);
+      ctx.stroke();
+    }
+    for (let y = 0; y <= canvas.height; y += 40) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(canvas.width, y);
+      ctx.stroke();
+    }
+    ctx.fillStyle = '#111827';
+    ctx.font = '700 34px Inter, system-ui, sans-serif';
+    ctx.fillText(`${name || 'Guest'} whiteboard`, 48, 72);
+    whiteboardAnimationRef.current = requestAnimationFrame(renderGuestWhiteboard);
+  };
+
+  const stopGuestWhiteboard = () => {
+    if (whiteboardAnimationRef.current) cancelAnimationFrame(whiteboardAnimationRef.current);
+    whiteboardAnimationRef.current = null;
+  };
+
+  const handleRoomCommand = async (payload) => {
+    try {
+      const command = JSON.parse(new TextDecoder().decode(payload));
+      if (!command?.type) return;
+      if (command.targetIdentity && command.targetIdentity !== localIdentityRef.current) return;
+      if (command.type === 'room-ended') {
+        setStatus('Host ended the call.');
+        roomRef.current?.disconnect();
+      }
+      if (command.type === 'mute') {
+        if (micOnRef.current || publishedMicTrackRef.current) await toggleMic();
+        setStatus('Host muted your microphone.');
+      }
+      if (command.type === 'unmute') {
+        if (!micOnRef.current && !publishedMicTrackRef.current) await toggleMic();
+        setStatus('Host requested your microphone.');
+      }
+      if (command.type === 'camera-off') {
+        if (cameraOnRef.current || publishedCameraTrackRef.current) await toggleCamera();
+        setStatus('Host turned your camera off.');
+      }
+      if (command.type === 'camera-on-request') {
+        if (!cameraOnRef.current && !publishedCameraTrackRef.current) await toggleCamera();
+        setStatus('Host requested your camera.');
+      }
+    } catch (error) {
+      setStatus(getErrorMessage(error, 'Could not apply host command.'));
+    }
+  };
+
   const updateParticipants = (room = roomRef.current) => {
     if (!room) return;
     const remoteParticipants = getRemoteParticipants(room);
@@ -230,6 +411,15 @@ export default function JoinCall() {
     if (typeof remotes.values === 'function') return Array.from(remotes.values());
     if (Array.isArray(remotes)) return remotes;
     return Object.values(remotes);
+  };
+
+  const getErrorMessage = (error, fallback) => {
+    if (!error) return fallback;
+    if (typeof error === 'string') return error;
+    if (error.message) return error.message;
+    if (error.reason?.message) return error.reason.message;
+    if (error.type) return `${fallback} (${error.type})`;
+    return fallback;
   };
 
   const attachTrack = (track, participant) => {
@@ -269,6 +459,7 @@ export default function JoinCall() {
       if (isCamera) activeCameraSidRef.current = track.sid;
       else {
         activeVideoSidRef.current = track.sid;
+        setHasHostScreen(true);
         Array.from(targetRef.current.querySelectorAll('video')).forEach((video) => {
           video.remove();
         });
@@ -312,16 +503,32 @@ export default function JoinCall() {
 
     const empty = document.createElement('div');
     empty.dataset.emptyParticipant = 'true';
-    empty.textContent = 'Camera is off';
     empty.style.alignItems = 'center';
     empty.style.color = '#D4D4D4';
     empty.style.display = 'flex';
+    empty.style.flexDirection = 'column';
     empty.style.fontSize = '13px';
     empty.style.fontWeight = '900';
+    empty.style.gap = '8px';
     empty.style.height = '100%';
     empty.style.justifyContent = 'center';
     empty.style.padding = '12px';
     empty.style.textAlign = 'center';
+    const initial = document.createElement('strong');
+    initial.textContent = (participant?.name || participantId || 'G').slice(0, 1).toUpperCase();
+    initial.style.alignItems = 'center';
+    initial.style.background = '#1D4ED8';
+    initial.style.borderRadius = '999px';
+    initial.style.color = '#FFFFFF';
+    initial.style.display = 'flex';
+    initial.style.fontSize = '18px';
+    initial.style.height = '40px';
+    initial.style.justifyContent = 'center';
+    initial.style.width = '40px';
+    const emptyText = document.createElement('span');
+    emptyText.textContent = 'Camera is off';
+    empty.appendChild(initial);
+    empty.appendChild(emptyText);
     tile.appendChild(empty);
 
     const label = document.createElement('span');
@@ -388,13 +595,20 @@ export default function JoinCall() {
             <button onClick={toggleCamera} style={controlButtonStyle(cameraOn)}>
               <Camera size={17} /> {cameraOn ? 'Hide Camera' : 'Camera'}
             </button>
+            <button onClick={toggleScreenShare} style={controlButtonStyle(screenOn)}>
+              <ScreenShare size={17} /> {screenOn ? 'Stop Share' : 'Share Screen'}
+            </button>
+            <button onClick={toggleWhiteboard} style={controlButtonStyle(screenOn)}>
+              <SquarePen size={17} /> {screenOn ? 'Stop Board' : 'Whiteboard'}
+            </button>
           </div>
         )}
 
         <p style={statusStyle}>{status}</p>
         <div ref={audioRef} aria-hidden="true" style={audioSinkStyle} />
+        <canvas ref={whiteboardCanvasRef} aria-hidden="true" style={hiddenCanvasStyle} />
 
-        <section className="viewer-section" style={viewerStyle}>
+        <section className="viewer-section" style={{ ...viewerStyle, display: connected && !hasHostScreen ? 'none' : 'block' }}>
           <div style={viewerHeaderStyle}>
             <Video size={18} />
             Host Screen
@@ -567,6 +781,14 @@ const statusStyle = {
 const audioSinkStyle = {
   height: 0,
   overflow: 'hidden',
+  width: 0
+};
+
+const hiddenCanvasStyle = {
+  height: 0,
+  opacity: 0,
+  pointerEvents: 'none',
+  position: 'absolute',
   width: 0
 };
 

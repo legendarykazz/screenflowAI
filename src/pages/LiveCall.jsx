@@ -526,6 +526,23 @@ export default function LiveCall() {
     if (remoteMediaRef.current) remoteMediaRef.current.innerHTML = '';
   };
 
+  const sendRoomCommand = async (type, targetIdentity = '') => {
+    const room = liveKitRoomRef.current;
+    if (!room) return;
+    const payload = new TextEncoder().encode(JSON.stringify({ type, targetIdentity }));
+    await room.localParticipant.publishData(payload, { reliable: true });
+  };
+
+  const endCallForEveryone = async () => {
+    try {
+      await sendRoomCommand('room-ended');
+    } catch (error) {
+      setLiveKitStatus(error?.message || 'Could not notify participants before ending.');
+    }
+    stopRoom();
+    disconnectLiveKit();
+  };
+
   const publishOutputStream = async (outputStream) => {
     const room = liveKitRoomRef.current;
     const videoTrack = outputStream?.getVideoTracks?.()[0];
@@ -625,7 +642,7 @@ export default function LiveCall() {
       tile.style.border = '1px solid #26344D';
       tile.style.borderRadius = '8px';
       tile.style.color = '#F8FAFC';
-      tile.style.minHeight = '150px';
+      tile.style.minHeight = '132px';
       tile.style.overflow = 'hidden';
       tile.style.position = 'relative';
       tile.style.cursor = 'pointer';
@@ -635,12 +652,12 @@ export default function LiveCall() {
           item.dataset.expanded = 'false';
           item.style.gridColumn = 'auto';
           item.style.gridRow = 'auto';
-          item.style.minHeight = '180px';
+          item.style.minHeight = '132px';
         });
         tile.dataset.expanded = isExpanded ? 'false' : 'true';
         tile.style.gridColumn = isExpanded ? 'auto' : 'span 2';
         tile.style.gridRow = isExpanded ? 'auto' : 'span 2';
-        tile.style.minHeight = isExpanded ? '180px' : '360px';
+        tile.style.minHeight = isExpanded ? '132px' : '320px';
       };
 
       const label = document.createElement('div');
@@ -657,18 +674,68 @@ export default function LiveCall() {
       label.style.zIndex = '2';
       tile.appendChild(label);
 
+      const admin = document.createElement('div');
+      admin.style.display = 'flex';
+      admin.style.gap = '6px';
+      admin.style.position = 'absolute';
+      admin.style.right = '8px';
+      admin.style.top = '8px';
+      admin.style.zIndex = '3';
+      [
+        ['Mute', 'mute'],
+        ['Ask Mic', 'unmute'],
+        ['Cam Off', 'camera-off'],
+        ['Ask Cam', 'camera-on-request']
+      ].forEach(([labelText, command]) => {
+        const button = document.createElement('button');
+        button.textContent = labelText;
+        button.style.background = 'rgba(9, 11, 18, 0.78)';
+        button.style.border = '1px solid rgba(255,255,255,0.22)';
+        button.style.borderRadius = '999px';
+        button.style.color = '#FFFFFF';
+        button.style.cursor = 'pointer';
+        button.style.fontSize = '10px';
+        button.style.fontWeight = '900';
+        button.style.minHeight = '24px';
+        button.style.padding = '0 7px';
+        button.onclick = (event) => {
+          event.stopPropagation();
+          sendRoomCommand(command, participantId).catch((error) => {
+            setLiveKitStatus(error?.message || 'Could not send host control.');
+          });
+        };
+        admin.appendChild(button);
+      });
+      tile.appendChild(admin);
+
       const empty = document.createElement('div');
       empty.dataset.emptyParticipant = 'true';
-      empty.textContent = 'Camera is off';
       empty.style.alignItems = 'center';
       empty.style.color = '#CBD5E1';
       empty.style.display = 'flex';
+      empty.style.flexDirection = 'column';
       empty.style.fontSize = '13px';
       empty.style.fontWeight = '800';
+      empty.style.gap = '8px';
       empty.style.height = '100%';
       empty.style.justifyContent = 'center';
       empty.style.padding = '16px';
       empty.style.textAlign = 'center';
+      const initial = document.createElement('strong');
+      initial.textContent = (participant?.name || participantId || 'G').slice(0, 1).toUpperCase();
+      initial.style.alignItems = 'center';
+      initial.style.background = '#1D4ED8';
+      initial.style.borderRadius = '999px';
+      initial.style.color = '#FFFFFF';
+      initial.style.display = 'flex';
+      initial.style.fontSize = '20px';
+      initial.style.height = '44px';
+      initial.style.justifyContent = 'center';
+      initial.style.width = '44px';
+      const emptyText = document.createElement('span');
+      emptyText.textContent = 'Camera is off';
+      empty.appendChild(initial);
+      empty.appendChild(emptyText);
       tile.appendChild(empty);
 
       remoteMediaRef.current.appendChild(tile);
@@ -1071,7 +1138,7 @@ export default function LiveCall() {
             <button onClick={enterPresenterMode} style={secondaryHeaderButtonStyle}><Expand size={16} /> Fullscreen</button>
           )}
           {isLive ? (
-            <button onClick={stopRoom} style={dangerButtonStyle}><PhoneOff size={17} /> End Call</button>
+            <button onClick={endCallForEveryone} style={dangerButtonStyle}><PhoneOff size={17} /> End Call</button>
           ) : (
             <button onClick={() => startRoom()} style={primaryButtonStyle}><ScreenShare size={17} /> Start Live Room</button>
           )}
@@ -1194,7 +1261,7 @@ export default function LiveCall() {
             <button onClick={isLiveKitConnected ? disconnectLiveKit : connectLiveKit} style={dockButtonStyle(isLiveKitConnected)} className="tooltip" data-tooltip={isLiveKitConnected ? 'Disconnect room' : 'Go online'}>
               <Users size={18} />
             </button>
-            <button onClick={isLive ? stopRoom : () => startRoom()} style={dockLeaveButtonStyle} className="tooltip" data-tooltip={isLive ? 'End call' : 'Start live room'}>
+            <button onClick={isLive ? endCallForEveryone : () => startRoom()} style={dockLeaveButtonStyle} className="tooltip" data-tooltip={isLive ? 'End call' : 'Start live room'}>
               {isLive ? <PhoneOff size={19} /> : <Play size={19} />}
             </button>
             <div style={moreMenuWrapStyle}>
@@ -1549,9 +1616,10 @@ const peopleGridStyle = {
   border: '1px solid #DDE5F1',
   borderRadius: '8px',
   display: 'grid',
-  gap: '12px',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-  minHeight: '400px',
+  gap: '10px',
+  gridAutoRows: 'minmax(132px, auto)',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+  minHeight: '240px',
   padding: '12px'
 };
 
@@ -1595,17 +1663,18 @@ const dockLeaveButtonStyle = {
 };
 
 const localPresenterTileStyle = {
-  aspectRatio: '16 / 9',
+  aspectRatio: '1 / 1',
   background: '#090B12',
   border: '1px solid #2A3446',
   borderRadius: '8px',
-  minHeight: '210px',
+  minHeight: '132px',
   overflow: 'hidden',
   position: 'relative'
 };
 
 const shareTileStyle = (expanded) => ({
   ...localPresenterTileStyle,
+  aspectRatio: '16 / 9',
   gridColumn: expanded ? '1 / -1' : 'span 2',
   minHeight: expanded ? '560px' : '300px'
 });
@@ -1699,7 +1768,7 @@ const emptyTileStyle = {
   fontWeight: 800,
   height: '100%',
   justifyContent: 'center',
-  minHeight: '150px',
+  minHeight: '132px',
   padding: '16px',
   textAlign: 'center'
 };
