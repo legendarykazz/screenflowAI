@@ -193,7 +193,7 @@ export default function LiveCall() {
       }
       await publishOutputStream(outputStream);
 
-      screenStream.getVideoTracks()[0]?.addEventListener('ended', stopRoom);
+      screenStream.getVideoTracks()[0]?.addEventListener('ended', stopSharedOutput);
       renderFrame();
     } catch (error) {
       setStatus(error?.message || 'Screen sharing was cancelled.');
@@ -280,6 +280,26 @@ export default function LiveCall() {
     setCameraOn(false);
     setSourceName(shareMode === 'whiteboard' ? 'Whiteboard' : 'No screen selected');
     setStatus('Live room ended.');
+  };
+
+  const stopSharedOutput = async () => {
+    if (animationRef.current) cancelAnimationFrame(animationRef.current);
+    animationRef.current = null;
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    outputStreamRef.current?.getTracks?.().forEach((track) => track.stop());
+    if (liveKitVideoTrackRef.current && liveKitRoomRef.current) {
+      await liveKitRoomRef.current.localParticipant.unpublishTrack(liveKitVideoTrackRef.current);
+    }
+    streamRef.current = null;
+    sourceVideoRef.current = null;
+    outputStreamRef.current = null;
+    liveKitVideoTrackRef.current = null;
+    if (outputVideoRef.current) outputVideoRef.current.srcObject = null;
+    setIsLive(false);
+    setShareExpanded(false);
+    setSourceName(shareMode === 'whiteboard' ? 'Whiteboard' : 'No screen selected');
+    setStatus('Shared screen/whiteboard closed.');
+    await sendRoomCommand('share-stopped');
   };
 
   const getCaptionMimeType = () => {
@@ -479,7 +499,17 @@ export default function LiveCall() {
         updateRemoteParticipants(room);
       });
       room.on(RoomEvent.TrackUnsubscribed, (track) => {
-        track.detach().forEach((element) => element.remove());
+        track.detach().forEach((element) => {
+          const tile = element.closest?.('[data-participant-id]');
+          element.remove();
+          if (tile && !tile.querySelector('video')) {
+            tile.dataset.shareTile = 'false';
+            updateTileFullscreenButton(tile, false);
+            const label = tile.querySelector('[data-tile-label="true"]');
+            const participant = getRemoteParticipants(room).find((item) => item.identity === tile.dataset.participantId);
+            if (label) label.textContent = participant?.name || tile.dataset.participantId || 'Guest';
+          }
+        });
         remoteMediaRef.current?.querySelector(`[data-track-sid="${track.sid}"]`)?.remove();
         updateRemoteParticipants(room);
       });
@@ -604,7 +634,7 @@ export default function LiveCall() {
   const attachRemoteTrack = (track, participant) => {
     if (!remoteMediaRef.current) return;
     const participantId = participant?.identity || 'remote';
-    const isRemoteScreen = track.kind === 'video' && track.name?.includes('screen');
+    const isRemoteScreen = track.kind === 'video' && (track.name?.includes('screen') || track.name?.includes('whiteboard') || track.source === Track.Source.ScreenShare);
     const tile = ensureRemoteParticipantTile(participant);
     if (!tile) return;
 
@@ -626,6 +656,8 @@ export default function LiveCall() {
       Array.from(tile.querySelectorAll('video')).forEach((video) => video.remove());
       const label = tile.querySelector('[data-tile-label="true"]');
       if (label) label.textContent = `${participant?.name || participantId}${isRemoteScreen ? ' - Screen' : ''}`;
+      tile.dataset.shareTile = isRemoteScreen ? 'true' : 'false';
+      updateTileFullscreenButton(tile, isRemoteScreen);
     }
     tile.appendChild(element);
     element.play?.().catch(() => {});
@@ -645,20 +677,6 @@ export default function LiveCall() {
       tile.style.minHeight = '132px';
       tile.style.overflow = 'hidden';
       tile.style.position = 'relative';
-      tile.style.cursor = 'pointer';
-      tile.onclick = () => {
-        const isExpanded = tile.dataset.expanded === 'true';
-        Array.from(remoteMediaRef.current.querySelectorAll('[data-participant-id]')).forEach((item) => {
-          item.dataset.expanded = 'false';
-          item.style.gridColumn = 'auto';
-          item.style.gridRow = 'auto';
-          item.style.minHeight = '132px';
-        });
-        tile.dataset.expanded = isExpanded ? 'false' : 'true';
-        tile.style.gridColumn = isExpanded ? 'auto' : 'span 2';
-        tile.style.gridRow = isExpanded ? 'auto' : 'span 2';
-        tile.style.minHeight = isExpanded ? '132px' : '320px';
-      };
 
       const label = document.createElement('div');
       label.dataset.tileLabel = 'true';
@@ -741,6 +759,33 @@ export default function LiveCall() {
       remoteMediaRef.current.appendChild(tile);
     }
     return tile;
+  };
+
+  const updateTileFullscreenButton = (tile, enabled) => {
+    tile.querySelector('[data-fullscreen-share="true"]')?.remove();
+    if (!enabled) return;
+    const button = document.createElement('button');
+    button.dataset.fullscreenShare = 'true';
+    button.textContent = 'Fullscreen';
+    button.style.background = 'rgba(9, 11, 18, 0.78)';
+    button.style.border = '1px solid rgba(255,255,255,0.22)';
+    button.style.borderRadius = '999px';
+    button.style.bottom = '8px';
+    button.style.color = '#FFFFFF';
+    button.style.cursor = 'pointer';
+    button.style.fontSize = '11px';
+    button.style.fontWeight = '900';
+    button.style.minHeight = '26px';
+    button.style.padding = '0 9px';
+    button.style.position = 'absolute';
+    button.style.right = '8px';
+    button.style.zIndex = '4';
+    button.onclick = (event) => {
+      event.stopPropagation();
+      if (document.fullscreenElement) document.exitFullscreen?.();
+      else tile.requestFullscreen?.();
+    };
+    tile.appendChild(button);
   };
 
   const updateRemoteParticipants = (room = liveKitRoomRef.current) => {
@@ -1163,17 +1208,37 @@ export default function LiveCall() {
               )}
               <span style={tileLabelStyle}>You - Host</span>
             </div>
-            {(isLive || shareMode === 'whiteboard') && (
-              <div style={shareTileStyle(shareExpanded)}>
-                <button
-                  onClick={() => setShareExpanded((expanded) => !expanded)}
-                  style={shareExpandButtonStyle}
-                  className="tooltip"
-                  data-tooltip={shareExpanded ? 'Shrink share' : 'Enlarge share'}
-                >
-                  <Expand size={16} />
-                  {shareExpanded ? 'Shrink' : 'Enlarge'}
-                </button>
+            {isLive && (
+              <div data-host-share-tile="true" style={shareTileStyle(shareExpanded)}>
+                <div style={shareActionGroupStyle}>
+                  <button
+                    onClick={() => setShareExpanded((expanded) => !expanded)}
+                    style={shareExpandButtonStyle}
+                    className="tooltip"
+                    data-tooltip={shareExpanded ? 'Shrink share' : 'Enlarge share'}
+                  >
+                    <Expand size={16} />
+                    {shareExpanded ? 'Shrink' : 'Enlarge'}
+                  </button>
+                  <button
+                    onClick={(event) => event.currentTarget.closest('[data-host-share-tile="true"]')?.requestFullscreen?.()}
+                    style={shareExpandButtonStyle}
+                    className="tooltip"
+                    data-tooltip="Fullscreen share"
+                  >
+                    <Expand size={16} />
+                    Fullscreen
+                  </button>
+                  <button
+                    onClick={stopSharedOutput}
+                    style={shareCloseButtonStyle}
+                    className="tooltip"
+                    data-tooltip="Close shared screen"
+                  >
+                    <PhoneOff size={16} />
+                    Close
+                  </button>
+                </div>
                 {shareExpanded && (
                   <div style={compactToolBarStyle}>
                     {toolOptions.map((item) => {
@@ -1692,10 +1757,23 @@ const shareExpandButtonStyle = {
   gap: '7px',
   minHeight: '34px',
   padding: '0 12px',
+  zIndex: 4
+};
+
+const shareActionGroupStyle = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: '8px',
   position: 'absolute',
   right: '12px',
   top: '12px',
-  zIndex: 4
+  zIndex: 5
+};
+
+const shareCloseButtonStyle = {
+  ...shareExpandButtonStyle,
+  background: 'rgba(180, 35, 24, 0.92)',
+  border: '1px solid rgba(254, 202, 202, 0.34)'
 };
 
 const compactToolBarStyle = {

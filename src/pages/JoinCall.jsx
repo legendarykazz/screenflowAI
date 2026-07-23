@@ -115,7 +115,7 @@ export default function JoinCall() {
         }
         if (activeVideoSidRef.current === track.sid) activeVideoSidRef.current = null;
         if (activeCameraSidRef.current === track.sid) activeCameraSidRef.current = null;
-        if (activeVideoSidRef.current === null) setHasHostScreen(Boolean(mediaRef.current?.querySelector('video')));
+        if (activeVideoSidRef.current === null && !mediaRef.current?.querySelector('video')) clearHostScreen();
       });
 
       room.on(RoomEvent.ParticipantConnected, () => {
@@ -370,6 +370,10 @@ export default function JoinCall() {
         setStatus('Host ended the call.');
         roomRef.current?.disconnect();
       }
+      if (command.type === 'share-stopped') {
+        clearHostScreen();
+        setStatus('Host closed the shared screen.');
+      }
       if (command.type === 'mute') {
         if (micOnRef.current || publishedMicTrackRef.current) await toggleMic();
         setStatus('Host muted your microphone.');
@@ -395,6 +399,18 @@ export default function JoinCall() {
     if (!room) return;
     const remoteParticipants = getRemoteParticipants(room);
     setParticipants(remoteParticipants.map((participant) => participant.name || participant.identity));
+  };
+
+  const clearHostScreen = () => {
+    activeVideoSidRef.current = null;
+    setHasHostScreen(false);
+    mediaRef.current?.querySelectorAll('[data-track-sid]').forEach((element) => element.remove());
+    if (mediaRef.current && !mediaRef.current.querySelector('[data-placeholder="true"]')) {
+      const placeholder = document.createElement('span');
+      placeholder.dataset.placeholder = 'true';
+      placeholder.textContent = 'No host screen yet.';
+      mediaRef.current.appendChild(placeholder);
+    }
   };
 
   const attachExistingTracks = (room) => {
@@ -610,8 +626,10 @@ export default function JoinCall() {
 
         <section className="viewer-section" style={{ ...viewerStyle, display: connected && !hasHostScreen ? 'none' : 'block' }}>
           <div style={viewerHeaderStyle}>
-            <Video size={18} />
-            Host Screen
+            <span style={viewerTitleStyle}><Video size={18} /> Host Screen</span>
+            {hasHostScreen && (
+              <button onClick={() => mediaRef.current?.requestFullscreen?.()} style={viewerHeaderButtonStyle}>Fullscreen</button>
+            )}
           </div>
           <div className="media-box" ref={mediaRef} style={mediaBoxStyle}>
             <span data-placeholder="true">{connected ? 'No host screen yet.' : 'Join to view the live screen or whiteboard.'}</span>
@@ -807,7 +825,26 @@ const viewerHeaderStyle = {
   fontSize: '14px',
   fontWeight: 900,
   gap: '8px',
+  justifyContent: 'space-between',
   padding: '12px'
+};
+
+const viewerTitleStyle = {
+  alignItems: 'center',
+  display: 'inline-flex',
+  gap: '8px'
+};
+
+const viewerHeaderButtonStyle = {
+  background: '#FFFFFF',
+  border: 'none',
+  borderRadius: '999px',
+  color: '#000000',
+  cursor: 'pointer',
+  fontSize: '12px',
+  fontWeight: 900,
+  minHeight: '30px',
+  padding: '0 10px'
 };
 
 const mediaBoxStyle = {
