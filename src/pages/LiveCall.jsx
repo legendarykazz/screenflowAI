@@ -469,16 +469,19 @@ export default function LiveCall() {
         dynacast: true
       });
 
-      room.on(RoomEvent.ParticipantConnected, updateRemoteParticipants);
-      room.on(RoomEvent.ParticipantDisconnected, updateRemoteParticipants);
+      room.on(RoomEvent.ParticipantConnected, () => updateRemoteParticipants(room));
+      room.on(RoomEvent.ParticipantDisconnected, (participant) => {
+        remoteMediaRef.current?.querySelector(`[data-participant-id="${participant.identity}"]`)?.remove();
+        updateRemoteParticipants(room);
+      });
       room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
         attachRemoteTrack(track, participant);
-        updateRemoteParticipants();
+        updateRemoteParticipants(room);
       });
       room.on(RoomEvent.TrackUnsubscribed, (track) => {
         track.detach().forEach((element) => element.remove());
         remoteMediaRef.current?.querySelector(`[data-track-sid="${track.sid}"]`)?.remove();
-        updateRemoteParticipants();
+        updateRemoteParticipants(room);
       });
       room.on(RoomEvent.Disconnected, (reason) => {
         liveKitRoomRef.current = null;
@@ -585,6 +588,35 @@ export default function LiveCall() {
     if (!remoteMediaRef.current) return;
     const participantId = participant?.identity || 'remote';
     const isRemoteScreen = track.kind === 'video' && track.name?.includes('screen');
+    const tile = ensureRemoteParticipantTile(participant);
+    if (!tile) return;
+
+    tile.querySelector('[data-empty-participant="true"]')?.remove();
+
+    const alreadyAttached = Array.from(tile.querySelectorAll('[data-track-sid]')).some((element) => element.dataset.trackSid === track.sid);
+    if (alreadyAttached) return;
+
+    const element = track.attach();
+    element.dataset.trackSid = track.sid;
+    element.style.width = '100%';
+    element.style.height = track.kind === 'video' ? '100%' : '0';
+    element.style.background = '#0B0F19';
+    element.style.display = track.kind === 'video' ? 'block' : 'none';
+    element.style.objectFit = isRemoteScreen ? 'contain' : 'cover';
+    if (track.kind === 'audio') element.style.display = 'none';
+
+    if (track.kind === 'video') {
+      Array.from(tile.querySelectorAll('video')).forEach((video) => video.remove());
+      const label = tile.querySelector('[data-tile-label="true"]');
+      if (label) label.textContent = `${participant?.name || participantId}${isRemoteScreen ? ' - Screen' : ''}`;
+    }
+    tile.appendChild(element);
+    element.play?.().catch(() => {});
+  };
+
+  const ensureRemoteParticipantTile = (participant) => {
+    if (!remoteMediaRef.current || !participant?.identity) return null;
+    const participantId = participant.identity;
     let tile = remoteMediaRef.current.querySelector(`[data-participant-id="${participantId}"]`);
     if (!tile) {
       tile = document.createElement('div');
@@ -625,34 +657,47 @@ export default function LiveCall() {
       label.style.zIndex = '2';
       tile.appendChild(label);
 
+      const empty = document.createElement('div');
+      empty.dataset.emptyParticipant = 'true';
+      empty.textContent = 'Camera is off';
+      empty.style.alignItems = 'center';
+      empty.style.color = '#CBD5E1';
+      empty.style.display = 'flex';
+      empty.style.fontSize = '13px';
+      empty.style.fontWeight = '800';
+      empty.style.height = '100%';
+      empty.style.justifyContent = 'center';
+      empty.style.padding = '16px';
+      empty.style.textAlign = 'center';
+      tile.appendChild(empty);
+
       remoteMediaRef.current.appendChild(tile);
     }
-
-    const element = track.attach();
-    element.dataset.trackSid = track.sid;
-    element.style.width = '100%';
-    element.style.height = track.kind === 'video' ? '100%' : '0';
-    element.style.background = '#0B0F19';
-    element.style.display = track.kind === 'video' ? 'block' : 'none';
-    element.style.objectFit = isRemoteScreen ? 'contain' : 'cover';
-    if (track.kind === 'audio') element.style.display = 'none';
-
-    if (track.kind === 'video') {
-      Array.from(tile.querySelectorAll('video')).forEach((video) => video.remove());
-      const label = tile.querySelector('[data-tile-label="true"]');
-      if (label) label.textContent = `${participant?.name || participantId}${isRemoteScreen ? ' - Screen' : ''}`;
-    }
-    tile.appendChild(element);
-    element.play?.().catch(() => {});
+    return tile;
   };
 
   const updateRemoteParticipants = (room = liveKitRoomRef.current) => {
     if (!room) return;
-    const participants = Array.from(room.remoteParticipants.values()).map((participant) => ({
+    const remoteList = getRemoteParticipants(room);
+    const participants = remoteList.map((participant) => ({
       identity: participant.identity,
       name: participant.name || participant.identity
     }));
     setRemoteParticipants(participants);
+    remoteList.forEach((participant) => ensureRemoteParticipantTile(participant));
+    remoteMediaRef.current?.querySelectorAll('[data-participant-id]').forEach((tile) => {
+      if (!participants.some((participant) => participant.identity === tile.dataset.participantId)) {
+        tile.remove();
+      }
+    });
+  };
+
+  const getRemoteParticipants = (room) => {
+    const remotes = room?.remoteParticipants;
+    if (!remotes) return [];
+    if (typeof remotes.values === 'function') return Array.from(remotes.values());
+    if (Array.isArray(remotes)) return remotes;
+    return Object.values(remotes);
   };
 
   const renderFrame = () => {
