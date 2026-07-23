@@ -18,6 +18,62 @@ import FootballLab from './pages/FootballLab';
 import LiveCall from './pages/LiveCall';
 import JoinCall from './pages/JoinCall';
 
+class JoinCallErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    const message = this.state.error?.message || String(this.state.error || 'Unknown join page error.');
+    return (
+      <div style={{
+        alignItems: 'center',
+        background: '#000000',
+        color: '#FFFFFF',
+        display: 'flex',
+        fontFamily: 'Inter, system-ui, sans-serif',
+        justifyContent: 'center',
+        minHeight: '100vh',
+        padding: '18px'
+      }}>
+        <section style={{
+          background: '#0D0D0D',
+          border: '1px solid #7F1D1D',
+          borderRadius: '8px',
+          maxWidth: '680px',
+          padding: '18px',
+          width: '100%'
+        }}>
+          <strong style={{ color: '#FEE2E2', display: 'block', fontSize: '18px', marginBottom: '8px' }}>Call page crashed</strong>
+          <p style={{ color: '#FCA5A5', fontSize: '14px', lineHeight: 1.45, margin: 0 }}>{message}</p>
+          <button
+            onClick={() => window.location.reload()}
+            style={{
+              background: '#FFFFFF',
+              border: 'none',
+              borderRadius: '8px',
+              color: '#000000',
+              cursor: 'pointer',
+              fontWeight: 900,
+              marginTop: '14px',
+              minHeight: '42px',
+              padding: '0 14px'
+            }}
+          >
+            Reload call
+          </button>
+        </section>
+      </div>
+    );
+  }
+}
+
 // Safe browser mock stubs if running outside of Electron
 if (!window.electron) {
   console.warn("Electron API not found. Activating web-browser fallback simulation mock.");
@@ -278,6 +334,6 @@ const isJoinPage = window.location.pathname.startsWith('/join/');
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    {isJoinPage ? <JoinCall /> : isWidget ? <Widget /> : <App />}
+    {isJoinPage ? <JoinCallErrorBoundary><JoinCall /></JoinCallErrorBoundary> : isWidget ? <Widget /> : <App />}
   </React.StrictMode>
 );

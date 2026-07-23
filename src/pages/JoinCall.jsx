@@ -71,6 +71,11 @@ export default function JoinCall() {
 
   const joinRoom = async () => {
     try {
+      if (roomRef.current) {
+        roomRef.current.disconnect();
+        roomRef.current = null;
+      }
+      resetCallState('Ready to reconnect');
       setStatus('Getting access token...');
       const params = new URLSearchParams({ roomCode, participantName: name, role: 'participant' });
       const response = await fetch(`/api/livekit-token?${params.toString()}`, {
@@ -105,13 +110,13 @@ export default function JoinCall() {
 
       room.on(RoomEvent.TrackUnsubscribed, (track) => {
         try {
-          track.detach().forEach((element) => {
+          detachTrackElements(track).forEach((element) => {
             const tile = element.closest?.('[data-face-tile="true"]');
             if (tile) tile.remove();
             else element.remove();
           });
         } catch (error) {
-          setStatus(error.message || 'Could not clean up participant media.');
+          setStatus(getErrorMessage(error, 'Could not clean up participant media.'));
         }
         if (activeVideoSidRef.current === track.sid) activeVideoSidRef.current = null;
         if (activeCameraSidRef.current === track.sid) activeCameraSidRef.current = null;
@@ -134,28 +139,7 @@ export default function JoinCall() {
         }
       });
       room.on(RoomEvent.Disconnected, () => {
-        setConnected(false);
-        setStatus('Disconnected');
-        setParticipants([]);
-        localIdentityRef.current = '';
-        setCameraOn(false);
-        setMicOn(false);
-        setScreenOn(false);
-        setHasHostScreen(false);
-        activeVideoSidRef.current = null;
-        activeCameraSidRef.current = null;
-        publishedCameraTrackRef.current = null;
-        publishedMicTrackRef.current = null;
-        publishedScreenTrackRef.current = null;
-        localCameraStreamRef.current?.getTracks().forEach((track) => track.stop());
-        localMicStreamRef.current?.getTracks().forEach((track) => track.stop());
-        localCameraStreamRef.current = null;
-        localMicStreamRef.current = null;
-        if (localCameraRef.current) localCameraRef.current.srcObject = null;
-        if (audioRef.current) audioRef.current.innerHTML = '';
-        stopGuestWhiteboard();
-        mediaRef.current?.querySelectorAll('[data-track-sid]').forEach((element) => element.remove());
-        cameraRef.current?.querySelectorAll('[data-face-tile="true"]').forEach((element) => element.remove());
+        resetCallState('Disconnected');
       });
 
       await room.connect(result.url, result.token);
@@ -165,13 +149,38 @@ export default function JoinCall() {
       attachExistingTracks(room);
       updateParticipants(room);
     } catch (error) {
-      setStatus(error.message || 'Could not join the call.');
+      setStatus(getErrorMessage(error, 'Could not join the call.'));
     }
   };
 
   const leaveRoom = () => {
     roomRef.current?.disconnect();
     roomRef.current = null;
+  };
+
+  const resetCallState = (nextStatus) => {
+    setConnected(false);
+    setStatus(nextStatus);
+    setParticipants([]);
+    localIdentityRef.current = '';
+    setCameraOn(false);
+    setMicOn(false);
+    setScreenOn(false);
+    setHasHostScreen(false);
+    activeVideoSidRef.current = null;
+    activeCameraSidRef.current = null;
+    publishedCameraTrackRef.current = null;
+    publishedMicTrackRef.current = null;
+    publishedScreenTrackRef.current = null;
+    stopMediaStream(localCameraStreamRef.current);
+    stopMediaStream(localMicStreamRef.current);
+    localCameraStreamRef.current = null;
+    localMicStreamRef.current = null;
+    if (localCameraRef.current) localCameraRef.current.srcObject = null;
+    clearNode(audioRef.current);
+    stopGuestWhiteboard();
+    mediaRef.current?.querySelectorAll('[data-track-sid]').forEach((element) => element.remove());
+    cameraRef.current?.querySelectorAll('[data-face-tile="true"]').forEach((element) => element.remove());
   };
 
   const toggleMic = async () => {
@@ -200,7 +209,7 @@ export default function JoinCall() {
       setMicOn(true);
       setStatus('Microphone is on.');
     } catch (error) {
-      setStatus(error.message || 'Microphone permission was not granted.');
+      setStatus(getErrorMessage(error, 'Microphone permission was not granted.'));
     }
   };
 
@@ -239,7 +248,7 @@ export default function JoinCall() {
       setCameraOn(true);
       setStatus('Camera is on.');
     } catch (error) {
-      setStatus(error.message || 'Camera permission was not granted.');
+      setStatus(getErrorMessage(error, 'Camera permission was not granted.'));
     }
   };
 
@@ -464,7 +473,7 @@ export default function JoinCall() {
 
     const alreadyAttached = Array.from(targetRef.current.querySelectorAll('[data-track-sid]')).some((child) => child.dataset?.trackSid === track.sid);
     if (alreadyAttached) {
-      track.detach?.().forEach((attachedElement) => attachedElement.remove());
+      detachTrackElements(track).forEach((attachedElement) => attachedElement.remove());
       return;
     }
 
@@ -491,6 +500,10 @@ export default function JoinCall() {
 
     if (isCamera) {
       const tile = ensureParticipantTile(participant);
+      if (!tile) {
+        element.remove?.();
+        return;
+      }
       tile.querySelector('[data-empty-participant="true"]')?.remove();
       Array.from(tile.querySelectorAll('video')).forEach((video) => video.remove());
       tile.dataset.trackSid = track.sid;
@@ -502,6 +515,7 @@ export default function JoinCall() {
   };
 
   const ensureParticipantTile = (participant) => {
+    if (!cameraRef.current) return null;
     const participantId = participant?.identity || participant?.sid || 'remote';
     let tile = Array.from(cameraRef.current?.querySelectorAll('[data-face-tile="true"]') || [])
       .find((item) => item.dataset.participantId === participantId);
@@ -569,6 +583,25 @@ export default function JoinCall() {
     Array.from(cameraRef.current?.querySelectorAll('[data-face-tile="true"]') || [])
       .find((tile) => tile.dataset.participantId === participantId)
       ?.remove();
+  };
+
+  const detachTrackElements = (track) => {
+    if (!track || typeof track.detach !== 'function') return [];
+    const detached = track.detach();
+    return Array.isArray(detached) ? detached : [];
+  };
+
+  const stopMediaStream = (stream) => {
+    stream?.getTracks?.().forEach((track) => {
+      try {
+        track.stop();
+      } catch (error) {}
+    });
+  };
+
+  const clearNode = (node) => {
+    if (!node) return;
+    while (node.firstChild) node.removeChild(node.firstChild);
   };
 
   return (
