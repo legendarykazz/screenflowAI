@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Room, RoomEvent, Track } from 'livekit-client';
-import { Camera, Mic, PhoneOff, Play, ScreenShare, Users, Video } from 'lucide-react';
+import { Camera, Mic, PhoneOff, Play, Users, Video } from 'lucide-react';
 
 export default function JoinCall() {
   const roomRef = useRef(null);
@@ -11,7 +11,7 @@ export default function JoinCall() {
   const localMicStreamRef = useRef(null);
   const publishedCameraTrackRef = useRef(null);
   const publishedMicTrackRef = useRef(null);
-  const publishedScreenTrackRef = useRef(null);
+  const audioRef = useRef(null);
   const activeVideoSidRef = useRef(null);
   const activeCameraSidRef = useRef(null);
   const roomCode = useMemo(() => {
@@ -24,7 +24,6 @@ export default function JoinCall() {
   const [connected, setConnected] = useState(false);
   const [cameraOn, setCameraOn] = useState(false);
   const [micOn, setMicOn] = useState(false);
-  const [screenOn, setScreenOn] = useState(false);
   const [participants, setParticipants] = useState([]);
   const [fatalError, setFatalError] = useState('');
 
@@ -105,12 +104,12 @@ export default function JoinCall() {
         activeCameraSidRef.current = null;
         publishedCameraTrackRef.current = null;
         publishedMicTrackRef.current = null;
-        publishedScreenTrackRef.current = null;
         localCameraStreamRef.current?.getTracks().forEach((track) => track.stop());
         localMicStreamRef.current?.getTracks().forEach((track) => track.stop());
         localCameraStreamRef.current = null;
         localMicStreamRef.current = null;
         if (localCameraRef.current) localCameraRef.current.srcObject = null;
+        if (audioRef.current) audioRef.current.innerHTML = '';
         mediaRef.current?.querySelectorAll('[data-track-sid]').forEach((element) => element.remove());
         cameraRef.current?.querySelectorAll('[data-face-tile="true"]').forEach((element) => element.remove());
       });
@@ -153,6 +152,7 @@ export default function JoinCall() {
         source: Track.Source.Microphone
       });
       setMicOn(true);
+      setStatus('Microphone is on.');
     } catch (error) {
       setStatus(error.message || 'Microphone permission was not granted.');
     }
@@ -190,48 +190,9 @@ export default function JoinCall() {
         }
       });
       setCameraOn(true);
+      setStatus('Camera is on.');
     } catch (error) {
       setStatus(error.message || 'Camera permission was not granted.');
-    }
-  };
-
-  const toggleScreenShare = async () => {
-    const room = roomRef.current;
-    if (!room) return;
-
-    if (screenOn) {
-      if (publishedScreenTrackRef.current) await room.localParticipant.unpublishTrack(publishedScreenTrackRef.current);
-      publishedScreenTrackRef.current?.stop?.();
-      publishedScreenTrackRef.current = null;
-      setScreenOn(false);
-      return;
-    }
-
-    try {
-      if (!navigator.mediaDevices?.getDisplayMedia) {
-        setStatus('Screen sharing is not available in this mobile browser.');
-        return;
-      }
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
-      const screenTrack = stream.getVideoTracks()[0];
-      screenTrack.onended = () => {
-        publishedScreenTrackRef.current = null;
-        setScreenOn(false);
-      };
-      publishedScreenTrackRef.current = screenTrack;
-      await room.localParticipant.publishTrack(screenTrack, {
-        name: 'participant-screen',
-        source: Track.Source.ScreenShare,
-        simulcast: false,
-        videoEncoding: {
-          maxBitrate: 2_000_000,
-          maxFramerate: 24
-        }
-      });
-      setScreenOn(true);
-      setStatus('Sharing your screen.');
-    } catch (error) {
-      setStatus(error.message || 'Screen share permission was not granted.');
     }
   };
 
@@ -244,7 +205,7 @@ export default function JoinCall() {
   const attachExistingTracks = (room) => {
     getRemoteParticipants(room).forEach((participant) => {
       participant.trackPublications.forEach((publication) => {
-        if (publication.track) attachTrack(publication.track);
+        if (publication.track) attachTrack(publication.track, participant);
       });
     });
   };
@@ -259,9 +220,9 @@ export default function JoinCall() {
 
   const attachTrack = (track, participant) => {
     if (!mediaRef.current) return;
-    const isScreen = track.kind === 'video' && track.name?.includes('screen');
+    const isScreen = track.kind === 'video' && (track.name?.includes('screen') || track.source === Track.Source.ScreenShare);
     const isCamera = track.kind === 'video' && !isScreen;
-    const targetRef = isCamera ? cameraRef : mediaRef;
+    const targetRef = track.kind === 'audio' ? audioRef : isCamera ? cameraRef : mediaRef;
     if (!targetRef.current) return;
 
     const element = track.attach();
@@ -275,7 +236,11 @@ export default function JoinCall() {
     element.style.background = '#090B12';
     element.style.marginTop = '0';
     element.style.objectFit = isCamera ? 'cover' : 'contain';
-    if (track.kind === 'audio') element.style.display = 'none';
+    if (track.kind === 'audio') {
+      element.controls = false;
+      element.muted = false;
+      element.style.display = 'none';
+    }
 
     const alreadyAttached = Array.from(targetRef.current.children).some((child) => child.dataset?.trackSid === track.sid);
     if (alreadyAttached) return;
@@ -292,7 +257,12 @@ export default function JoinCall() {
         });
       }
       element.muted = false;
-      element.play?.().catch(() => {});
+    }
+
+    if (track.kind === 'audio') {
+      targetRef.current.appendChild(element);
+      element.play?.().catch(() => setStatus('Tap Mic or Join again if audio is blocked by the browser.'));
+      return;
     }
 
     if (isCamera) {
@@ -360,19 +330,17 @@ export default function JoinCall() {
 
         {connected && (
           <div className="join-actions" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginTop: '10px' }}>
-            <button onClick={toggleMic} style={secondaryButtonStyle}>
+            <button onClick={toggleMic} style={controlButtonStyle(micOn)}>
               <Mic size={17} /> {micOn ? 'Mute' : 'Mic'}
             </button>
-            <button onClick={toggleCamera} style={secondaryButtonStyle}>
-              <Camera size={17} /> {cameraOn ? 'Camera On' : 'Camera'}
-            </button>
-            <button onClick={toggleScreenShare} style={secondaryButtonStyle}>
-              <ScreenShare size={17} /> {screenOn ? 'Stop Share' : 'Share Screen'}
+            <button onClick={toggleCamera} style={controlButtonStyle(cameraOn)}>
+              <Camera size={17} /> {cameraOn ? 'Hide Camera' : 'Camera'}
             </button>
           </div>
         )}
 
         <p style={statusStyle}>{status}</p>
+        <div ref={audioRef} aria-hidden="true" style={audioSinkStyle} />
 
         <section className="viewer-section" style={viewerStyle}>
           <div style={viewerHeaderStyle}>
@@ -380,7 +348,7 @@ export default function JoinCall() {
             Host Screen
           </div>
           <div className="media-box" ref={mediaRef} style={mediaBoxStyle}>
-            {!connected && <span data-placeholder="true">Join to view the live screen or whiteboard.</span>}
+            <span data-placeholder="true">{connected ? 'No host screen yet.' : 'Join to view the live screen or whiteboard.'}</span>
           </div>
         </section>
 
@@ -397,7 +365,7 @@ export default function JoinCall() {
                 <span style={faceLabelStyle}>You</span>
               </div>
             )}
-            <span data-placeholder="true">Camera appears here when the presenter turns it on.</span>
+            {!connected && <span data-placeholder="true">Join to use camera and mic.</span>}
           </div>
         </section>
 
@@ -529,12 +497,25 @@ const secondaryButtonStyle = {
   color: '#FFFFFF'
 };
 
+const controlButtonStyle = (active) => ({
+  ...secondaryButtonStyle,
+  background: active ? '#FFFFFF' : '#000000',
+  border: `1px solid ${active ? '#FFFFFF' : '#333333'}`,
+  color: active ? '#000000' : '#FFFFFF'
+});
+
 const statusStyle = {
   color: '#D4D4D4',
   fontSize: '13px',
   fontWeight: 700,
   lineHeight: 1.45,
   margin: '14px 0'
+};
+
+const audioSinkStyle = {
+  height: 0,
+  overflow: 'hidden',
+  width: 0
 };
 
 const viewerStyle = {
@@ -574,9 +555,9 @@ const cameraBoxStyle = {
   color: '#D4D4D4',
   display: 'grid',
   gap: '10px',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(132px, 1fr))',
   justifyContent: 'stretch',
-  minHeight: '150px',
+  minHeight: '132px',
   overflow: 'hidden',
   padding: '10px'
 };
@@ -662,19 +643,20 @@ const responsiveStyles = `
     }
 
     .media-box {
-      aspect-ratio: 9 / 16 !important;
-      min-height: min(68vh, 620px) !important;
+      aspect-ratio: 16 / 9 !important;
+      min-height: 230px !important;
+      max-height: 46vh !important;
       padding: 8px !important;
     }
 
     .media-box video {
-      max-height: 68vh !important;
+      max-height: 46vh !important;
       object-fit: contain;
     }
 
     .camera-box {
-      aspect-ratio: 16 / 9 !important;
-      min-height: 180px !important;
+      grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+      min-height: 130px !important;
     }
 
     .camera-box video {
