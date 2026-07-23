@@ -73,6 +73,7 @@ export default function JoinCall() {
       room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
         try {
           attachTrack(track, participant);
+          updateParticipants(room);
         } catch (error) {
           setStatus(error.message || 'Could not attach participant media.');
         }
@@ -92,8 +93,21 @@ export default function JoinCall() {
         if (activeCameraSidRef.current === track.sid) activeCameraSidRef.current = null;
       });
 
-      room.on(RoomEvent.ParticipantConnected, updateParticipants);
-      room.on(RoomEvent.ParticipantDisconnected, updateParticipants);
+      room.on(RoomEvent.ParticipantConnected, () => {
+        try {
+          updateParticipants(room);
+        } catch (error) {
+          setStatus(error.message || 'Could not update participants.');
+        }
+      });
+      room.on(RoomEvent.ParticipantDisconnected, (participant) => {
+        try {
+          removeParticipantTile(participant?.identity);
+          updateParticipants(room);
+        } catch (error) {
+          setStatus(error.message || 'Could not update participants.');
+        }
+      });
       room.on(RoomEvent.Disconnected, () => {
         setConnected(false);
         setStatus('Disconnected');
@@ -242,8 +256,11 @@ export default function JoinCall() {
       element.style.display = 'none';
     }
 
-    const alreadyAttached = Array.from(targetRef.current.children).some((child) => child.dataset?.trackSid === track.sid);
-    if (alreadyAttached) return;
+    const alreadyAttached = Array.from(targetRef.current.querySelectorAll('[data-track-sid]')).some((child) => child.dataset?.trackSid === track.sid);
+    if (alreadyAttached) {
+      track.detach?.().forEach((attachedElement) => attachedElement.remove());
+      return;
+    }
 
     element.dataset.trackSid = track.sid;
     targetRef.current.querySelector('[data-placeholder="true"]')?.remove();
@@ -266,34 +283,69 @@ export default function JoinCall() {
     }
 
     if (isCamera) {
-      const tile = document.createElement('div');
+      const tile = ensureParticipantTile(participant);
+      tile.querySelector('[data-empty-participant="true"]')?.remove();
+      Array.from(tile.querySelectorAll('video')).forEach((video) => video.remove());
       tile.dataset.trackSid = track.sid;
-      tile.dataset.faceTile = 'true';
-      tile.style.aspectRatio = '1 / 1';
-      tile.style.background = '#050505';
-      tile.style.border = '1px solid #2A2A2A';
-      tile.style.borderRadius = '8px';
-      tile.style.overflow = 'hidden';
-      tile.style.position = 'relative';
       tile.appendChild(element);
-
-      const label = document.createElement('span');
-      label.textContent = participant?.name || participant?.identity || 'Guest';
-      label.style.background = 'rgba(0,0,0,0.7)';
-      label.style.borderRadius = '999px';
-      label.style.bottom = '8px';
-      label.style.color = '#FFFFFF';
-      label.style.fontSize = '12px';
-      label.style.fontWeight = '900';
-      label.style.left = '8px';
-      label.style.padding = '5px 8px';
-      label.style.position = 'absolute';
-      tile.appendChild(label);
-      targetRef.current.appendChild(tile);
       return;
     }
 
     targetRef.current.appendChild(element);
+  };
+
+  const ensureParticipantTile = (participant) => {
+    const participantId = participant?.identity || participant?.sid || 'remote';
+    let tile = Array.from(cameraRef.current?.querySelectorAll('[data-face-tile="true"]') || [])
+      .find((item) => item.dataset.participantId === participantId);
+    if (tile) return tile;
+
+    tile = document.createElement('div');
+    tile.dataset.participantId = participantId;
+    tile.dataset.faceTile = 'true';
+    tile.style.aspectRatio = '1 / 1';
+    tile.style.background = '#050505';
+    tile.style.border = '1px solid #2A2A2A';
+    tile.style.borderRadius = '8px';
+    tile.style.overflow = 'hidden';
+    tile.style.position = 'relative';
+
+    const empty = document.createElement('div');
+    empty.dataset.emptyParticipant = 'true';
+    empty.textContent = 'Camera is off';
+    empty.style.alignItems = 'center';
+    empty.style.color = '#D4D4D4';
+    empty.style.display = 'flex';
+    empty.style.fontSize = '13px';
+    empty.style.fontWeight = '900';
+    empty.style.height = '100%';
+    empty.style.justifyContent = 'center';
+    empty.style.padding = '12px';
+    empty.style.textAlign = 'center';
+    tile.appendChild(empty);
+
+    const label = document.createElement('span');
+    label.textContent = participant?.name || participant?.identity || 'Guest';
+    label.style.background = 'rgba(0,0,0,0.7)';
+    label.style.borderRadius = '999px';
+    label.style.bottom = '8px';
+    label.style.color = '#FFFFFF';
+    label.style.fontSize = '12px';
+    label.style.fontWeight = '900';
+    label.style.left = '8px';
+    label.style.padding = '5px 8px';
+    label.style.position = 'absolute';
+    tile.appendChild(label);
+
+    cameraRef.current?.appendChild(tile);
+    return tile;
+  };
+
+  const removeParticipantTile = (participantId) => {
+    if (!participantId) return;
+    Array.from(cameraRef.current?.querySelectorAll('[data-face-tile="true"]') || [])
+      .find((tile) => tile.dataset.participantId === participantId)
+      ?.remove();
   };
 
   return (
