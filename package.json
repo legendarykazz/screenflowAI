@@ -9,6 +9,8 @@
     "dev": "vite",
     "build": "vite build && electron-builder --publish never",
     "vercel-build": "vite build",
+    "health": "node scripts/health-check.js",
+    "health:quick": "node scripts/health-check.js --skip-build",
     "start": "electron .",
     "dev:electron": "set SCREENFLOW_DEV_SERVER=1&& electron ."
   },
