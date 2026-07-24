@@ -97,6 +97,7 @@ function checkElectronBridge() {
   assertIncludes(preload, 'saveAIKeys', 'Preload exposes saved settings bridge');
   assertIncludes(main, 'livekit-server-sdk', 'Electron main can mint LiveKit presenter tokens');
   assertIncludes(main, 'savedLiveKit', 'Electron main can read saved LiveKit settings');
+  assertIncludes(main, 'https://screenflow-ai.vercel.app/api/livekit-token', 'Electron main can fall back to hosted LiveKit token service');
   assertIncludes(main, 'desktopCapturer.getSources', 'Electron main can list screen/window sources');
   assertIncludes(main, "ipcMain.handle('recording:save-file'", 'Electron main can save recorded videos');
   assertIncludes(settings, 'handleSaveLiveKit', 'Settings page can save LiveKit credentials');

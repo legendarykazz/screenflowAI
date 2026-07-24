@@ -643,10 +643,27 @@ ipcMain.handle('livekit:create-token', async (_, roomName, participantName) => {
   const apiSecret = cleanEnvValue(savedLiveKit.apiSecret || process.env.LIVEKIT_API_SECRET, 'LIVEKIT_API_SECRET');
 
   if (!livekitUrl || !apiKey || !apiSecret) {
-    return {
-      success: false,
-      error: 'Add LiveKit URL, API key, and API secret in Settings > Integrations before starting a live room.'
-    };
+    try {
+      const endpoint = savedLiveKit.tokenEndpoint || 'https://screenflow-ai.vercel.app/api/livekit-token';
+      const roomCode = String(roomName || '').trim().toUpperCase();
+      const name = String(participantName || 'Presenter').trim();
+      const params = new URLSearchParams({ roomCode, participantName: name, role: 'presenter' });
+      const response = await fetch(`${endpoint}?${params.toString()}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomCode, participantName: name, role: 'presenter' })
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        return { success: false, error: result.error || 'Unable to create LiveKit token from the hosted token service.' };
+      }
+      return { success: true, ...result };
+    } catch (err) {
+      return {
+        success: false,
+        error: `Add LiveKit settings in Settings > Integrations, or check the hosted token service. ${err.message || ''}`.trim()
+      };
+    }
   }
 
   try {
