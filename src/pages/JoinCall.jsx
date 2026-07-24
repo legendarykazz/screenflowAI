@@ -77,7 +77,7 @@ export default function JoinCall() {
         return;
       }
       if (roomRef.current) {
-        roomRef.current.disconnect();
+        safeDisconnectRoom(roomRef.current);
         roomRef.current = null;
       }
       resetCallState('Ready to reconnect');
@@ -102,6 +102,7 @@ export default function JoinCall() {
       roomRef.current = room;
 
       room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+        if (roomRef.current !== room) return;
         try {
           attachTrack(track, participant);
           updateParticipants(room);
@@ -110,10 +111,12 @@ export default function JoinCall() {
         }
       });
       room.on(RoomEvent.DataReceived, (payload, participant) => {
+        if (roomRef.current !== room) return;
         handleRoomCommand(payload, participant);
       });
 
       room.on(RoomEvent.TrackUnsubscribed, (track) => {
+        if (roomRef.current !== room) return;
         try {
           detachTrackElements(track).forEach((element) => {
             const tile = element.closest?.('[data-face-tile="true"]');
@@ -129,6 +132,7 @@ export default function JoinCall() {
       });
 
       room.on(RoomEvent.ParticipantConnected, () => {
+        if (roomRef.current !== room) return;
         try {
           updateParticipants(room);
         } catch (error) {
@@ -136,6 +140,7 @@ export default function JoinCall() {
         }
       });
       room.on(RoomEvent.ParticipantDisconnected, (participant) => {
+        if (roomRef.current !== room) return;
         try {
           removeParticipantTile(participant?.identity);
           updateParticipants(room);
@@ -144,6 +149,7 @@ export default function JoinCall() {
         }
       });
       room.on(RoomEvent.Disconnected, () => {
+        if (roomRef.current !== room) return;
         resetCallState('Disconnected');
       });
 
@@ -159,7 +165,7 @@ export default function JoinCall() {
   };
 
   const leaveRoom = () => {
-    roomRef.current?.disconnect();
+    safeDisconnectRoom(roomRef.current);
     roomRef.current = null;
   };
 
@@ -186,6 +192,8 @@ export default function JoinCall() {
     stopGuestWhiteboard();
     mediaRef.current?.querySelectorAll('[data-track-sid]').forEach((element) => element.remove());
     cameraRef.current?.querySelectorAll('[data-face-tile="true"]').forEach((element) => element.remove());
+    setTrackPlaceholderVisible(mediaRef.current, true);
+    setTrackPlaceholderVisible(cameraRef.current, true);
   };
 
   const toggleMic = async () => {
@@ -193,7 +201,7 @@ export default function JoinCall() {
     if (!room) return;
 
     if (micOnRef.current) {
-      if (publishedMicTrackRef.current) await room.localParticipant.unpublishTrack(publishedMicTrackRef.current);
+      await safeUnpublishTrack(room, publishedMicTrackRef.current);
       localMicStreamRef.current?.getTracks().forEach((track) => track.stop());
       localMicStreamRef.current = null;
       publishedMicTrackRef.current = null;
@@ -223,7 +231,7 @@ export default function JoinCall() {
     if (!room) return;
 
     if (cameraOnRef.current) {
-      if (publishedCameraTrackRef.current) await room.localParticipant.unpublishTrack(publishedCameraTrackRef.current);
+      await safeUnpublishTrack(room, publishedCameraTrackRef.current);
       localCameraStreamRef.current?.getTracks().forEach((track) => track.stop());
       localCameraStreamRef.current = null;
       publishedCameraTrackRef.current = null;
@@ -335,9 +343,7 @@ export default function JoinCall() {
   };
 
   const stopPublishingScreen = async (room = roomRef.current) => {
-    if (publishedScreenTrackRef.current && room) {
-      await room.localParticipant.unpublishTrack(publishedScreenTrackRef.current);
-    }
+    await safeUnpublishTrack(room, publishedScreenTrackRef.current);
     publishedScreenTrackRef.current?.stop?.();
     publishedScreenTrackRef.current = null;
     stopGuestWhiteboard();
@@ -382,7 +388,7 @@ export default function JoinCall() {
       if (command.targetIdentity && command.targetIdentity !== localIdentityRef.current) return;
       if (command.type === 'room-ended') {
         setStatus('Host ended the call.');
-        roomRef.current?.disconnect();
+        safeDisconnectRoom(roomRef.current);
       }
       if (command.type === 'share-stopped') {
         clearHostScreen();
@@ -419,7 +425,11 @@ export default function JoinCall() {
     activeVideoSidRef.current = null;
     setHasHostScreen(false);
     mediaRef.current?.querySelectorAll('[data-track-sid]').forEach((element) => element.remove());
-    if (mediaRef.current && !mediaRef.current.querySelector('[data-placeholder="true"]')) {
+    const existingPlaceholder = mediaRef.current?.querySelector('[data-placeholder="true"]');
+    if (existingPlaceholder) {
+      existingPlaceholder.style.display = '';
+      existingPlaceholder.textContent = 'No host screen yet.';
+    } else if (mediaRef.current) {
       const placeholder = document.createElement('span');
       placeholder.dataset.placeholder = 'true';
       placeholder.textContent = 'No host screen yet.';
@@ -483,7 +493,7 @@ export default function JoinCall() {
     }
 
     element.dataset.trackSid = track.sid;
-    targetRef.current.querySelector('[data-placeholder="true"]')?.remove();
+    setTrackPlaceholderVisible(targetRef.current, false);
 
     if (track.kind === 'video') {
       if (isCamera) activeCameraSidRef.current = track.sid;
@@ -592,8 +602,36 @@ export default function JoinCall() {
 
   const detachTrackElements = (track) => {
     if (!track || typeof track.detach !== 'function') return [];
-    const detached = track.detach();
-    return Array.isArray(detached) ? detached : [];
+    try {
+      const detached = track.detach();
+      return Array.isArray(detached) ? detached : [];
+    } catch (error) {
+      return [];
+    }
+  };
+
+  const setTrackPlaceholderVisible = (node, visible) => {
+    node?.querySelectorAll?.('[data-placeholder="true"]').forEach((element) => {
+      element.style.display = visible ? '' : 'none';
+    });
+  };
+
+  const safeDisconnectRoom = (room) => {
+    if (!room) return;
+    try {
+      room.disconnect();
+    } catch (error) {
+      console.warn('Ignoring stale LiveKit disconnect error:', error);
+    }
+  };
+
+  const safeUnpublishTrack = async (room, track) => {
+    if (!room || !track) return;
+    try {
+      await room.localParticipant?.unpublishTrack?.(track);
+    } catch (error) {
+      console.warn('Ignoring stale LiveKit unpublish error:', error);
+    }
   };
 
   const stopMediaStream = (stream) => {
