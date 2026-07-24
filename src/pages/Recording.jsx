@@ -81,6 +81,7 @@ export default function Recording({ onOpenProject, license }) {
   const [isRecording, setIsRecording] = useState(false);
   const [recordTime, setRecordTime] = useState(0);
   const [brandKit, setBrandKit] = useState(null);
+  const [projectName, setProjectName] = useState(() => `Screen Recording ${new Date().toLocaleDateString()}`);
 
   // Custom Area Crop Selector State
   const [showCropSelector, setShowCropSelector] = useState(false);
@@ -282,6 +283,11 @@ export default function Recording({ onOpenProject, license }) {
     zoom_smoothing: 0.08,
     click_emphasis: showCursor ? activePreset.settings.cursor_highlight : 'none'
   });
+
+  const getRecordingProjectName = () => {
+    const trimmedName = projectName.trim();
+    return trimmedName || `Screen Recording ${new Date().toLocaleString()}`;
+  };
 
   const getMimeType = (hasAudio) => {
     const types = hasAudio 
@@ -849,7 +855,7 @@ export default function Recording({ onOpenProject, license }) {
           }
 
           const res = await withTimeout(
-            window.electron.saveRecordedFile(arrayBuffer),
+            window.electron.saveRecordedFile(arrayBuffer, getRecordingProjectName()),
             45000,
             'Saving recording'
           );
@@ -859,7 +865,7 @@ export default function Recording({ onOpenProject, license }) {
             return;
           }
 
-          const project = await window.electron.createProject(`Cinematic Recording - ${new Date().toLocaleTimeString()}`);
+          const project = await window.electron.createProject(getRecordingProjectName());
           const settings = buildProjectSettings();
 
           await window.electron.updateProject(project.id, {
@@ -1070,6 +1076,24 @@ export default function Recording({ onOpenProject, license }) {
 
       <section style={{ display: 'grid', gridTemplateColumns: 'minmax(520px, 1fr) 340px', gap: '22px', alignItems: 'start' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div style={{ ...controlCard, padding: '22px' }}>
+            <div style={{ marginBottom: '14px' }}>
+              <h2 style={{ fontSize: '16px', fontWeight: 800 }}>Project name</h2>
+              <p style={{ color: '#647087', fontSize: '13px', marginTop: '3px' }}>This name is used for the project and the saved recording file.</p>
+            </div>
+            <input
+              disabled={isRecording}
+              onChange={(event) => setProjectName(event.target.value)}
+              placeholder="Name this recording"
+              style={{
+                ...selectStyle,
+                opacity: isRecording ? 0.65 : 1
+              }}
+              type="text"
+              value={projectName}
+            />
+          </div>
+
           <div style={{ ...controlCard, padding: '22px' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', marginBottom: '16px' }}>
               <div>

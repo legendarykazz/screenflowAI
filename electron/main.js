@@ -882,15 +882,34 @@ ipcMain.handle('recording:manual-zoom', async (_, direction) => {
   return { success: true };
 });
 
-ipcMain.handle('recording:save-file', async (_, arrayBuffer) => {
+function sanitizeRecordingFileName(fileName) {
+  const safeName = String(fileName || '')
+    .trim()
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '-')
+    .replace(/\s+/g, ' ')
+    .replace(/\.+$/g, '')
+    .slice(0, 90);
+  return safeName || `recording_${Date.now()}`;
+}
+
+function getUniqueRecordingPath(recordingsDir, baseName) {
+  let index = 0;
+  let candidate = path.join(recordingsDir, `${baseName}.webm`);
+  while (fs.existsSync(candidate)) {
+    index += 1;
+    candidate = path.join(recordingsDir, `${baseName}-${index}.webm`);
+  }
+  return candidate;
+}
+
+ipcMain.handle('recording:save-file', async (_, arrayBuffer, fileName) => {
   try {
     const buffer = Buffer.from(arrayBuffer);
     const recordingsDir = path.join(app.getPath('userData'), 'recordings');
     if (!fs.existsSync(recordingsDir)) {
       fs.mkdirSync(recordingsDir, { recursive: true });
     }
-    const filename = `recording_${Date.now()}.webm`;
-    const filePath = path.join(recordingsDir, filename);
+    const filePath = getUniqueRecordingPath(recordingsDir, sanitizeRecordingFileName(fileName));
     fs.writeFileSync(filePath, buffer);
     logActivity('RECORDING_SAVE_FILE', `Saved recorded video file to: ${filePath}`);
 

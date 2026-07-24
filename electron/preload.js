@@ -22,7 +22,7 @@ contextBridge.exposeInMainWorld('electron', {
   stopRecording: () => ipcRenderer.invoke('recording:stop'),
   stopRecordingFromWidget: () => ipcRenderer.invoke('recording:stop-from-widget'),
   manualZoom: (direction) => ipcRenderer.invoke('recording:manual-zoom', direction),
-  saveRecordedFile: (arrayBuffer) => ipcRenderer.invoke('recording:save-file', arrayBuffer),
+  saveRecordedFile: (arrayBuffer, fileName) => ipcRenderer.invoke('recording:save-file', arrayBuffer, fileName),
   getMediaPort: () => ipcRenderer.invoke('recording:get-media-port'),
   onRecordingStatus: (callback) => {
     const listener = (_, status) => callback(status);

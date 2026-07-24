@@ -52,6 +52,24 @@ export default function Projects({ onOpenProject }) {
     }
   };
 
+  const handleRename = async (proj, e) => {
+    if (e) e.stopPropagation();
+    setContextMenu(null);
+    const nextName = window.prompt('Rename project', proj.name || '');
+    const trimmedName = nextName?.trim();
+    if (!trimmedName || trimmedName === proj.name) return;
+
+    if (window.electron?.updateProject) {
+      await window.electron.updateProject(proj.id, { name: trimmedName });
+    }
+
+    setProjects(prev => prev.map(project => (
+      project.id === proj.id
+        ? { ...project, name: trimmedName, updated_at: Date.now() }
+        : project
+    )));
+  };
+
   const handleCreate = async () => {
     const name = `Project #${Math.floor(100 + Math.random() * 900)}`;
     if (window.electron?.createProject) {
@@ -302,6 +320,13 @@ export default function Projects({ onOpenProject }) {
                       <Copy size={11} /> Duplicate
                     </button>
                     <button 
+                      onClick={e => handleRename(proj, e)}
+                      style={{ background: 'rgba(124,58,237,0.08)', border: 'none', borderRadius: '8px', padding: '6px 10px', color: '#7C3AED', fontSize: '11px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                      title="Rename project"
+                    >
+                      <Edit3 size={11} />
+                    </button>
+                    <button 
                       onClick={e => handleDelete(proj.id, e)}
                       style={{ background: 'rgba(239,68,68,0.06)', border: 'none', borderRadius: '8px', padding: '6px 10px', color: '#ef4444', fontSize: '11px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
                     >
@@ -383,6 +408,9 @@ export default function Projects({ onOpenProject }) {
                       </button>
                       <button onClick={e => handleDuplicate(proj, e)} style={{ background: '#F8FAFF', border: 'none', borderRadius: '8px', padding: '6px 10px', color: '#5A607F', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}>
                         <Copy size={11} />
+                      </button>
+                      <button onClick={e => handleRename(proj, e)} style={{ background: 'rgba(124,58,237,0.08)', border: 'none', borderRadius: '8px', padding: '6px 10px', color: '#7C3AED', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }} title="Rename project">
+                        <Edit3 size={11} />
                       </button>
                       <button onClick={e => handleDelete(proj.id, e)} style={{ background: 'rgba(239,68,68,0.06)', border: 'none', borderRadius: '8px', padding: '6px 10px', color: '#ef4444', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}>
                         <Trash2 size={11} />
