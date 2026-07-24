@@ -480,6 +480,7 @@ export default function JoinCall() {
     element.style.background = '#090B12';
     element.style.marginTop = '0';
     element.style.objectFit = isCamera ? 'cover' : 'contain';
+    element.style.transform = 'none';
     if (track.kind === 'audio') {
       element.controls = false;
       element.muted = false;
@@ -953,6 +954,7 @@ const localCameraStyle = {
   background: '#000000',
   display: 'block',
   objectFit: 'cover',
+  transform: 'none',
   height: '100%',
   width: '100%'
 };
@@ -1039,6 +1041,7 @@ const responsiveStyles = `
     .media-box video {
       max-height: 46vh !important;
       object-fit: contain;
+      transform: none !important;
     }
 
     .camera-box {
@@ -1048,6 +1051,7 @@ const responsiveStyles = `
 
     .camera-box video {
       object-fit: cover;
+      transform: none !important;
     }
 
     input,

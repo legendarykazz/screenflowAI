@@ -44,6 +44,10 @@ const noteSeeds = [
   'Ask AI can summarize the current call context for participants.'
 ];
 
+const LIVE_OUTPUT_WIDTH = 1280;
+const LIVE_OUTPUT_HEIGHT = 720;
+const LIVE_OUTPUT_FPS = 24;
+
 export default function LiveCall() {
   const canvasRef = useRef(null);
   const outputVideoRef = useRef(null);
@@ -148,9 +152,9 @@ export default function LiveCall() {
         setSourceName('Whiteboard');
         setStatus('Live whiteboard feed is running.');
         const canvas = canvasRef.current;
-        canvas.width = 1920;
-        canvas.height = 1080;
-        const outputStream = canvas.captureStream(30);
+        canvas.width = LIVE_OUTPUT_WIDTH;
+        canvas.height = LIVE_OUTPUT_HEIGHT;
+        const outputStream = canvas.captureStream(LIVE_OUTPUT_FPS);
         outputStreamRef.current = outputStream;
         if (outputVideoRef.current) outputVideoRef.current.srcObject = outputStream;
         await publishOutputStream(outputStream);
@@ -163,8 +167,12 @@ export default function LiveCall() {
       }
 
       const screenStream = await navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: 30 },
-        audio: true
+        video: {
+          width: { ideal: LIVE_OUTPUT_WIDTH },
+          height: { ideal: LIVE_OUTPUT_HEIGHT },
+          frameRate: { ideal: LIVE_OUTPUT_FPS, max: LIVE_OUTPUT_FPS }
+        },
+        audio: false
       });
       const trackLabel = screenStream.getVideoTracks()[0]?.label || 'Selected screen';
 
@@ -182,11 +190,10 @@ export default function LiveCall() {
       await video.play();
 
       const canvas = canvasRef.current;
-      const trackSettings = screenStream.getVideoTracks()[0]?.getSettings?.() || {};
-      canvas.width = trackSettings.width || 1920;
-      canvas.height = trackSettings.height || 1080;
+      canvas.width = LIVE_OUTPUT_WIDTH;
+      canvas.height = LIVE_OUTPUT_HEIGHT;
 
-      const outputStream = canvas.captureStream(30);
+      const outputStream = canvas.captureStream(LIVE_OUTPUT_FPS);
       outputStreamRef.current = outputStream;
       if (outputVideoRef.current) {
         outputVideoRef.current.srcObject = outputStream;
@@ -588,8 +595,8 @@ export default function LiveCall() {
       source: Track.Source.ScreenShare,
       simulcast: false,
       videoEncoding: {
-        maxBitrate: 3_500_000,
-        maxFramerate: 30
+        maxBitrate: 1_800_000,
+        maxFramerate: LIVE_OUTPUT_FPS
       }
     });
     setLiveKitStatus('Publishing enhanced output');
@@ -625,8 +632,8 @@ export default function LiveCall() {
       name: 'presenter-camera',
       source: Track.Source.Camera,
       videoEncoding: {
-        maxBitrate: 1_200_000,
-        maxFramerate: 30
+        maxBitrate: 700_000,
+        maxFramerate: 24
       }
     });
   };
@@ -650,6 +657,7 @@ export default function LiveCall() {
     element.style.background = '#0B0F19';
     element.style.display = track.kind === 'video' ? 'block' : 'none';
     element.style.objectFit = isRemoteScreen ? 'contain' : 'cover';
+    element.style.transform = 'none';
     if (track.kind === 'audio') element.style.display = 'none';
 
     if (track.kind === 'video') {
@@ -1169,7 +1177,8 @@ export default function LiveCall() {
   };
 
   return (
-    <div style={presenterMode ? presenterPageStyle : pageStyle}>
+    <div data-live-call-root="true" style={presenterMode ? presenterPageStyle : pageStyle}>
+      <style>{liveCallResponsiveStyles}</style>
       <header style={headerStyle}>
         <div>
           <h1 style={titleStyle}>Live Call Studio</h1>
@@ -1199,7 +1208,7 @@ export default function LiveCall() {
             </div>
             <span style={meetingCountStyle}>{remoteParticipants.length + 1} in call</span>
           </div>
-          <div style={peopleGridStyle}>
+          <div data-people-grid="true" style={peopleGridStyle}>
             <div style={localPresenterTileStyle}>
               {cameraOn ? (
                 <video ref={cameraPreviewRef} autoPlay muted playsInline style={stageVideoStyle} />
@@ -1313,7 +1322,7 @@ export default function LiveCall() {
               {!remoteParticipants.length && <div style={emptyTileStyle}>Waiting for people to join</div>}
             </div>
           </div>
-          <div style={meetControlDockStyle}>
+          <div data-meet-dock="true" style={meetControlDockStyle}>
             <button onClick={toggleMic} style={dockButtonStyle(micOn)} className="tooltip" data-tooltip={micOn ? 'Mute microphone' : 'Turn microphone on'}>
               <Mic size={18} />
             </button>
@@ -1832,6 +1841,7 @@ const stageVideoStyle = {
   display: 'block',
   height: '100%',
   objectFit: 'cover',
+  transform: 'none',
   width: '100%'
 };
 
@@ -2189,3 +2199,52 @@ const secondaryButtonStyle = (active) => ({
   justifyContent: 'center',
   minHeight: '40px'
 });
+
+const liveCallResponsiveStyles = `
+  [data-live-call-root="true"] video {
+    transform: none !important;
+  }
+
+  @media (max-width: 760px) {
+    [data-live-call-root="true"] {
+      margin: 0 !important;
+      min-height: 100vh !important;
+      padding: 10px !important;
+    }
+
+    [data-live-call-root="true"] header {
+      align-items: stretch !important;
+      flex-direction: column !important;
+    }
+
+    [data-live-call-root="true"] header > div:last-child {
+      display: grid !important;
+      grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+      width: 100% !important;
+    }
+
+    [data-people-grid="true"] {
+      gap: 8px !important;
+      grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+      min-height: 0 !important;
+      padding: 8px !important;
+    }
+
+    [data-host-share-tile="true"] {
+      grid-column: 1 / -1 !important;
+      min-height: 230px !important;
+    }
+
+    [data-host-share-tile="true"] canvas {
+      object-fit: contain !important;
+    }
+
+    [data-meet-dock="true"] {
+      bottom: 10px !important;
+      max-width: calc(100vw - 20px) !important;
+      overflow-x: auto !important;
+      position: sticky !important;
+      z-index: 20 !important;
+    }
+  }
+`;

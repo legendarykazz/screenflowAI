@@ -13,6 +13,8 @@ import {
   Sparkles,
   Square,
   Timer,
+  ZoomIn,
+  ZoomOut,
   Volume2,
   Wand2
 } from 'lucide-react';
@@ -74,7 +76,7 @@ export default function Recording({ onOpenProject, license }) {
   const [showCursor, setShowCursor] = useState(true);
   const [cursorColor, setCursorColor] = useState('#FF4D7E');
   const [presetId, setPresetId] = useState('cinematic');
-  const [resolution, setResolution] = useState('1080p - 60fps');
+  const [resolution, setResolution] = useState('1080p - 30fps');
   const [countdown, setCountdown] = useState(true);
   const [countdownVal, setCountdownVal] = useState(0);
   const [statusMessage, setStatusMessage] = useState('Ready to capture a polished screen recording.');
@@ -117,6 +119,7 @@ export default function Recording({ onOpenProject, license }) {
   const latestZoomLabelAtRef = useRef(0);
 
   const activePreset = cinematicPresets.find((preset) => preset.id === presetId) || cinematicPresets[0];
+  const isElectronRuntime = !!window.electron?.getAppVersion;
   const withTimeout = (promise, ms, label) => (
     Promise.race([
       promise,
@@ -289,6 +292,8 @@ export default function Recording({ onOpenProject, license }) {
     return trimmedName || `Screen Recording ${new Date().toLocaleString()}`;
   };
 
+  const getCaptureFps = () => (resolution.includes('60fps') && isElectronRuntime ? 60 : 30);
+
   const getMimeType = (hasAudio) => {
     const types = hasAudio 
       ? [
@@ -309,7 +314,7 @@ export default function Recording({ onOpenProject, license }) {
     const trackSettings = sourceTrack?.getSettings?.() || {};
     const sourceWidth = trackSettings.width || 1920;
     const sourceHeight = trackSettings.height || 1080;
-    const fps = resolution.includes('60fps') ? 60 : 30;
+    const fps = getCaptureFps();
 
     const video = document.createElement('video');
     video.muted = true;
@@ -656,7 +661,7 @@ export default function Recording({ onOpenProject, license }) {
                 chromeMediaSourceId: targetSource,
                 cursor: 'never',
                 minFrameRate: 30,
-                maxFrameRate: 60
+                maxFrameRate: getCaptureFps()
               }
             }
           });
@@ -672,7 +677,7 @@ export default function Recording({ onOpenProject, license }) {
                   chromeMediaSourceId: targetSource,
                   cursor: 'never',
                   minFrameRate: 30,
-                  maxFrameRate: 60
+                  maxFrameRate: getCaptureFps()
                 }
               }
             });
@@ -681,7 +686,7 @@ export default function Recording({ onOpenProject, license }) {
             screenStream = await navigator.mediaDevices.getDisplayMedia({
               video: {
                 cursor: 'never',
-                frameRate: resolution.includes('60fps') ? 60 : 30
+                frameRate: getCaptureFps()
               },
               audio: systemAudio
             });
@@ -693,7 +698,7 @@ export default function Recording({ onOpenProject, license }) {
           screenStream = await navigator.mediaDevices.getDisplayMedia({
             video: {
               cursor: 'never',
-              frameRate: resolution.includes('60fps') ? 60 : 30
+              frameRate: getCaptureFps()
             },
             audio: systemAudio
           });
@@ -702,7 +707,7 @@ export default function Recording({ onOpenProject, license }) {
           screenStream = await navigator.mediaDevices.getDisplayMedia({
             video: {
               cursor: 'never',
-              frameRate: resolution.includes('60fps') ? 60 : 30
+              frameRate: getCaptureFps()
             },
             audio: false
           });
@@ -895,7 +900,10 @@ export default function Recording({ onOpenProject, license }) {
 
       mediaRecorder.start();
       setIsRecording(true);
-      setStatusMessage('Recording! Ctrl+Alt+Up to zoom, Ctrl+Alt+Down to zoom out. Move mouse to track.');
+      setStatusMessage(isElectronRuntime
+        ? 'Recording! Ctrl+Alt+Up to zoom, Ctrl+Alt+Down to zoom out. Move mouse to track.'
+        : 'Recording! Use the floating web controls below to zoom or stop.'
+      );
 
       if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
       timerIntervalRef.current = setInterval(() => {
@@ -1000,6 +1008,18 @@ export default function Recording({ onOpenProject, license }) {
 
     // Stop camera/screen hardware tracks AFTER recorder closes
     setTimeout(stopStreams, 500);
+  };
+
+  const handleManualZoom = async (direction) => {
+    if (direction === 'in') {
+      targetZoomLevelRef.current = Math.min(3.0, targetZoomLevelRef.current + 0.25);
+    } else {
+      targetZoomLevelRef.current = Math.max(1.0, targetZoomLevelRef.current - 0.25);
+    }
+    latestZoomLabelAtRef.current = performance.now();
+    try {
+      await window.electron?.manualZoom?.(direction);
+    } catch (error) {}
   };
 
   const formatTime = (sec) => {
@@ -1145,8 +1165,8 @@ export default function Recording({ onOpenProject, license }) {
               </Field>
               <Field label="Resolution">
                 <select value={resolution} onChange={(event) => setResolution(event.target.value)} style={selectStyle}>
-                  <option>1080p - 60fps</option>
                   <option>1080p - 30fps</option>
+                  <option disabled={!isElectronRuntime}>1080p - 60fps</option>
                   <option>4K UHD - 30fps</option>
                 </select>
               </Field>
@@ -1423,6 +1443,23 @@ export default function Recording({ onOpenProject, license }) {
           </div>
         </div>
       )}
+      {isRecording && !isElectronRuntime && (
+        <div style={webRecordingDockStyle}>
+          <span style={webRecordingLiveStyle}>REC</span>
+          <span style={webRecordingTimeStyle}>{formatTime(recordTime)}</span>
+          <button onClick={() => handleManualZoom('out')} style={webDockButtonStyle} title="Zoom out">
+            <ZoomOut size={18} />
+          </button>
+          <span style={webZoomPillStyle}>{targetZoomLevelRef.current.toFixed(1)}x</span>
+          <button onClick={() => handleManualZoom('in')} style={webDockButtonStyle} title="Zoom in">
+            <ZoomIn size={18} />
+          </button>
+          <button onClick={handleStop} style={webStopButtonStyle}>
+            <Square size={16} fill="#FFFFFF" />
+            Stop
+          </button>
+        </div>
+      )}
       {/* 5-second countdown overlay */}
       {countdownVal > 0 && (
         <div style={{
@@ -1513,6 +1550,79 @@ const selectStyle = {
   outline: 'none',
   padding: '0 12px',
   width: '100%'
+};
+
+const webRecordingDockStyle = {
+  alignItems: 'center',
+  background: 'rgba(15, 23, 42, 0.94)',
+  border: '1px solid rgba(255, 255, 255, 0.14)',
+  borderRadius: '999px',
+  bottom: '18px',
+  boxShadow: '0 18px 44px rgba(15, 23, 42, 0.34)',
+  color: '#FFFFFF',
+  display: 'flex',
+  gap: '8px',
+  left: '50%',
+  maxWidth: 'calc(100vw - 24px)',
+  overflowX: 'auto',
+  padding: '8px',
+  position: 'fixed',
+  transform: 'translateX(-50%)',
+  zIndex: 100000
+};
+
+const webRecordingLiveStyle = {
+  background: '#DC2626',
+  borderRadius: '999px',
+  color: '#FFFFFF',
+  flexShrink: 0,
+  fontSize: '12px',
+  fontWeight: 900,
+  padding: '8px 10px'
+};
+
+const webRecordingTimeStyle = {
+  flexShrink: 0,
+  fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace',
+  fontSize: '14px',
+  fontWeight: 900,
+  minWidth: '82px',
+  textAlign: 'center'
+};
+
+const webDockButtonStyle = {
+  alignItems: 'center',
+  background: 'rgba(255,255,255,0.1)',
+  border: '1px solid rgba(255,255,255,0.18)',
+  borderRadius: '999px',
+  color: '#FFFFFF',
+  cursor: 'pointer',
+  display: 'flex',
+  flexShrink: 0,
+  height: '40px',
+  justifyContent: 'center',
+  width: '40px'
+};
+
+const webZoomPillStyle = {
+  background: 'rgba(124, 58, 237, 0.34)',
+  border: '1px solid rgba(255,255,255,0.14)',
+  borderRadius: '999px',
+  flexShrink: 0,
+  fontSize: '13px',
+  fontWeight: 900,
+  minWidth: '52px',
+  padding: '9px 10px',
+  textAlign: 'center'
+};
+
+const webStopButtonStyle = {
+  ...webDockButtonStyle,
+  background: '#DC2626',
+  border: '1px solid #DC2626',
+  gap: '7px',
+  padding: '0 14px',
+  width: 'auto'
 };
 
 const recordButtonStyle = (background) => ({
