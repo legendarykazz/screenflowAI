@@ -636,14 +636,16 @@ ipcMain.handle('live:set-display-source', (_, sourceId) => {
 });
 
 ipcMain.handle('livekit:create-token', async (_, roomName, participantName) => {
-  const livekitUrl = cleanEnvValue(process.env.LIVEKIT_URL, 'LIVEKIT_URL');
-  const apiKey = cleanEnvValue(process.env.LIVEKIT_API_KEY, 'LIVEKIT_API_KEY');
-  const apiSecret = cleanEnvValue(process.env.LIVEKIT_API_SECRET, 'LIVEKIT_API_SECRET');
+  const storedKeys = getAIKeys();
+  const savedLiveKit = storedKeys.livekit || {};
+  const livekitUrl = cleanEnvValue(savedLiveKit.url || process.env.LIVEKIT_URL, 'LIVEKIT_URL');
+  const apiKey = cleanEnvValue(savedLiveKit.apiKey || process.env.LIVEKIT_API_KEY, 'LIVEKIT_API_KEY');
+  const apiSecret = cleanEnvValue(savedLiveKit.apiSecret || process.env.LIVEKIT_API_SECRET, 'LIVEKIT_API_SECRET');
 
   if (!livekitUrl || !apiKey || !apiSecret) {
     return {
       success: false,
-      error: 'Set LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET before starting the app.'
+      error: 'Add LiveKit URL, API key, and API secret in Settings > Integrations before starting a live room.'
     };
   }
 

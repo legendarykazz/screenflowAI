@@ -10,6 +10,9 @@ export default function SettingsPage({ license, onActivateLicense }) {
   const [activeTab, setActiveTab] = useState('general');
   const [apiKey, setApiKey] = useState('');
   const [geminiApiKey, setGeminiApiKey] = useState('');
+  const [livekitUrl, setLivekitUrl] = useState('');
+  const [livekitApiKey, setLivekitApiKey] = useState('');
+  const [livekitApiSecret, setLivekitApiSecret] = useState('');
   const [licenseKey, setLicenseKey] = useState('');
   const [statusMessage, setStatusMessage] = useState({ text: '', type: 'success' });
   const [logs, setLogs] = useState('Initializing activity log viewer...');
@@ -58,6 +61,9 @@ export default function SettingsPage({ license, onActivateLicense }) {
       const storedKeys = await window.electron?.getAIKeys?.();
       if (storedKeys?.openai) setApiKey(storedKeys.openai);
       if (storedKeys?.gemini) setGeminiApiKey(storedKeys.gemini);
+      if (storedKeys?.livekit?.url) setLivekitUrl(storedKeys.livekit.url);
+      if (storedKeys?.livekit?.apiKey) setLivekitApiKey(storedKeys.livekit.apiKey);
+      if (storedKeys?.livekit?.apiSecret) setLivekitApiSecret(storedKeys.livekit.apiSecret);
     };
     loadSavedKeys();
     if (license?.key) setLicenseKey(license.key);
@@ -88,6 +94,20 @@ export default function SettingsPage({ license, onActivateLicense }) {
     localStorage.setItem('gemini_api_key', geminiApiKey);
     await window.electron?.saveAIKeys?.({ gemini: geminiApiKey });
     showStatus('Gemini API key saved successfully.');
+  };
+
+  const handleSaveLiveKit = async () => {
+    const nextLiveKit = {
+      url: livekitUrl.trim(),
+      apiKey: livekitApiKey.trim(),
+      apiSecret: livekitApiSecret.trim()
+    };
+    if (!nextLiveKit.url || !nextLiveKit.apiKey || !nextLiveKit.apiSecret) {
+      showStatus('Add LiveKit URL, API key, and API secret before saving.', 'error');
+      return;
+    }
+    await window.electron?.saveAIKeys?.({ livekit: nextLiveKit });
+    showStatus('LiveKit settings saved. Live Call will use them automatically.');
   };
 
   const handleLicenseSubmit = async () => {
@@ -430,6 +450,49 @@ export default function SettingsPage({ license, onActivateLicense }) {
               </div>
 
               {/* OpenAI API Key */}
+              <div style={{ borderTop: '1px solid #F1F5F9', paddingTop: '24px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <label style={{ fontSize: '13px', fontWeight: 700 }}>LiveKit Room Settings</label>
+                <p style={{ fontSize: '12px', color: '#8A94A6' }}>Saved locally for desktop Live Call, so you do not need to set environment variables every time.</p>
+                <input
+                  type="text"
+                  placeholder="wss://your-livekit-host"
+                  value={livekitUrl}
+                  onChange={e => setLivekitUrl(e.target.value)}
+                  style={{
+                    padding: '12px 16px', border: '1px solid #E2E8F0', borderRadius: '12px',
+                    background: '#FFF', fontSize: '14px', outline: 'none', color: '#1A1F36'
+                  }}
+                />
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  <input
+                    type="password"
+                    placeholder="LiveKit API key"
+                    value={livekitApiKey}
+                    onChange={e => setLivekitApiKey(e.target.value)}
+                    style={{
+                      padding: '12px 16px', border: '1px solid #E2E8F0', borderRadius: '12px',
+                      background: '#FFF', fontSize: '14px', outline: 'none', color: '#1A1F36'
+                    }}
+                  />
+                  <input
+                    type="password"
+                    placeholder="LiveKit API secret"
+                    value={livekitApiSecret}
+                    onChange={e => setLivekitApiSecret(e.target.value)}
+                    style={{
+                      padding: '12px 16px', border: '1px solid #E2E8F0', borderRadius: '12px',
+                      background: '#FFF', fontSize: '14px', outline: 'none', color: '#1A1F36'
+                    }}
+                  />
+                </div>
+                <button onClick={handleSaveLiveKit} style={{
+                  background: '#F8FAFF', border: '1px solid #E2E8F0', borderRadius: '12px',
+                  color: '#1A1F36', padding: '12px 20px', fontWeight: 700, fontSize: '13px', cursor: 'pointer', width: 'fit-content'
+                }}>
+                  Save LiveKit Settings
+                </button>
+              </div>
+
               <div style={{ borderTop: '1px solid #F1F5F9', paddingTop: '24px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 <label style={{ fontSize: '13px', fontWeight: 700 }}>Gemini API Key</label>
                 <p style={{ fontSize: '12px', color: '#8A94A6' }}>Used first for AI Captions transcription from your recording audio.</p>

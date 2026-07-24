@@ -91,11 +91,15 @@ function checkPresenterLiveCall() {
 function checkElectronBridge() {
   const preload = read('electron/preload.js');
   const main = read('electron/main.js');
+  const settings = read('src/pages/Settings.jsx');
   assertIncludes(preload, 'createLiveKitToken', 'Preload exposes LiveKit token bridge');
   assertIncludes(preload, 'saveRecordedFile', 'Preload exposes recording save bridge');
+  assertIncludes(preload, 'saveAIKeys', 'Preload exposes saved settings bridge');
   assertIncludes(main, 'livekit-server-sdk', 'Electron main can mint LiveKit presenter tokens');
+  assertIncludes(main, 'savedLiveKit', 'Electron main can read saved LiveKit settings');
   assertIncludes(main, 'desktopCapturer.getSources', 'Electron main can list screen/window sources');
   assertIncludes(main, "ipcMain.handle('recording:save-file'", 'Electron main can save recorded videos');
+  assertIncludes(settings, 'handleSaveLiveKit', 'Settings page can save LiveKit credentials');
 }
 
 function runBuild() {
