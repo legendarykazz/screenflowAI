@@ -26,7 +26,7 @@ export default function JoinCall() {
     return (match?.[1] || '').toUpperCase();
   }, []);
 
-  const [name, setName] = useState('Guest');
+  const [name, setName] = useState('');
   const [status, setStatus] = useState('Ready to join');
   const [connected, setConnected] = useState(false);
   const [cameraOn, setCameraOn] = useState(false);
@@ -71,17 +71,22 @@ export default function JoinCall() {
 
   const joinRoom = async () => {
     try {
+      const participantName = name.trim();
+      if (!participantName) {
+        setStatus('Enter your name before joining.');
+        return;
+      }
       if (roomRef.current) {
         roomRef.current.disconnect();
         roomRef.current = null;
       }
       resetCallState('Ready to reconnect');
       setStatus('Getting access token...');
-      const params = new URLSearchParams({ roomCode, participantName: name, role: 'participant' });
+      const params = new URLSearchParams({ roomCode, participantName, role: 'participant' });
       const response = await fetch(`/api/livekit-token?${params.toString()}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomCode, participantName: name, role: 'participant' })
+        body: JSON.stringify({ roomCode, participantName, role: 'participant' })
       });
       const text = await response.text();
       let result = {};
@@ -624,11 +629,11 @@ export default function JoinCall() {
 
         <label style={labelStyle}>
           Your name
-          <input value={name} onChange={(event) => setName(event.target.value)} disabled={connected} style={inputStyle} />
+          <input value={name} onChange={(event) => setName(event.target.value)} disabled={connected} required placeholder="Enter your name" style={inputStyle} />
         </label>
 
         <div className="join-actions" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-          <button disabled={connected || !roomCode} onClick={joinRoom} style={primaryButtonStyle}>
+          <button disabled={connected || !roomCode || !name.trim()} onClick={joinRoom} style={primaryButtonStyle}>
             <Play size={17} /> Join
           </button>
           <button disabled={!connected} onClick={leaveRoom} style={secondaryButtonStyle}>
