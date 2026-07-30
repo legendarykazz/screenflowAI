@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   Home, 
   Video, 
@@ -11,38 +11,64 @@ import {
   Sparkles,
   Palette,
   Trophy,
-  Users
+  Users,
+  MoreHorizontal,
+  X
 } from 'lucide-react';
 
 export default function Sidebar({ currentPage, setCurrentPage, license }) {
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const menuItems = [
-    { id: 'dashboard', name: 'Home', icon: Home },
-    { id: 'recording', name: 'Record', icon: Video },
+    { id: 'dashboard', name: 'Home', shortName: 'Home', icon: Home },
+    { id: 'recording', name: 'Record', shortName: 'Record', icon: Video },
     { id: 'projects', name: 'Projects', icon: FolderHeart },
     { id: 'exports', name: 'Exports', icon: Download },
     { id: 'brandkit', name: 'Brand Kit', icon: Palette },
     { id: 'aitools', name: 'AI Tools', icon: Sparkles },
-    { id: 'livecall', name: 'Live Call', icon: Users },
-    { id: 'football', name: 'Football Lab', icon: Trophy },
+    { id: 'livecall', name: 'Live Call', shortName: 'Call', icon: Users },
+    { id: 'football', name: 'Football Lab', shortName: 'Football', icon: Trophy },
     { id: 'settings', name: 'Settings', icon: Settings },
   ];
+  const mobilePrimaryIds = ['dashboard', 'recording', 'livecall', 'football'];
+  const mobileSecondaryItems = menuItems.filter((item) => !mobilePrimaryIds.includes(item.id));
+  const mobileMoreActive = mobileSecondaryItems.some((item) => item.id === currentPage);
 
   const isPro = license?.plan === 'pro';
 
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [currentPage]);
+
+  useEffect(() => {
+    if (!mobileMenuOpen) return undefined;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') setMobileMenuOpen(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [mobileMenuOpen]);
+
+  const navigate = (page) => {
+    setMobileMenuOpen(false);
+    setCurrentPage(page);
+  };
+
   return (
-    <div 
-      className="app-sidebar"
-      style={{
-        width: '260px',
-        background: 'var(--bg-primary)',
-        display: 'flex',
-        flexDirection: 'column',
-        justifyContent: 'space-between',
-        padding: '32px 20px',
-        height: '100%',
-        flexShrink: 0
-      }}
-    >
+    <>
+      <nav
+        aria-label="Primary navigation"
+        className="app-sidebar"
+        style={{
+          width: '260px',
+          background: 'var(--bg-primary)',
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'space-between',
+          padding: '32px 20px',
+          height: '100%',
+          flexShrink: 0
+        }}
+      >
       <div className="sidebar-primary" style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
         
         {/* Brand Logo Header */}
@@ -73,9 +99,10 @@ export default function Sidebar({ currentPage, setCurrentPage, license }) {
             const isActive = currentPage === item.id;
             return (
               <button
-                className="sidebar-nav-button"
+                aria-current={isActive ? 'page' : undefined}
+                className={`sidebar-nav-button ${mobilePrimaryIds.includes(item.id) ? 'mobile-primary' : 'mobile-secondary'}`}
                 key={item.id}
-                onClick={() => setCurrentPage(item.id)}
+                onClick={() => navigate(item.id)}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -108,10 +135,36 @@ export default function Sidebar({ currentPage, setCurrentPage, license }) {
                 }}
               >
                 <Icon size={18} style={{ color: isActive ? '#ffffff' : 'var(--text-muted)' }} />
-                <span className="sidebar-nav-label">{item.name}</span>
+                <span className="sidebar-nav-label sidebar-nav-label-desktop">{item.name}</span>
+                <span className="sidebar-nav-label sidebar-nav-label-mobile">{item.shortName || item.name}</span>
               </button>
             );
           })}
+          <button
+            aria-expanded={mobileMenuOpen}
+            aria-label="More navigation"
+            className="sidebar-nav-button mobile-more-button"
+            onClick={() => setMobileMenuOpen((open) => !open)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '14px',
+              width: '100%',
+              padding: '12px 16px',
+              borderRadius: '12px',
+              border: 'none',
+              background: mobileMoreActive || mobileMenuOpen ? 'var(--gradient-violet)' : 'transparent',
+              color: mobileMoreActive || mobileMenuOpen ? '#ffffff' : 'var(--text-secondary)',
+              cursor: 'pointer',
+              fontFamily: 'var(--font-sans)',
+              fontWeight: mobileMoreActive || mobileMenuOpen ? 600 : 500,
+              fontSize: '14px',
+              textAlign: 'left'
+            }}
+          >
+            <MoreHorizontal size={18} />
+            <span className="sidebar-nav-label">More</span>
+          </button>
         </div>
 
       </div>
@@ -144,7 +197,7 @@ export default function Sidebar({ currentPage, setCurrentPage, license }) {
               Unlock all AI features and advanced exports.
             </span>
             <button 
-              onClick={() => setCurrentPage('settings')}
+            onClick={() => navigate('settings')}
               className="btn-primary" 
               style={{ 
                 background: 'var(--gradient-sunset)', 
@@ -197,6 +250,46 @@ export default function Sidebar({ currentPage, setCurrentPage, license }) {
         </div>
 
       </div>
-    </div>
+      </nav>
+
+      {mobileMenuOpen && (
+        <div className="mobile-more-backdrop" onClick={() => setMobileMenuOpen(false)}>
+          <section
+            aria-label="More destinations"
+            aria-modal="true"
+            className="mobile-more-sheet"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+          >
+            <div className="mobile-more-header">
+              <div>
+                <strong>More</strong>
+                <span>All ScreenFlow tools</span>
+              </div>
+              <button aria-label="Close more menu" onClick={() => setMobileMenuOpen(false)}>
+                <X size={19} />
+              </button>
+            </div>
+            <div className="mobile-more-grid">
+              {mobileSecondaryItems.map((item) => {
+                const Icon = item.icon;
+                const isActive = currentPage === item.id;
+                return (
+                  <button
+                    aria-current={isActive ? 'page' : undefined}
+                    className={isActive ? 'active' : ''}
+                    key={item.id}
+                    onClick={() => navigate(item.id)}
+                  >
+                    <Icon size={20} />
+                    <span>{item.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        </div>
+      )}
+    </>
   );
 }

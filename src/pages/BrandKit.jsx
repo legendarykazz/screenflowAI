@@ -142,7 +142,7 @@ export default function BrandKit() {
   };
 
   return (
-    <div style={{ 
+    <div className="responsive-page brandkit-page" style={{
       background: '#F8FAFF', 
       minHeight: '100%', 
       margin: '-32px', 
@@ -154,7 +154,7 @@ export default function BrandKit() {
       fontFamily: 'var(--font-sans)'
     }}>
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div className="page-header brandkit-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '28px', fontWeight: 800 }}>Brand Kit</h1>
           <p style={{ color: '#5A607F', fontSize: '14px', marginTop: '4px' }}>
@@ -173,6 +173,7 @@ export default function BrandKit() {
             </div>
           )}
           <button 
+            className="brandkit-save-button"
             onClick={handleSaveBrandKit}
             style={{
               background: 'linear-gradient(135deg, #7C3AED 0%, #FF4D7E 100%)',
@@ -191,10 +192,10 @@ export default function BrandKit() {
       <input ref={fileInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleFileChange} />
 
       {/* Two Column Layout */}
-      <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr', gap: '28px', alignItems: 'start' }}>
+      <div className="brandkit-layout" style={{ display: 'grid', gridTemplateColumns: '220px 1fr', gap: '28px', alignItems: 'start' }}>
         
         {/* Left Tabs */}
-        <div style={{ background: '#FFF', borderRadius: '20px', padding: '12px', border: '1px solid rgba(0,0,0,0.04)', boxShadow: '0 2px 12px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        <div className="brandkit-tabs" style={{ background: '#FFF', borderRadius: '20px', padding: '12px', border: '1px solid rgba(0,0,0,0.04)', boxShadow: '0 2px 12px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
           {tabs.map(tab => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -221,7 +222,7 @@ export default function BrandKit() {
         </div>
 
         {/* Right Content Panel */}
-        <div style={{ background: '#FFF', borderRadius: '20px', padding: '32px', border: '1px solid rgba(0,0,0,0.04)', boxShadow: '0 2px 12px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', gap: '28px' }}>
+        <div className="brandkit-panel" style={{ background: '#FFF', borderRadius: '20px', padding: '32px', border: '1px solid rgba(0,0,0,0.04)', boxShadow: '0 2px 12px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', gap: '28px' }}>
           
           {activeTab === 'logos' && (
             <>
@@ -321,7 +322,7 @@ export default function BrandKit() {
                 <p style={{ color: '#8A94A6', fontSize: '13px' }}>Configure how your logo/text watermark appears on exports.</p>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+              <div className="brandkit-option-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     <label style={{ fontSize: '13px', fontWeight: 700 }}>Watermark Text</label>
@@ -389,7 +390,7 @@ export default function BrandKit() {
                 <p style={{ color: '#8A94A6', fontSize: '13px' }}>Set your brand color palette for overlays, watermarks, and captions.</p>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+              <div className="brandkit-option-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                   <label style={{ fontSize: '13px', fontWeight: 700 }}>Primary Color</label>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -469,7 +470,7 @@ export default function BrandKit() {
                 <p style={{ color: '#8A94A6', fontSize: '13px' }}>Configure animated lower third overlays for speaker introductions.</p>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+              <div className="brandkit-option-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     <label style={{ fontSize: '13px', fontWeight: 700 }}>Speaker Name</label>
@@ -524,7 +525,7 @@ export default function BrandKit() {
                 <p style={{ color: '#8A94A6', fontSize: '13px' }}>Add animated opening and closing screens to your videos.</p>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '32px' }}>
+              <div className="brandkit-option-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '32px' }}>
                 {/* Intro */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                   <h4 style={{ fontSize: '15px', fontWeight: 700, color: '#1A1F36' }}>Intro Animation</h4>
@@ -584,7 +585,7 @@ export default function BrandKit() {
                 <p style={{ color: '#8A94A6', fontSize: '13px' }}>Save and switch between different brand configurations instantly.</p>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '20px' }}>
+              <div className="brandkit-option-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '20px' }}>
                 {presets.map(preset => (
                   <div key={preset.id} style={{
                     border: preset.active ? `2px solid ${preset.primary}` : '2px solid #F1F5F9',

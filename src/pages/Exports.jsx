@@ -109,7 +109,7 @@ export default function Exports() {
   };
 
   return (
-    <div style={{ 
+    <div className="responsive-page exports-page" style={{
       background: '#F8FAFF', 
       minHeight: '100%', 
       margin: '-32px', 
@@ -121,7 +121,7 @@ export default function Exports() {
       fontFamily: 'var(--font-sans)'
     }}>
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div className="page-header exports-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '28px', fontWeight: 800 }}>Exports</h1>
           <p style={{ color: '#5A607F', fontSize: '14px', marginTop: '4px' }}>
@@ -129,8 +129,8 @@ export default function Exports() {
           </p>
         </div>
 
-        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-          <div style={{ position: 'relative', width: '220px' }}>
+        <div className="exports-toolbar" style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+          <div className="exports-search" style={{ position: 'relative', width: '220px' }}>
             <Search size={14} style={{ position: 'absolute', left: '12px', top: '11px', color: '#8A94A6' }} />
             <input 
               type="text" placeholder="Search exports..." value={searchQuery}
@@ -164,7 +164,7 @@ export default function Exports() {
       )}
 
       {/* Stats row */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
+      <div className="exports-stats" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
         {stats.map((stat, i) => (
           <div key={i} style={{ background: '#FFF', border: '1px solid rgba(0,0,0,0.04)', borderRadius: '18px', padding: '20px', display: 'flex', alignItems: 'center', gap: '14px', boxShadow: '0 2px 10px rgba(0,0,0,0.03)' }}>
             <div style={{ background: stat.bg, color: stat.color, width: '40px', height: '40px', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -179,7 +179,7 @@ export default function Exports() {
       </div>
 
       {/* Tabs */}
-      <div style={{ display: 'flex', gap: '4px', background: '#F1F5F9', padding: '6px', borderRadius: '14px', width: 'fit-content', borderBottom: 'none' }}>
+      <div className="exports-tabs" style={{ display: 'flex', gap: '4px', background: '#F1F5F9', padding: '6px', borderRadius: '14px', width: 'fit-content', borderBottom: 'none' }}>
         {['All Exports', 'Completed', 'Processing', 'Failed'].map(tab => (
           <button
             key={tab}
@@ -199,7 +199,7 @@ export default function Exports() {
       </div>
 
       {/* Exports Table */}
-      <div style={{ background: '#FFF', borderRadius: '20px', border: '1px solid rgba(0,0,0,0.04)', boxShadow: '0 2px 12px rgba(0,0,0,0.03)', overflow: 'hidden' }}>
+      <div className="exports-table" style={{ background: '#FFF', borderRadius: '20px', border: '1px solid rgba(0,0,0,0.04)', boxShadow: '0 2px 12px rgba(0,0,0,0.03)', overflow: 'hidden' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
           <thead>
             <tr style={{ background: '#FAFBFF' }}>

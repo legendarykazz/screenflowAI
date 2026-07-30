@@ -43,6 +43,12 @@
   "build": {
     "appId": "com.screenflow.ai",
     "productName": "ScreenFlowAI",
+    "compression": "normal",
+    "files": [
+      "dist/app/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
     "directories": {
       "output": "release"
     },

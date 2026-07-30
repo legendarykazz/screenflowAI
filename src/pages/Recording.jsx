@@ -1167,7 +1167,7 @@ export default function Recording({ onOpenProject, license }) {
   ];
 
   return (
-    <div style={{
+    <div className="responsive-page recording-page" style={{
       background: '#F5F7FB',
       color: '#172033',
       display: 'flex',
@@ -1178,7 +1178,7 @@ export default function Recording({ onOpenProject, license }) {
       minHeight: '100%',
       padding: '28px 32px'
     }}>
-      <header style={{ alignItems: 'flex-start', display: 'flex', justifyContent: 'space-between', gap: '24px' }}>
+      <header className="page-header recording-header" style={{ alignItems: 'flex-start', display: 'flex', justifyContent: 'space-between', gap: '24px' }}>
         <div>
           <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '26px', fontWeight: 800, letterSpacing: 0 }}>
             Recorder
@@ -1207,9 +1207,9 @@ export default function Recording({ onOpenProject, license }) {
         </button>
       </header>
 
-      <section style={{ display: 'grid', gridTemplateColumns: 'minmax(520px, 1fr) 340px', gap: '22px', alignItems: 'start' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <div style={{ ...controlCard, padding: '22px' }}>
+      <section className="recording-layout" style={{ display: 'grid', gridTemplateColumns: 'minmax(520px, 1fr) 340px', gap: '22px', alignItems: 'start' }}>
+        <div className="recording-controls" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div className="recording-card" style={{ ...controlCard, padding: '22px' }}>
             <div style={{ marginBottom: '14px' }}>
               <h2 style={{ fontSize: '16px', fontWeight: 800 }}>Project name</h2>
               <p style={{ color: '#647087', fontSize: '13px', marginTop: '3px' }}>This name is used for the project and the saved recording file.</p>
@@ -1227,7 +1227,7 @@ export default function Recording({ onOpenProject, license }) {
             />
           </div>
 
-          <div style={{ ...controlCard, padding: '22px' }}>
+          <div className="recording-card" style={{ ...controlCard, padding: '22px' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', marginBottom: '16px' }}>
               <div>
                 <h2 style={{ fontSize: '16px', fontWeight: 800 }}>Capture</h2>
@@ -1236,7 +1236,7 @@ export default function Recording({ onOpenProject, license }) {
               <Clapperboard size={21} color="#334155" />
             </div>
 
-            <div style={{ background: '#EEF2F8', borderRadius: '8px', display: 'grid', gap: '6px', gridTemplateColumns: 'repeat(3, 1fr)', padding: '5px' }}>
+            <div className="recording-mode-grid" style={{ background: '#EEF2F8', borderRadius: '8px', display: 'grid', gap: '6px', gridTemplateColumns: 'repeat(3, 1fr)', padding: '5px' }}>
               {[
                 ['Fullscreen', Monitor],
                 ['Window', Laptop],
@@ -1266,7 +1266,7 @@ export default function Recording({ onOpenProject, license }) {
               ))}
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginTop: '18px' }}>
+            <div className="recording-field-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginTop: '18px' }}>
               <Field label="Source">
                 <select value={selectedSource || ''} onChange={(event) => setSelectedSource(event.target.value)} style={selectStyle}>
                   {sources.length > 0 ? sources.map((source) => (
@@ -1286,7 +1286,7 @@ export default function Recording({ onOpenProject, license }) {
             </div>
           </div>
 
-          <div style={{ ...controlCard, padding: '22px' }}>
+          <div className="recording-card" style={{ ...controlCard, padding: '22px' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', marginBottom: '16px' }}>
               <div>
                 <h2 style={{ fontSize: '16px', fontWeight: 800 }}>Motion preset</h2>
@@ -1295,7 +1295,7 @@ export default function Recording({ onOpenProject, license }) {
               <Wand2 size={21} color="#334155" />
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '10px' }}>
+            <div className="recording-preset-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '10px' }}>
               {cinematicPresets.map((preset) => (
                 <button
                   key={preset.id}
@@ -1323,7 +1323,7 @@ export default function Recording({ onOpenProject, license }) {
               ))}
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '18px', marginTop: '20px' }}>
+            <div className="recording-toggle-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '18px', marginTop: '20px' }}>
               <ToggleRow checked={showCursor} icon={MousePointer2} label="Cursor highlight" onChange={setShowCursor} />
               <ToggleRow checked={countdown} icon={Timer} label="5 second countdown" onChange={setCountdown} />
             </div>
@@ -1367,12 +1367,12 @@ export default function Recording({ onOpenProject, license }) {
             )}
           </div>
 
-          <div style={{ ...controlCard, padding: '22px' }}>
+          <div className="recording-card" style={{ ...controlCard, padding: '22px' }}>
             <div style={{ marginBottom: '16px' }}>
               <h2 style={{ fontSize: '16px', fontWeight: 800 }}>Audio and camera</h2>
               <p style={{ color: '#647087', fontSize: '13px', marginTop: '3px' }}>Choose what gets recorded into the edit.</p>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+            <div className="recording-field-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
               <Field icon={Mic} label="Microphone">
                 <select value={selectedMic} onChange={(event) => setSelectedMic(event.target.value)} style={selectStyle}>
                   {microphones.length > 0 ? microphones.map((mic) => (
@@ -1393,15 +1393,15 @@ export default function Recording({ onOpenProject, license }) {
               </Field>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '18px', marginTop: '18px' }}>
+            <div className="recording-toggle-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '18px', marginTop: '18px' }}>
               <ToggleRow checked={systemAudio} icon={Volume2} label="System audio" onChange={setSystemAudio} />
               <ToggleRow checked={webcamEnabled} icon={Camera} label="Webcam overlay" onChange={setWebcamEnabled} />
             </div>
           </div>
         </div>
 
-        <aside style={{ display: 'flex', flexDirection: 'column', gap: '16px', position: 'sticky', top: '0' }}>
-          <div style={{ ...controlCard, padding: '20px' }}>
+        <aside className="recording-status-panel" style={{ display: 'flex', flexDirection: 'column', gap: '16px', position: 'sticky', top: '0' }}>
+          <div className="recording-card recording-primary-status" style={{ ...controlCard, padding: '20px' }}>
             <div style={{ alignItems: 'center', display: 'flex', justifyContent: 'space-between', gap: '14px' }}>
               <div>
                 <span style={{ color: '#647087', fontSize: '12px', fontWeight: 800, textTransform: 'uppercase' }}>Status</span>
@@ -1437,7 +1437,7 @@ export default function Recording({ onOpenProject, license }) {
             )}
           </div>
 
-          <div style={{ ...controlCard, padding: '18px' }}>
+          <div className="recording-card recording-desktop-summary" style={{ ...controlCard, padding: '18px' }}>
             <h3 style={{ fontSize: '14px', fontWeight: 900, marginBottom: '12px' }}>Current setup</h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               {captureSummary.map(([label, value]) => (
@@ -1449,7 +1449,7 @@ export default function Recording({ onOpenProject, license }) {
             </div>
           </div>
 
-          <div style={{ ...controlCard, padding: '18px' }}>
+          <div className="recording-card recording-desktop-summary" style={{ ...controlCard, padding: '18px' }}>
             <h3 style={{ fontSize: '14px', fontWeight: 900 }}>{activePreset.name}</h3>
             <p style={{ color: '#647087', fontSize: '13px', lineHeight: 1.45, marginTop: '6px' }}>{activePreset.description}</p>
             <div style={{ alignItems: 'center', display: 'flex', gap: '8px', marginTop: '14px' }}>

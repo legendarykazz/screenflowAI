@@ -114,7 +114,7 @@ export default function Dashboard({ onCreateProject, onOpenProject, navigateTo }
   };
 
   return (
-    <div style={{ 
+    <div className="responsive-page dashboard-page" style={{
       background: '#F8FAFF', 
       minHeight: '100%', 
       margin: '-32px', 
@@ -127,7 +127,7 @@ export default function Dashboard({ onCreateProject, onOpenProject, navigateTo }
     }}>
       
       {/* Top Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div className="page-header dashboard-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '28px', fontWeight: 750, color: '#1A1F36', display: 'flex', alignItems: 'center', gap: '8px' }}>
             Projects
@@ -137,7 +137,7 @@ export default function Dashboard({ onCreateProject, onOpenProject, navigateTo }
           </p>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div className="dashboard-toolbar" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           {/* Auto-save status */}
           <div style={{ 
             display: 'flex', alignItems: 'center', gap: '6px',
@@ -153,7 +153,7 @@ export default function Dashboard({ onCreateProject, onOpenProject, navigateTo }
           </div>
 
           {/* Search */}
-          <div style={{ position: 'relative', width: '240px' }}>
+          <div className="dashboard-search" style={{ position: 'relative', width: '240px' }}>
             <Search size={14} style={{ position: 'absolute', left: '12px', top: '11px', color: '#8A94A6' }} />
             <input 
               type="text" 
@@ -175,6 +175,7 @@ export default function Dashboard({ onCreateProject, onOpenProject, navigateTo }
           </div>
 
           <button 
+            className="dashboard-new-project"
             onClick={handleCreate} 
             style={{
               background: 'linear-gradient(135deg, #7C3AED 0%, #FF4D7E 100%)',
@@ -199,7 +200,7 @@ export default function Dashboard({ onCreateProject, onOpenProject, navigateTo }
       </div>
 
       {/* Stats Row */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px' }}>
+      <div className="dashboard-stats" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px' }}>
         {stats.map((stat, i) => {
           const Icon = stat.icon;
           return (
@@ -240,7 +241,7 @@ export default function Dashboard({ onCreateProject, onOpenProject, navigateTo }
       {/* Quick Actions */}
       <div>
         <h2 style={{ fontSize: '16px', fontWeight: 700, marginBottom: '16px', color: '#1A1F36' }}>Quick Actions</h2>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
+        <div className="dashboard-actions" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
           {quickActions.map((action, i) => {
             const Icon = action.icon;
             return (
@@ -302,14 +303,14 @@ export default function Dashboard({ onCreateProject, onOpenProject, navigateTo }
         </div>
 
         {isLoading ? (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '20px' }}>
+          <div className="dashboard-project-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '20px' }}>
             {[1,2,3,4].map(i => (
               <div key={i} style={{ background: '#FFF', borderRadius: '8px', height: '200px', border: '1px solid rgba(0,0,0,0.04)', 
                 animation: 'pulse 1.5s ease-in-out infinite', opacity: 0.6 }} />
             ))}
           </div>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '20px' }}>
+          <div className="dashboard-project-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '20px' }}>
             {filteredProjects.slice(0, 8).map((proj, idx) => (
               <div 
                 key={proj.id}

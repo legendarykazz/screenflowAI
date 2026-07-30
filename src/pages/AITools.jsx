@@ -230,7 +230,7 @@ export default function AITools({ navigateTo }) {
   };
 
   return (
-    <div style={{
+    <div className="responsive-page ai-tools-page" style={{
       background: '#F8FAFF',
       minHeight: '100%',
       margin: '-32px',
@@ -241,7 +241,7 @@ export default function AITools({ navigateTo }) {
       gap: 24,
       fontFamily: 'var(--font-sans)'
     }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 20 }}>
+      <div className="page-header ai-tools-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 20 }}>
         <div>
           <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 28, fontWeight: 800 }}>AI Tools</h1>
           <p style={{ color: '#5A607F', fontSize: 14, marginTop: 4 }}>
@@ -249,7 +249,7 @@ export default function AITools({ navigateTo }) {
           </p>
         </div>
 
-        <div style={{ background: '#FFFFFF', border: '1px solid #D9E1EF', borderRadius: 16, padding: 14, minWidth: 300 }}>
+        <div className="ai-project-picker" style={{ background: '#FFFFFF', border: '1px solid #D9E1EF', borderRadius: 16, padding: 14, minWidth: 300 }}>
           <label style={{ color: '#475569', display: 'flex', flexDirection: 'column', fontSize: 12, fontWeight: 800, gap: 7 }}>
             Project
             <select
@@ -268,7 +268,7 @@ export default function AITools({ navigateTo }) {
       </div>
 
       {projects.length === 0 && (
-        <div style={{
+        <div className="ai-empty-state" style={{
           background: '#FFFFFF',
           border: '1px solid #FBBF24',
           borderRadius: 14,
@@ -287,7 +287,7 @@ export default function AITools({ navigateTo }) {
         </div>
       )}
 
-      <div style={{
+      <div className="ai-tools-banner" style={{
         background: 'linear-gradient(135deg, #7C3AED 0%, #FF4D7E 100%)',
         borderRadius: 20,
         color: '#FFFFFF',
@@ -309,7 +309,7 @@ export default function AITools({ navigateTo }) {
         <button onClick={() => navigateTo('projects')} style={primaryLightButtonStyle}>Open Projects</button>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 20 }}>
+      <div className="ai-tools-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 20 }}>
         {tools.map((tool) => {
           const Icon = tool.icon;
           const isRunning = runningTool === tool.id;
@@ -384,7 +384,7 @@ export default function AITools({ navigateTo }) {
           position: 'fixed',
           zIndex: 100000
         }}>
-          <div style={{
+          <div className="ai-tool-modal" style={{
             background: '#FFFFFF',
             border: '1px solid #D9E1EF',
             borderRadius: 18,

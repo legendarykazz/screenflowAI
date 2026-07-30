@@ -124,7 +124,7 @@ export default function SettingsPage({ license, onActivateLicense }) {
   const isPro = license?.plan === 'pro';
 
   return (
-    <div style={{ 
+    <div className="responsive-page settings-page" style={{
       background: '#F8FAFF', 
       minHeight: '100%', 
       margin: '-32px', 
@@ -136,7 +136,7 @@ export default function SettingsPage({ license, onActivateLicense }) {
       fontFamily: 'var(--font-sans)'
     }}>
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div className="page-header settings-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '28px', fontWeight: 800 }}>Settings</h1>
           <p style={{ color: '#5A607F', fontSize: '14px', marginTop: '4px' }}>
@@ -160,10 +160,10 @@ export default function SettingsPage({ license, onActivateLicense }) {
       </div>
 
       {/* Two Column Layout */}
-      <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr', gap: '24px', alignItems: 'start' }}>
+      <div className="settings-layout" style={{ display: 'grid', gridTemplateColumns: '220px 1fr', gap: '24px', alignItems: 'start' }}>
         
         {/* Left Tabs */}
-        <div style={{ background: '#FFF', borderRadius: '20px', padding: '12px', border: '1px solid rgba(0,0,0,0.04)', boxShadow: '0 2px 12px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        <div className="settings-tabs" style={{ background: '#FFF', borderRadius: '20px', padding: '12px', border: '1px solid rgba(0,0,0,0.04)', boxShadow: '0 2px 12px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
           {tabs.map(tab => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -190,7 +190,7 @@ export default function SettingsPage({ license, onActivateLicense }) {
         </div>
 
         {/* Right Content */}
-        <div style={{ background: '#FFF', borderRadius: '20px', padding: '32px', border: '1px solid rgba(0,0,0,0.04)', boxShadow: '0 2px 12px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', gap: '28px' }}>
+        <div className="settings-panel" style={{ background: '#FFF', borderRadius: '20px', padding: '32px', border: '1px solid rgba(0,0,0,0.04)', boxShadow: '0 2px 12px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', gap: '28px' }}>
 
           {/* General Settings */}
           {activeTab === 'general' && (
@@ -205,7 +205,7 @@ export default function SettingsPage({ license, onActivateLicense }) {
                   { label: 'Application Theme', value: theme, setter: setTheme, options: [['dark', 'Dark Mode'], ['light', 'Light Mode']] },
                   { label: 'Default Export Path', value: exportPath, setter: setExportPath, isText: true, placeholder: '~/Desktop/ScreenFlowAI/' },
                 ].map(item => (
-                  <div key={item.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '20px', borderBottom: '1px solid #F1F5F9' }}>
+                  <div className="settings-field-row" key={item.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '20px', borderBottom: '1px solid #F1F5F9' }}>
                     <span style={{ fontSize: '14px', fontWeight: 600, color: '#1A1F36' }}>{item.label}</span>
                     {item.isText ? (
                       <input type="text" value={item.value} onChange={e => item.setter(e.target.value)}
@@ -225,7 +225,7 @@ export default function SettingsPage({ license, onActivateLicense }) {
                   { label: 'Desktop Notifications', desc: 'Export completion and recording alerts', value: notifications, setter: setNotifications },
                   { label: 'Hardware Acceleration', desc: 'Use GPU for video encoding (recommended)', value: hardwareAccel, setter: setHardwareAccel },
                 ].map(item => (
-                  <div key={item.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '20px', borderBottom: '1px solid #F1F5F9' }}>
+                  <div className="settings-toggle-row" key={item.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '20px', borderBottom: '1px solid #F1F5F9' }}>
                     <div>
                       <div style={{ fontSize: '14px', fontWeight: 600, color: '#1A1F36' }}>{item.label}</div>
                       <div style={{ fontSize: '12px', color: '#8A94A6', marginTop: '2px' }}>{item.desc}</div>
@@ -261,7 +261,7 @@ export default function SettingsPage({ license, onActivateLicense }) {
                 <p style={{ color: '#8A94A6', fontSize: '13px' }}>Configure default capture quality and countdown options.</p>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+              <div className="settings-option-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                 {[
                   { label: 'Default Capture', value: defaultCapture, setter: setDefaultCapture, options: ['Fullscreen', 'Window', 'Custom Area'] },
                   { label: 'Frame Rate', value: frameRate, setter: setFrameRate, options: ['24 FPS', '30 FPS', '60 FPS'] },
@@ -428,7 +428,7 @@ export default function SettingsPage({ license, onActivateLicense }) {
               {/* License Key */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 <label style={{ fontSize: '13px', fontWeight: 700 }}>License Key</label>
-                <div style={{ display: 'flex', gap: '12px' }}>
+                <div className="settings-inline-form" style={{ display: 'flex', gap: '12px' }}>
                   <input 
                     type="text" 
                     placeholder="SF-PRO-XXXX-XXXX-XXXX" 
@@ -463,7 +463,7 @@ export default function SettingsPage({ license, onActivateLicense }) {
                     background: '#FFF', fontSize: '14px', outline: 'none', color: '#1A1F36'
                   }}
                 />
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div className="settings-option-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                   <input
                     type="password"
                     placeholder="LiveKit API key"
@@ -496,7 +496,7 @@ export default function SettingsPage({ license, onActivateLicense }) {
               <div style={{ borderTop: '1px solid #F1F5F9', paddingTop: '24px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 <label style={{ fontSize: '13px', fontWeight: 700 }}>Gemini API Key</label>
                 <p style={{ fontSize: '12px', color: '#8A94A6' }}>Used first for AI Captions transcription from your recording audio.</p>
-                <div style={{ display: 'flex', gap: '12px' }}>
+                <div className="settings-inline-form" style={{ display: 'flex', gap: '12px' }}>
                   <input 
                     type="password" 
                     placeholder="AIza..." 
@@ -519,7 +519,7 @@ export default function SettingsPage({ license, onActivateLicense }) {
               <div style={{ borderTop: '1px solid #F1F5F9', paddingTop: '24px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 <label style={{ fontSize: '13px', fontWeight: 700 }}>OpenAI Whisper API Key</label>
                 <p style={{ fontSize: '12px', color: '#8A94A6' }}>Optional fallback for AI Captions.</p>
-                <div style={{ display: 'flex', gap: '12px' }}>
+                <div className="settings-inline-form" style={{ display: 'flex', gap: '12px' }}>
                   <input 
                     type="password" 
                     placeholder="sk-proj-..." 

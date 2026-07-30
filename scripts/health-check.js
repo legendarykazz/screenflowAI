@@ -185,6 +185,25 @@ function checkPlatformShells() {
   }
 }
 
+function checkMobileLayout() {
+  const sidebar = read('src/components/Sidebar.jsx');
+  const styles = read('src/index.css');
+  const dashboard = read('src/pages/Dashboard.jsx');
+  const recording = read('src/pages/Recording.jsx');
+  const settings = read('src/pages/Settings.jsx');
+  const exportsPage = read('src/pages/Exports.jsx');
+
+  assertIncludes(sidebar, "['dashboard', 'recording', 'livecall', 'football']", 'Mobile navigation keeps the four primary destinations visible');
+  assertIncludes(sidebar, 'mobile-more-sheet', 'Mobile navigation provides a More destination sheet');
+  assertIncludes(styles, 'grid-template-columns: repeat(5, minmax(0, 1fr))', 'Mobile navigation fits five equal touch targets');
+  assertIncludes(dashboard, 'dashboard-stats', 'Dashboard exposes responsive stat and action grids');
+  assertIncludes(recording, 'recording-status-panel', 'Recorder exposes its primary status panel for mobile ordering');
+  assertIncludes(styles, '.recording-status-panel', 'Recorder puts its primary action before setup on mobile');
+  assertIncludes(settings, 'settings-layout', 'Settings exposes a responsive single-column layout');
+  assertIncludes(exportsPage, 'exports-table', 'Exports exposes a mobile card transformation');
+  assertIncludes(styles, '.exports-table thead', 'Mobile exports hide the desktop table header');
+}
+
 function runBuild() {
   if (process.argv.includes('--skip-build')) {
     pass('Production Vite build skipped by --skip-build');
@@ -224,6 +243,7 @@ function main() {
   checkElectronBridge();
   checkRecordingPipeline();
   checkPlatformShells();
+  checkMobileLayout();
   runBuild();
 
   passes.forEach((message) => console.log(`OK  ${message}`));

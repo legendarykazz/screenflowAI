@@ -143,7 +143,7 @@ export default function Projects({ onOpenProject }) {
   };
 
   return (
-    <div style={{ 
+    <div className="responsive-page projects-page" style={{
       background: '#F8FAFF', 
       minHeight: '100%', 
       margin: '-32px', 
@@ -156,7 +156,7 @@ export default function Projects({ onOpenProject }) {
     }}>
       
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div className="page-header projects-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '28px', fontWeight: 800 }}>Projects</h1>
           <p style={{ color: '#5A607F', fontSize: '14px', marginTop: '4px' }}>
@@ -164,7 +164,7 @@ export default function Projects({ onOpenProject }) {
           </p>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div className="projects-toolbar" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           {selectedProjects.length > 0 && (
             <button onClick={handleBulkDelete}
               style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: '12px', color: '#ef4444', padding: '10px 16px', fontWeight: 700, fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -173,7 +173,7 @@ export default function Projects({ onOpenProject }) {
           )}
 
           {/* Search */}
-          <div style={{ position: 'relative', width: '230px' }}>
+          <div className="projects-search" style={{ position: 'relative', width: '230px' }}>
             <Search size={14} style={{ position: 'absolute', left: '12px', top: '11px', color: '#8A94A6' }} />
             <input 
               type="text" 
@@ -185,7 +185,7 @@ export default function Projects({ onOpenProject }) {
           </div>
 
           {/* Sort */}
-          <div style={{ position: 'relative' }}>
+          <div className="projects-sort" style={{ position: 'relative' }}>
             <button
               style={{ background: '#FFF', border: '1px solid #E2E8F0', borderRadius: '12px', padding: '10px 14px', fontSize: '13px', fontWeight: 600, color: '#1A1F36', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
               onClick={e => { e.stopPropagation(); setContextMenu(contextMenu === 'sort' ? null : 'sort'); }}
@@ -207,7 +207,7 @@ export default function Projects({ onOpenProject }) {
           </div>
 
           {/* View Toggle */}
-          <div style={{ display: 'flex', background: '#FFF', border: '1px solid #E2E8F0', borderRadius: '12px', overflow: 'hidden' }}>
+          <div className="projects-view-toggle" style={{ display: 'flex', background: '#FFF', border: '1px solid #E2E8F0', borderRadius: '12px', overflow: 'hidden' }}>
             <button onClick={() => setViewMode('grid')} style={{ padding: '10px 12px', border: 'none', background: viewMode === 'grid' ? '#7C3AED' : 'transparent', color: viewMode === 'grid' ? '#fff' : '#8A94A6', cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center' }}>
               <Grid size={14} />
             </button>
@@ -216,7 +216,7 @@ export default function Projects({ onOpenProject }) {
             </button>
           </div>
 
-          <button onClick={handleCreate}
+          <button className="projects-new-button" onClick={handleCreate}
             style={{ background: 'linear-gradient(135deg, #7C3AED 0%, #FF4D7E 100%)', border: 'none', borderRadius: '12px', color: '#fff', padding: '10px 20px', fontWeight: 700, fontSize: '13px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', boxShadow: '0 4px 12px rgba(124,58,237,0.3)' }}>
             <Plus size={16} /> New Project
           </button>
@@ -224,7 +224,7 @@ export default function Projects({ onOpenProject }) {
       </div>
 
       {/* Tabs */}
-      <div style={{ display: 'flex', gap: '4px', background: '#F1F5F9', padding: '6px', borderRadius: '16px', width: 'fit-content' }}>
+      <div className="projects-tabs" style={{ display: 'flex', gap: '4px', background: '#F1F5F9', padding: '6px', borderRadius: '16px', width: 'fit-content' }}>
         {['All', 'Edited', 'Exported', 'Drafts'].map(tab => (
           <button
             key={tab}
@@ -245,7 +245,7 @@ export default function Projects({ onOpenProject }) {
 
       {/* Grid View */}
       {viewMode === 'grid' && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '20px' }}>
+        <div className="projects-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '20px' }}>
           {filteredProjects.map((proj, idx) => {
             const isSelected = selectedProjects.includes(proj.id);
             const isDeleting_ = isDeleting === proj.id;
@@ -360,7 +360,7 @@ export default function Projects({ onOpenProject }) {
 
       {/* List View */}
       {viewMode === 'list' && (
-        <div style={{ background: '#FFF', borderRadius: '20px', border: '1px solid rgba(0,0,0,0.04)', boxShadow: '0 2px 12px rgba(0,0,0,0.03)', overflow: 'hidden' }}>
+        <div className="projects-list-view" style={{ background: '#FFF', borderRadius: '20px', border: '1px solid rgba(0,0,0,0.04)', boxShadow: '0 2px 12px rgba(0,0,0,0.03)', overflow: 'hidden' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
             <thead>
               <tr style={{ borderBottom: '1.5px solid #F1F5F9' }}>
