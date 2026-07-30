@@ -1,5 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Room, RoomEvent, Track } from 'livekit-client';
+import {
+  Room,
+  RoomEvent,
+  ScreenSharePresets,
+  Track,
+  VideoPresets,
+  VideoQuality
+} from 'livekit-client';
 import {
   Bot,
   Camera,
@@ -44,9 +51,11 @@ const noteSeeds = [
   'Ask AI can summarize the current call context for participants.'
 ];
 
-const LIVE_OUTPUT_WIDTH = 1280;
-const LIVE_OUTPUT_HEIGHT = 720;
-const LIVE_OUTPUT_FPS = 24;
+const LIVE_OUTPUT_WIDTH = 1920;
+const LIVE_OUTPUT_HEIGHT = 1080;
+const LIVE_OUTPUT_FPS = 30;
+const LIVE_SCREEN_BITRATE = 5_000_000;
+const LIVE_CAMERA_BITRATE = 2_800_000;
 
 export default function LiveCall() {
   const canvasRef = useRef(null);
@@ -69,6 +78,7 @@ export default function LiveCall() {
   const meetingChunksRef = useRef([]);
   const meetingStartedAtRef = useRef(0);
   const remoteMediaRef = useRef(null);
+  const remoteAudioRef = useRef(null);
   const pathsRef = useRef([]);
   const draftRef = useRef(null);
   const spotlightRef = useRef(null);
@@ -77,6 +87,8 @@ export default function LiveCall() {
   const zoomRef = useRef(1);
   const panRef = useRef({ x: 0.5, y: 0.5 });
   const shareModeRef = useRef('screen');
+  const outputModeRef = useRef('enhanced');
+  const lastRenderAtRef = useRef(0);
 
   const [isLive, setIsLive] = useState(false);
   const [micOn, setMicOn] = useState(false);
@@ -122,6 +134,10 @@ export default function LiveCall() {
   }, [shareMode]);
 
   useEffect(() => {
+    outputModeRef.current = outputMode;
+  }, [outputMode]);
+
+  useEffect(() => {
     if (cameraPreviewRef.current) {
       cameraPreviewRef.current.srcObject = cameraOn ? cameraStreamRef.current : null;
     }
@@ -157,7 +173,7 @@ export default function LiveCall() {
         const outputStream = canvas.captureStream(LIVE_OUTPUT_FPS);
         outputStreamRef.current = outputStream;
         if (outputVideoRef.current) outputVideoRef.current.srcObject = outputStream;
-        await publishOutputStream(outputStream);
+        await publishActiveOutput();
         renderFrame();
         return;
       }
@@ -170,11 +186,14 @@ export default function LiveCall() {
         video: {
           width: { ideal: LIVE_OUTPUT_WIDTH },
           height: { ideal: LIVE_OUTPUT_HEIGHT },
-          frameRate: { ideal: LIVE_OUTPUT_FPS, max: LIVE_OUTPUT_FPS }
+          frameRate: { ideal: LIVE_OUTPUT_FPS, max: LIVE_OUTPUT_FPS },
+          displaySurface: 'monitor'
         },
         audio: false
       });
-      const trackLabel = screenStream.getVideoTracks()[0]?.label || 'Selected screen';
+      const screenTrack = screenStream.getVideoTracks()[0];
+      if (screenTrack) screenTrack.contentHint = 'text';
+      const trackLabel = screenTrack?.label || 'Selected screen';
 
       streamRef.current = screenStream;
       setIsLive(true);
@@ -198,9 +217,9 @@ export default function LiveCall() {
       if (outputVideoRef.current) {
         outputVideoRef.current.srcObject = outputStream;
       }
-      await publishOutputStream(outputStream);
+      await publishActiveOutput();
 
-      screenStream.getVideoTracks()[0]?.addEventListener('ended', stopSharedOutput);
+      screenTrack?.addEventListener('ended', stopSharedOutput);
       renderFrame();
     } catch (error) {
       setStatus(error?.message || 'Screen sharing was cancelled.');
@@ -224,7 +243,13 @@ export default function LiveCall() {
     }
 
     try {
-      const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const audioStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          autoGainControl: true,
+          echoCancellation: true,
+          noiseSuppression: true
+        }
+      });
       audioStreamRef.current = audioStream;
       setMicOn(true);
       await publishMicStream(audioStream);
@@ -250,9 +275,16 @@ export default function LiveCall() {
 
     try {
       const cameraStream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 1280, height: 720 },
+        video: {
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          frameRate: { ideal: 30, max: 30 },
+          aspectRatio: { ideal: 16 / 9 }
+        },
         audio: false
       });
+      const cameraTrack = cameraStream.getVideoTracks()[0];
+      if (cameraTrack) cameraTrack.contentHint = 'motion';
       cameraStreamRef.current = cameraStream;
       if (cameraPreviewRef.current) cameraPreviewRef.current.srcObject = cameraStream;
       setCameraOn(true);
@@ -492,29 +524,41 @@ export default function LiveCall() {
 
       setLiveKitStatus(`Connecting to ${tokenResult.url}...`);
       const room = new Room({
-        adaptiveStream: true,
+        adaptiveStream: {
+          pauseVideoInBackground: false,
+          pixelDensity: 2
+        },
         dynacast: true
       });
 
       room.on(RoomEvent.ParticipantConnected, () => updateRemoteParticipants(room));
       room.on(RoomEvent.ParticipantDisconnected, (participant) => {
-        remoteMediaRef.current?.querySelector(`[data-participant-id="${participant.identity}"]`)?.remove();
+        remoteMediaRef.current
+          ?.querySelectorAll(`[data-participant-id="${participant.identity}"]`)
+          .forEach((tile) => tile.remove());
         updateRemoteParticipants(room);
       });
       room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+        if (track.kind === Track.Kind.Video) {
+          publication?.setVideoQuality?.(VideoQuality.HIGH);
+        }
         attachRemoteTrack(track, participant);
         updateRemoteParticipants(room);
       });
       room.on(RoomEvent.TrackUnsubscribed, (track) => {
         track.detach().forEach((element) => {
           const tile = element.closest?.('[data-participant-id]');
+          const tileKind = tile?.dataset?.tileKind;
           element.remove();
-          if (tile && !tile.querySelector('video')) {
+          if (tileKind === 'share') {
+            tile.remove();
+          } else if (tile && !tile.querySelector('video')) {
             tile.dataset.shareTile = 'false';
             updateTileFullscreenButton(tile, false);
             const label = tile.querySelector('[data-tile-label="true"]');
             const participant = getRemoteParticipants(room).find((item) => item.identity === tile.dataset.participantId);
             if (label) label.textContent = participant?.name || tile.dataset.participantId || 'Guest';
+            ensureRemoteParticipantPlaceholder(tile, participant);
           }
         });
         remoteMediaRef.current?.querySelector(`[data-track-sid="${track.sid}"]`)?.remove();
@@ -539,7 +583,7 @@ export default function LiveCall() {
       setLiveKitStatus(`Connected as ${tokenResult.identity}`);
       updateRemoteParticipants(room);
 
-      if (outputStreamRef.current) await publishOutputStream(outputStreamRef.current);
+      if (outputStreamRef.current || streamRef.current) await publishActiveOutput();
       if (audioStreamRef.current) await publishMicStream(audioStreamRef.current);
       if (cameraStreamRef.current) await publishCameraStream(cameraStreamRef.current);
       return room;
@@ -561,6 +605,7 @@ export default function LiveCall() {
     setLiveKitStatus('Disconnected');
     setRemoteParticipants([]);
     if (remoteMediaRef.current) remoteMediaRef.current.innerHTML = '';
+    if (remoteAudioRef.current) remoteAudioRef.current.innerHTML = '';
   };
 
   const sendRoomCommand = async (type, targetIdentity = '') => {
@@ -580,6 +625,17 @@ export default function LiveCall() {
     disconnectLiveKit();
   };
 
+  const getActiveOutputStream = () => (
+    outputModeRef.current === 'raw' && shareModeRef.current === 'screen'
+      ? streamRef.current
+      : outputStreamRef.current
+  );
+
+  const publishActiveOutput = async () => {
+    const outputStream = getActiveOutputStream();
+    if (outputStream) await publishOutputStream(outputStream);
+  };
+
   const publishOutputStream = async (outputStream) => {
     const room = liveKitRoomRef.current;
     const videoTrack = outputStream?.getVideoTracks?.()[0];
@@ -590,16 +646,23 @@ export default function LiveCall() {
     }
 
     liveKitVideoTrackRef.current = videoTrack;
+    videoTrack.contentHint = 'text';
+    const isRawOutput = outputModeRef.current === 'raw' && shareModeRef.current === 'screen';
     await room.localParticipant.publishTrack(videoTrack, {
-      name: 'screenflow-enhanced-output',
+      name: isRawOutput ? 'screenflow-raw-output' : 'screenflow-enhanced-output',
       source: Track.Source.ScreenShare,
-      simulcast: false,
+      simulcast: true,
+      screenShareSimulcastLayers: [
+        ScreenSharePresets.h360fps15,
+        ScreenSharePresets.h720fps15
+      ],
       videoEncoding: {
-        maxBitrate: 1_800_000,
-        maxFramerate: LIVE_OUTPUT_FPS
+        maxBitrate: LIVE_SCREEN_BITRATE,
+        maxFramerate: LIVE_OUTPUT_FPS,
+        priority: 'high'
       }
     });
-    setLiveKitStatus('Publishing enhanced output');
+    setLiveKitStatus(`Publishing ${isRawOutput ? 'raw' : 'enhanced'} 1080p output`);
   };
 
   const publishMicStream = async (audioStream) => {
@@ -628,12 +691,19 @@ export default function LiveCall() {
     }
 
     liveKitCameraTrackRef.current = cameraTrack;
+    cameraTrack.contentHint = 'motion';
     await room.localParticipant.publishTrack(cameraTrack, {
       name: 'presenter-camera',
       source: Track.Source.Camera,
+      simulcast: true,
+      videoSimulcastLayers: [
+        VideoPresets.h180,
+        VideoPresets.h360
+      ],
       videoEncoding: {
-        maxBitrate: 700_000,
-        maxFramerate: 24
+        maxBitrate: LIVE_CAMERA_BITRATE,
+        maxFramerate: 30,
+        priority: 'high'
       }
     });
   };
@@ -642,23 +712,41 @@ export default function LiveCall() {
     if (!remoteMediaRef.current) return;
     const participantId = participant?.identity || 'remote';
     const isRemoteScreen = track.kind === 'video' && (track.name?.includes('screen') || track.name?.includes('whiteboard') || track.source === Track.Source.ScreenShare);
-    const tile = ensureRemoteParticipantTile(participant);
-    if (!tile) return;
-
-    tile.querySelector('[data-empty-participant="true"]')?.remove();
-
-    const alreadyAttached = Array.from(tile.querySelectorAll('[data-track-sid]')).some((element) => element.dataset.trackSid === track.sid);
-    if (alreadyAttached) return;
 
     const element = track.attach();
     element.dataset.trackSid = track.sid;
+    element.autoplay = true;
+    element.playsInline = true;
+    element.controls = false;
     element.style.width = '100%';
     element.style.height = track.kind === 'video' ? '100%' : '0';
     element.style.background = '#0B0F19';
     element.style.display = track.kind === 'video' ? 'block' : 'none';
     element.style.objectFit = isRemoteScreen ? 'contain' : 'cover';
     element.style.transform = 'none';
-    if (track.kind === 'audio') element.style.display = 'none';
+
+    if (track.kind === 'audio') {
+      element.muted = false;
+      element.style.display = 'none';
+      remoteAudioRef.current?.appendChild(element);
+      element.play?.().catch(() => {
+        setLiveKitStatus('Connected. Click the call window once if browser audio is blocked.');
+      });
+      return;
+    }
+
+    const tile = ensureRemoteParticipantTile(participant, isRemoteScreen ? 'share' : 'camera');
+    if (!tile) {
+      element.remove();
+      return;
+    }
+    tile.querySelector('[data-empty-participant="true"]')?.remove();
+
+    const alreadyAttached = Array.from(tile.querySelectorAll('[data-track-sid]')).some((attached) => attached.dataset.trackSid === track.sid);
+    if (alreadyAttached) {
+      element.remove();
+      return;
+    }
 
     if (track.kind === 'video') {
       Array.from(tile.querySelectorAll('video')).forEach((video) => video.remove());
@@ -671,24 +759,26 @@ export default function LiveCall() {
     element.play?.().catch(() => {});
   };
 
-  const ensureRemoteParticipantTile = (participant) => {
+  const ensureRemoteParticipantTile = (participant, tileKind = 'camera') => {
     if (!remoteMediaRef.current || !participant?.identity) return null;
     const participantId = participant.identity;
-    let tile = remoteMediaRef.current.querySelector(`[data-participant-id="${participantId}"]`);
+    let tile = remoteMediaRef.current.querySelector(`[data-participant-id="${participantId}"][data-tile-kind="${tileKind}"]`);
     if (!tile) {
       tile = document.createElement('div');
       tile.dataset.participantId = participantId;
+      tile.dataset.tileKind = tileKind;
       tile.style.background = '#090B12';
       tile.style.border = '1px solid #26344D';
       tile.style.borderRadius = '8px';
       tile.style.color = '#F8FAFC';
-      tile.style.minHeight = '132px';
+      tile.style.aspectRatio = '16 / 9';
+      tile.style.minHeight = '112px';
       tile.style.overflow = 'hidden';
       tile.style.position = 'relative';
 
       const label = document.createElement('div');
       label.dataset.tileLabel = 'true';
-      label.textContent = participant?.name || participantId;
+      label.textContent = `${participant?.name || participantId}${tileKind === 'share' ? ' - Screen' : ''}`;
       label.style.background = 'rgba(9, 11, 18, 0.72)';
       label.style.borderRadius = '999px';
       label.style.bottom = '8px';
@@ -700,73 +790,87 @@ export default function LiveCall() {
       label.style.zIndex = '2';
       tile.appendChild(label);
 
-      const admin = document.createElement('div');
-      admin.style.display = 'flex';
-      admin.style.gap = '6px';
-      admin.style.position = 'absolute';
-      admin.style.right = '8px';
-      admin.style.top = '8px';
-      admin.style.zIndex = '3';
-      [
-        ['Mute', 'mute'],
-        ['Ask Mic', 'unmute'],
-        ['Cam Off', 'camera-off'],
-        ['Ask Cam', 'camera-on-request']
-      ].forEach(([labelText, command]) => {
-        const button = document.createElement('button');
-        button.textContent = labelText;
-        button.style.background = 'rgba(9, 11, 18, 0.78)';
-        button.style.border = '1px solid rgba(255,255,255,0.22)';
-        button.style.borderRadius = '999px';
-        button.style.color = '#FFFFFF';
-        button.style.cursor = 'pointer';
-        button.style.fontSize = '10px';
-        button.style.fontWeight = '900';
-        button.style.minHeight = '24px';
-        button.style.padding = '0 7px';
-        button.onclick = (event) => {
-          event.stopPropagation();
-          sendRoomCommand(command, participantId).catch((error) => {
-            setLiveKitStatus(error?.message || 'Could not send host control.');
-          });
-        };
-        admin.appendChild(button);
-      });
-      tile.appendChild(admin);
+      if (tileKind === 'camera') {
+        const admin = document.createElement('div');
+        admin.dataset.participantAdmin = 'true';
+        admin.style.display = 'flex';
+        admin.style.gap = '6px';
+        admin.style.position = 'absolute';
+        admin.style.right = '8px';
+        admin.style.top = '8px';
+        admin.style.zIndex = '3';
+        [
+          ['Mute', 'mute'],
+          ['Ask Mic', 'unmute'],
+          ['Cam Off', 'camera-off'],
+          ['Ask Cam', 'camera-on-request']
+        ].forEach(([labelText, command]) => {
+          const button = document.createElement('button');
+          button.textContent = labelText;
+          button.style.background = 'rgba(9, 11, 18, 0.78)';
+          button.style.border = '1px solid rgba(255,255,255,0.22)';
+          button.style.borderRadius = '999px';
+          button.style.color = '#FFFFFF';
+          button.style.cursor = 'pointer';
+          button.style.fontSize = '10px';
+          button.style.fontWeight = '900';
+          button.style.minHeight = '24px';
+          button.style.padding = '0 7px';
+          button.onclick = (event) => {
+            event.stopPropagation();
+            sendRoomCommand(command, participantId).catch((error) => {
+              setLiveKitStatus(error?.message || 'Could not send host control.');
+            });
+          };
+          admin.appendChild(button);
+        });
+        tile.appendChild(admin);
+      }
 
-      const empty = document.createElement('div');
-      empty.dataset.emptyParticipant = 'true';
-      empty.style.alignItems = 'center';
-      empty.style.color = '#CBD5E1';
-      empty.style.display = 'flex';
-      empty.style.flexDirection = 'column';
-      empty.style.fontSize = '13px';
-      empty.style.fontWeight = '800';
-      empty.style.gap = '8px';
-      empty.style.height = '100%';
-      empty.style.justifyContent = 'center';
-      empty.style.padding = '16px';
-      empty.style.textAlign = 'center';
-      const initial = document.createElement('strong');
-      initial.textContent = (participant?.name || participantId || 'G').slice(0, 1).toUpperCase();
-      initial.style.alignItems = 'center';
-      initial.style.background = '#1D4ED8';
-      initial.style.borderRadius = '999px';
-      initial.style.color = '#FFFFFF';
-      initial.style.display = 'flex';
-      initial.style.fontSize = '20px';
-      initial.style.height = '44px';
-      initial.style.justifyContent = 'center';
-      initial.style.width = '44px';
-      const emptyText = document.createElement('span');
-      emptyText.textContent = 'Camera is off';
-      empty.appendChild(initial);
-      empty.appendChild(emptyText);
-      tile.appendChild(empty);
+      if (tileKind === 'camera') {
+        ensureRemoteParticipantPlaceholder(tile, participant);
+      } else {
+        tile.dataset.shareTile = 'true';
+        updateTileFullscreenButton(tile, true);
+      }
 
       remoteMediaRef.current.appendChild(tile);
     }
     return tile;
+  };
+
+  const ensureRemoteParticipantPlaceholder = (tile, participant) => {
+    if (!tile || tile.querySelector('[data-empty-participant="true"]')) return;
+    const participantId = participant?.identity || tile.dataset.participantId || 'Guest';
+    const empty = document.createElement('div');
+    empty.dataset.emptyParticipant = 'true';
+    empty.style.alignItems = 'center';
+    empty.style.color = '#CBD5E1';
+    empty.style.display = 'flex';
+    empty.style.flexDirection = 'column';
+    empty.style.fontSize = '13px';
+    empty.style.fontWeight = '800';
+    empty.style.gap = '8px';
+    empty.style.height = '100%';
+    empty.style.justifyContent = 'center';
+    empty.style.padding = '16px';
+    empty.style.textAlign = 'center';
+    const initial = document.createElement('strong');
+    initial.textContent = (participant?.name || participantId).slice(0, 1).toUpperCase();
+    initial.style.alignItems = 'center';
+    initial.style.background = '#1D4ED8';
+    initial.style.borderRadius = '999px';
+    initial.style.color = '#FFFFFF';
+    initial.style.display = 'flex';
+    initial.style.fontSize = '20px';
+    initial.style.height = '44px';
+    initial.style.justifyContent = 'center';
+    initial.style.width = '44px';
+    const emptyText = document.createElement('span');
+    emptyText.textContent = 'Camera is off';
+    empty.appendChild(initial);
+    empty.appendChild(emptyText);
+    tile.appendChild(empty);
   };
 
   const updateTileFullscreenButton = (tile, enabled) => {
@@ -804,7 +908,7 @@ export default function LiveCall() {
       name: participant.name || participant.identity
     }));
     setRemoteParticipants(participants);
-    remoteList.forEach((participant) => ensureRemoteParticipantTile(participant));
+    remoteList.forEach((participant) => ensureRemoteParticipantTile(participant, 'camera'));
     remoteMediaRef.current?.querySelectorAll('[data-participant-id]').forEach((tile) => {
       if (!participants.some((participant) => participant.identity === tile.dataset.participantId)) {
         tile.remove();
@@ -820,9 +924,16 @@ export default function LiveCall() {
     return Object.values(remotes);
   };
 
-  const renderFrame = () => {
+  const renderFrame = (timestamp = performance.now()) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+
+    const frameInterval = 1000 / LIVE_OUTPUT_FPS;
+    if (timestamp - lastRenderAtRef.current < frameInterval) {
+      animationRef.current = requestAnimationFrame(renderFrame);
+      return;
+    }
+    lastRenderAtRef.current = timestamp;
 
     const ctx = canvas.getContext('2d');
     const width = canvas.width;
@@ -1147,6 +1258,23 @@ export default function LiveCall() {
     setNotes((current) => ['Presenter switched the shared screen source.', ...current]);
   };
 
+  const switchOutputMode = async (nextMode) => {
+    if (nextMode === 'raw' && shareModeRef.current === 'whiteboard') {
+      setStatus('Raw output is available for shared screens. Whiteboards use the enhanced canvas.');
+      return;
+    }
+    outputModeRef.current = nextMode;
+    setOutputMode(nextMode);
+    if (isLive && liveKitRoomRef.current) {
+      try {
+        await publishActiveOutput();
+        setStatus(`${nextMode === 'raw' ? 'Raw screen' : 'Enhanced canvas'} is now live.`);
+      } catch (error) {
+        setStatus(error?.message || 'Could not switch the live output.');
+      }
+    }
+  };
+
   const copyInvite = async () => {
     try {
       await navigator.clipboard.writeText(inviteLink);
@@ -1179,7 +1307,7 @@ export default function LiveCall() {
   return (
     <div data-live-call-root="true" style={presenterMode ? presenterPageStyle : pageStyle}>
       <style>{liveCallResponsiveStyles}</style>
-      <header style={headerStyle}>
+      <header data-live-call-header="true" style={headerStyle}>
         <div>
           <h1 style={titleStyle}>Live Call Studio</h1>
           <p style={subtitleStyle}>{participantName} presenting in room {roomCode}</p>
@@ -1200,26 +1328,25 @@ export default function LiveCall() {
       </header>
 
       <section style={presenterMode ? presenterWorkspaceStyle : workspaceStyle}>
-        <section style={conferenceStageStyle}>
+        <section data-conference-stage="true" style={conferenceStageStyle}>
           <div style={conferenceHeaderStyle}>
             <div>
               <h2 style={stageTitleStyle}><Users size={18} /> Meeting Room</h2>
-              <p style={stageSubtitleStyle}>Everyone appears here. Click any participant tile to focus it.</p>
+              <p style={stageSubtitleStyle}>
+                {isLive ? `${sourceName} is being presented` : isLiveKitConnected ? 'Live conversation' : 'Room is offline'}
+              </p>
             </div>
             <span style={meetingCountStyle}>{remoteParticipants.length + 1} in call</span>
           </div>
-          <div data-people-grid="true" style={peopleGridStyle}>
-            <div style={localPresenterTileStyle}>
-              {cameraOn ? (
-                <video ref={cameraPreviewRef} autoPlay muted playsInline style={stageVideoStyle} />
-              ) : (
-                <div style={emptyTileStyle}>Camera is off</div>
-              )}
-              <span style={tileLabelStyle}>You - Host</span>
-            </div>
+          <div
+            data-call-stage-body="true"
+            data-presenting={isLive ? 'true' : 'false'}
+            data-share-expanded={shareExpanded ? 'true' : 'false'}
+            style={callStageBodyStyle(isLive, shareExpanded)}
+          >
             {isLive && (
               <div data-host-share-tile="true" style={shareTileStyle(shareExpanded)}>
-                <div style={shareActionGroupStyle}>
+                <div data-share-actions="true" style={shareActionGroupStyle}>
                   <button
                     onClick={() => setShareExpanded((expanded) => !expanded)}
                     style={shareExpandButtonStyle}
@@ -1249,7 +1376,7 @@ export default function LiveCall() {
                   </button>
                 </div>
                 {shareExpanded && (
-                  <div style={compactToolBarStyle}>
+                  <div data-share-toolbar="true" style={compactToolBarStyle}>
                     {toolOptions.map((item) => {
                       const Icon = item.icon;
                       return (
@@ -1318,10 +1445,22 @@ export default function LiveCall() {
                 <span style={tileLabelStyle}>Host Share - {sourceName}</span>
               </div>
             )}
-            <div ref={remoteMediaRef} style={remoteGridStyle}>
-              {!remoteParticipants.length && <div style={emptyTileStyle}>Waiting for people to join</div>}
+            <div data-face-grid="true" style={faceGridStyle(isLive, shareExpanded)}>
+              <div data-local-face-tile="true" style={localPresenterTileStyle}>
+                {cameraOn ? (
+                  <video ref={cameraPreviewRef} autoPlay muted playsInline style={stageVideoStyle} />
+                ) : (
+                  <div style={emptyTileStyle}>Camera is off</div>
+                )}
+                <span style={tileLabelStyle}>You - Host</span>
+              </div>
+              <div ref={remoteMediaRef} style={remoteGridStyle} />
             </div>
           </div>
+          {!remoteParticipants.length && (
+            <div style={waitingGuestStyle}>{isLiveKitConnected ? 'Waiting for guests' : 'Start the room to invite guests'}</div>
+          )}
+          <div ref={remoteAudioRef} aria-hidden="true" style={remoteAudioSinkStyle} />
           <div data-meet-dock="true" style={meetControlDockStyle}>
             <button onClick={toggleMic} style={dockButtonStyle(micOn)} className="tooltip" data-tooltip={micOn ? 'Mute microphone' : 'Turn microphone on'}>
               <Mic size={18} />
@@ -1368,7 +1507,7 @@ export default function LiveCall() {
 
         <video ref={outputVideoRef} autoPlay muted playsInline style={hiddenPreviewStyle} />
 
-        <aside style={presenterMode ? presenterSidePanelStyle : sidePanelStyle}>
+        <aside data-call-side-panel="true" style={presenterMode ? presenterSidePanelStyle : sidePanelStyle}>
           <section style={sourceControlCardStyle}>
             <div style={cardHeaderRowStyle}>
               <h2 style={sideTitleStyle}><Monitor size={17} /> Setup</h2>
@@ -1409,8 +1548,18 @@ export default function LiveCall() {
               <ScreenShare size={16} /> {shareMode === 'whiteboard' ? (isLive ? 'Switch To Whiteboard' : 'Share Whiteboard') : (isLive ? 'Switch To Selected' : 'Share Selected')}
             </button>
             <div style={segmentedStyle}>
-              <button onClick={() => setOutputMode('enhanced')} style={segmentButtonStyle(outputMode === 'enhanced')}>Enhanced</button>
-              <button onClick={() => setOutputMode('raw')} style={segmentButtonStyle(outputMode === 'raw')}>Raw</button>
+              <button onClick={() => switchOutputMode('enhanced')} style={segmentButtonStyle(outputMode === 'enhanced')}>Enhanced</button>
+              <button
+                disabled={shareMode === 'whiteboard'}
+                onClick={() => switchOutputMode('raw')}
+                style={{
+                  ...segmentButtonStyle(outputMode === 'raw'),
+                  cursor: shareMode === 'whiteboard' ? 'not-allowed' : 'pointer',
+                  opacity: shareMode === 'whiteboard' ? 0.5 : 1
+                }}
+              >
+                Raw
+              </button>
             </div>
           </section>
 
@@ -1513,7 +1662,7 @@ const pageStyle = {
   flexDirection: 'column',
   fontFamily: 'var(--font-sans)',
   gap: '16px',
-  margin: '-32px',
+  margin: '-24px',
   minHeight: '100%',
   padding: '22px'
 };
@@ -1685,17 +1834,30 @@ const meetingCountStyle = {
   padding: '7px 10px'
 };
 
-const peopleGridStyle = {
+const callStageBodyStyle = (presenting, expanded) => ({
   background: '#0A0B0F',
   border: '1px solid #DDE5F1',
   borderRadius: '8px',
   display: 'grid',
   gap: '10px',
-  gridAutoRows: 'minmax(132px, auto)',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-  minHeight: '240px',
+  gridTemplateColumns: presenting && !expanded ? 'minmax(0, 1fr) 230px' : 'minmax(0, 1fr)',
+  minHeight: '220px',
+  overflow: 'hidden',
   padding: '12px'
-};
+});
+
+const faceGridStyle = (presenting, expanded) => ({
+  alignContent: 'start',
+  display: 'grid',
+  gap: '10px',
+  gridTemplateColumns: presenting && !expanded
+    ? 'minmax(0, 1fr)'
+    : 'repeat(auto-fit, minmax(260px, 420px))',
+  justifyContent: presenting && !expanded ? 'stretch' : 'center',
+  maxHeight: presenting && !expanded ? '510px' : 'none',
+  minWidth: 0,
+  overflowY: presenting && !expanded ? 'auto' : 'visible'
+});
 
 const meetControlDockStyle = {
   alignItems: 'center',
@@ -1737,11 +1899,11 @@ const dockLeaveButtonStyle = {
 };
 
 const localPresenterTileStyle = {
-  aspectRatio: '1 / 1',
+  aspectRatio: '16 / 9',
   background: '#090B12',
   border: '1px solid #2A3446',
   borderRadius: '8px',
-  minHeight: '132px',
+  minHeight: '112px',
   overflow: 'hidden',
   position: 'relative'
 };
@@ -1749,8 +1911,7 @@ const localPresenterTileStyle = {
 const shareTileStyle = (expanded) => ({
   ...localPresenterTileStyle,
   aspectRatio: '16 / 9',
-  gridColumn: expanded ? '1 / -1' : 'span 2',
-  minHeight: expanded ? '560px' : '300px'
+  minHeight: expanded ? '520px' : '300px'
 });
 
 const shareExpandButtonStyle = {
@@ -1834,6 +1995,20 @@ const miniZoomPillStyle = {
 
 const remoteGridStyle = {
   display: 'contents'
+};
+
+const waitingGuestStyle = {
+  color: '#667085',
+  fontSize: '12px',
+  fontWeight: 800,
+  textAlign: 'center'
+};
+
+const remoteAudioSinkStyle = {
+  height: 0,
+  overflow: 'hidden',
+  position: 'absolute',
+  width: 0
 };
 
 const stageVideoStyle = {
@@ -2205,46 +2380,123 @@ const liveCallResponsiveStyles = `
     transform: none !important;
   }
 
+  @media (max-width: 1180px) {
+    [data-live-call-root="true"] {
+      margin: -18px !important;
+    }
+
+    [data-call-stage-body="true"][data-presenting="true"][data-share-expanded="false"] {
+      grid-template-columns: minmax(0, 1fr) 190px !important;
+    }
+
+    [data-call-side-panel="true"] {
+      grid-template-columns: 1fr 1fr !important;
+    }
+  }
+
   @media (max-width: 760px) {
     [data-live-call-root="true"] {
       margin: 0 !important;
-      min-height: 100vh !important;
-      padding: 10px !important;
+      min-height: 100dvh !important;
+      padding: 8px !important;
     }
 
-    [data-live-call-root="true"] header {
+    [data-live-call-header="true"] {
       align-items: stretch !important;
       flex-direction: column !important;
     }
 
-    [data-live-call-root="true"] header > div:last-child {
+    [data-live-call-header="true"] > div:last-child {
       display: grid !important;
       grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
       width: 100% !important;
     }
 
-    [data-people-grid="true"] {
+    [data-live-call-header="true"] button {
+      justify-content: center !important;
+      min-width: 0 !important;
+      padding-left: 8px !important;
+      padding-right: 8px !important;
+    }
+
+    [data-live-call-header="true"] > div:last-child > button:last-child {
+      grid-column: 1 / -1 !important;
+    }
+
+    [data-conference-stage="true"] {
+      padding: 10px !important;
+    }
+
+    [data-call-stage-body="true"] {
       gap: 8px !important;
-      grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+      grid-template-columns: minmax(0, 1fr) !important;
       min-height: 0 !important;
       padding: 8px !important;
     }
 
+    [data-face-grid="true"] {
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)) !important;
+      max-height: none !important;
+      overflow: visible !important;
+    }
+
+    [data-call-stage-body="true"][data-presenting="true"] [data-face-grid="true"] {
+      grid-auto-columns: minmax(140px, 42vw) !important;
+      grid-auto-flow: column !important;
+      grid-template-columns: none !important;
+      overflow-x: auto !important;
+      overflow-y: hidden !important;
+      padding-bottom: 2px !important;
+    }
+
+    [data-local-face-tile="true"],
+    [data-participant-id] {
+      aspect-ratio: 16 / 9 !important;
+      min-height: 96px !important;
+    }
+
+    [data-participant-admin="true"] {
+      display: none !important;
+    }
+
     [data-host-share-tile="true"] {
-      grid-column: 1 / -1 !important;
-      min-height: 230px !important;
+      min-height: 210px !important;
     }
 
     [data-host-share-tile="true"] canvas {
       object-fit: contain !important;
     }
 
+    [data-share-actions="true"] {
+      gap: 5px !important;
+      right: 8px !important;
+      top: 8px !important;
+    }
+
+    [data-share-actions="true"] button {
+      font-size: 0 !important;
+      gap: 0 !important;
+      min-height: 32px !important;
+      padding: 0 8px !important;
+    }
+
+    [data-share-toolbar="true"] {
+      left: 8px !important;
+      max-width: calc(100% - 16px) !important;
+      top: 48px !important;
+      transform: none !important;
+    }
+
     [data-meet-dock="true"] {
-      bottom: 10px !important;
+      bottom: 8px !important;
       max-width: calc(100vw - 20px) !important;
       overflow-x: auto !important;
       position: sticky !important;
       z-index: 20 !important;
+    }
+
+    [data-call-side-panel="true"] {
+      grid-template-columns: minmax(0, 1fr) !important;
     }
   }
 `;

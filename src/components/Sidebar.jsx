@@ -31,6 +31,7 @@ export default function Sidebar({ currentPage, setCurrentPage, license }) {
 
   return (
     <div 
+      className="app-sidebar"
       style={{
         width: '260px',
         background: 'var(--bg-primary)',
@@ -42,10 +43,10 @@ export default function Sidebar({ currentPage, setCurrentPage, license }) {
         flexShrink: 0
       }}
     >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
+      <div className="sidebar-primary" style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
         
         {/* Brand Logo Header */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', paddingLeft: '8px' }}>
+        <div className="sidebar-brand" style={{ display: 'flex', alignItems: 'center', gap: '10px', paddingLeft: '8px' }}>
           <div style={{
             background: 'var(--gradient-violet)',
             width: '32px',
@@ -60,18 +61,19 @@ export default function Sidebar({ currentPage, setCurrentPage, license }) {
           }}>
             S
           </div>
-          <span style={{ fontFamily: 'var(--font-display)', fontSize: '20px', fontWeight: 800, color: '#fff', letterSpacing: '-0.02em' }}>
+          <span className="sidebar-brand-text" style={{ fontFamily: 'var(--font-display)', fontSize: '20px', fontWeight: 800, color: '#fff', letterSpacing: 0 }}>
             ScreenFlow <span style={{ color: 'var(--accent-secondary)' }}>AI</span>
           </span>
         </div>
 
         {/* Menu Items */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+        <div className="sidebar-menu" style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
           {menuItems.map(item => {
             const Icon = item.icon;
             const isActive = currentPage === item.id;
             return (
               <button
+                className="sidebar-nav-button"
                 key={item.id}
                 onClick={() => setCurrentPage(item.id)}
                 style={{
@@ -106,7 +108,7 @@ export default function Sidebar({ currentPage, setCurrentPage, license }) {
                 }}
               >
                 <Icon size={18} style={{ color: isActive ? '#ffffff' : 'var(--text-muted)' }} />
-                {item.name}
+                <span className="sidebar-nav-label">{item.name}</span>
               </button>
             );
           })}
@@ -114,11 +116,12 @@ export default function Sidebar({ currentPage, setCurrentPage, license }) {
 
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+      <div className="sidebar-footer" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
         
         {/* Upgrade Premium Box */}
         {!isPro && (
           <div 
+            className="sidebar-upgrade"
             style={{
               background: 'linear-gradient(135deg, rgba(124, 58, 237, 0.15) 0%, rgba(255, 77, 126, 0.15) 100%)',
               border: '1px solid rgba(255, 77, 126, 0.15)',
@@ -160,7 +163,7 @@ export default function Sidebar({ currentPage, setCurrentPage, license }) {
         )}
 
         {/* Profile Details */}
-        <div style={{ 
+        <div className="sidebar-profile" style={{
           display: 'flex', 
           alignItems: 'center', 
           justifyContent: 'space-between',
@@ -183,7 +186,7 @@ export default function Sidebar({ currentPage, setCurrentPage, license }) {
             }}>
               AM
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <div className="sidebar-profile-copy" style={{ display: 'flex', flexDirection: 'column' }}>
               <span style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>Alex Morgan</span>
               <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                 {isPro ? 'Pro Plan' : 'Free Trial Plan'}

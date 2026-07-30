@@ -10,6 +10,7 @@ export default function TitleBar() {
 
   return (
     <div 
+      className="app-titlebar"
       style={{
         height: 'var(--titlebar-height)',
         background: 'var(--bg-primary)',
@@ -28,7 +29,7 @@ export default function TitleBar() {
         </span>
       </div>
 
-      <div style={{ display: 'flex', gap: '4px', WebkitAppRegion: 'no-drag' }}>
+      <div className="titlebar-window-controls" style={{ display: 'flex', gap: '4px', WebkitAppRegion: 'no-drag' }}>
         <button 
           onClick={() => handleControl('minimize')}
           style={{

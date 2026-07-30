@@ -67,9 +67,11 @@ function checkLiveKitTokenRoles() {
 function checkJoinCallMedia() {
   const join = read('src/pages/JoinCall.jsx');
   assertIncludes(join, "role: 'participant'", 'Join page requests participant role');
-  assertIncludes(join, 'navigator.mediaDevices.getUserMedia({ audio: true })', 'Join page can request microphone');
+  assertIncludes(join, 'echoCancellation: true', 'Join page can request call-optimized microphone audio');
   assertIncludes(join, "name: 'participant-mic'", 'Join page publishes participant microphone track');
   assertIncludes(join, "name: 'participant-camera'", 'Join page publishes participant camera track');
+  assertIncludes(join, 'VideoQuality.HIGH', 'Join page requests high-quality remote video');
+  assertIncludes(join, 'maxBitrate: 5_000_000', 'Join page publishes adaptive high-quality screen video');
   assertIncludes(join, 'const audioRef = useRef(null)', 'Join page has a separate remote audio sink');
   assertIncludes(join, "track.kind === 'audio' ? audioRef", 'Join page routes remote audio away from screen/camera containers');
   assertIncludes(join, 'getRemoteParticipants(room)', 'Join page handles LiveKit remote participant collection defensively');
@@ -80,7 +82,10 @@ function checkJoinCallMedia() {
 
 function checkPresenterLiveCall() {
   const live = read('src/pages/LiveCall.jsx');
-  assertIncludes(live, "name: 'screenflow-enhanced-output'", 'Presenter publishes enhanced screen output');
+  assertIncludes(live, "'screenflow-enhanced-output'", 'Presenter publishes enhanced screen output');
+  assertIncludes(live, "'screenflow-raw-output'", 'Presenter can switch to a raw screen output');
+  assertIncludes(live, 'const LIVE_OUTPUT_WIDTH = 1920', 'Presenter renders the enhanced output at 1080p');
+  assertIncludes(live, 'VideoQuality.HIGH', 'Presenter requests high-quality participant video');
   assertIncludes(live, "name: 'presenter-mic'", 'Presenter publishes microphone track');
   assertIncludes(live, "name: 'presenter-camera'", 'Presenter publishes camera track');
   assertIncludes(live, 'RoomEvent.TrackSubscribed', 'Presenter subscribes to remote participant tracks');

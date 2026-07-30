@@ -1,6 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Room, RoomEvent, Track } from 'livekit-client';
-import { Camera, Mic, PhoneOff, Play, ScreenShare, SquarePen, Users, Video } from 'lucide-react';
+import {
+  Room,
+  RoomEvent,
+  ScreenSharePresets,
+  Track,
+  VideoPresets,
+  VideoQuality
+} from 'livekit-client';
+import { Camera, Expand, Mic, PhoneOff, Play, ScreenShare, SquarePen, Users, Video } from 'lucide-react';
 
 export default function JoinCall() {
   const roomRef = useRef(null);
@@ -98,12 +105,21 @@ export default function JoinCall() {
       if (!response.ok) throw new Error(result.error || 'Unable to get LiveKit token.');
 
       setStatus('Connecting...');
-      const room = new Room({ adaptiveStream: true, dynacast: true });
+      const room = new Room({
+        adaptiveStream: {
+          pauseVideoInBackground: false,
+          pixelDensity: 2
+        },
+        dynacast: true
+      });
       roomRef.current = room;
 
       room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
         if (roomRef.current !== room) return;
         try {
+          if (track.kind === Track.Kind.Video) {
+            publication?.setVideoQuality?.(VideoQuality.HIGH);
+          }
           attachTrack(track, participant);
           updateParticipants(room);
         } catch (error) {
@@ -115,13 +131,13 @@ export default function JoinCall() {
         handleRoomCommand(payload, participant);
       });
 
-      room.on(RoomEvent.TrackUnsubscribed, (track) => {
+      room.on(RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
         if (roomRef.current !== room) return;
         try {
           detachTrackElements(track).forEach((element) => {
             const tile = element.closest?.('[data-face-tile="true"]');
-            if (tile) tile.remove();
-            else element.remove();
+            element.remove();
+            if (tile) ensureParticipantTile(participant);
           });
         } catch (error) {
           setStatus(getErrorMessage(error, 'Could not clean up participant media.'));
@@ -211,7 +227,13 @@ export default function JoinCall() {
     }
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          autoGainControl: true,
+          echoCancellation: true,
+          noiseSuppression: true
+        }
+      });
       const audioTrack = stream.getAudioTracks()[0];
       localMicStreamRef.current = stream;
       publishedMicTrackRef.current = audioTrack;
@@ -243,19 +265,31 @@ export default function JoinCall() {
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 1280, height: 720 },
+        video: {
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          frameRate: { ideal: 30, max: 30 },
+          aspectRatio: { ideal: 16 / 9 }
+        },
         audio: false
       });
       const cameraTrack = stream.getVideoTracks()[0];
+      cameraTrack.contentHint = 'motion';
       localCameraStreamRef.current = stream;
       publishedCameraTrackRef.current = cameraTrack;
       if (localCameraRef.current) localCameraRef.current.srcObject = stream;
       await room.localParticipant.publishTrack(cameraTrack, {
         name: 'participant-camera',
         source: Track.Source.Camera,
+        simulcast: true,
+        videoSimulcastLayers: [
+          VideoPresets.h180,
+          VideoPresets.h360
+        ],
         videoEncoding: {
-          maxBitrate: 1_200_000,
-          maxFramerate: 30
+          maxBitrate: 2_500_000,
+          maxFramerate: 30,
+          priority: 'high'
         }
       });
       setCameraOn(true);
@@ -280,8 +314,17 @@ export default function JoinCall() {
         setStatus('Screen sharing is not available in this browser.');
         return;
       }
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          displaySurface: 'monitor',
+          frameRate: { ideal: 30, max: 30 },
+          height: { ideal: 1080 },
+          width: { ideal: 1920 }
+        },
+        audio: false
+      });
       const screenTrack = stream.getVideoTracks()[0];
+      screenTrack.contentHint = 'text';
       screenTrack.onended = () => {
         publishedScreenTrackRef.current = null;
         setScreenOn(false);
@@ -290,10 +333,15 @@ export default function JoinCall() {
       await room.localParticipant.publishTrack(screenTrack, {
         name: 'participant-screen',
         source: Track.Source.ScreenShare,
-        simulcast: false,
+        simulcast: true,
+        screenShareSimulcastLayers: [
+          ScreenSharePresets.h360fps15,
+          ScreenSharePresets.h720fps15
+        ],
         videoEncoding: {
-          maxBitrate: 2_000_000,
-          maxFramerate: 24
+          maxBitrate: 5_000_000,
+          maxFramerate: 30,
+          priority: 'high'
         }
       });
       setScreenOn(true);
@@ -319,11 +367,12 @@ export default function JoinCall() {
         setStatus('Whiteboard sharing is not available in this browser.');
         return;
       }
-      canvas.width = 1280;
-      canvas.height = 720;
+      canvas.width = 1920;
+      canvas.height = 1080;
       renderGuestWhiteboard();
-      const stream = canvas.captureStream(15);
+      const stream = canvas.captureStream(30);
       const whiteboardTrack = stream.getVideoTracks()[0];
+      whiteboardTrack.contentHint = 'text';
       whiteboardTrack.onended = () => {
         stopGuestWhiteboard();
         publishedScreenTrackRef.current = null;
@@ -333,7 +382,16 @@ export default function JoinCall() {
       await room.localParticipant.publishTrack(whiteboardTrack, {
         name: 'participant-whiteboard',
         source: Track.Source.ScreenShare,
-        simulcast: false
+        simulcast: true,
+        screenShareSimulcastLayers: [
+          ScreenSharePresets.h360fps15,
+          ScreenSharePresets.h720fps15
+        ],
+        videoEncoding: {
+          maxBitrate: 5_000_000,
+          maxFramerate: 30,
+          priority: 'high'
+        }
       });
       setScreenOn(true);
       setStatus('Sharing your whiteboard.');
@@ -419,6 +477,8 @@ export default function JoinCall() {
     if (!room) return;
     const remoteParticipants = getRemoteParticipants(room);
     setParticipants(remoteParticipants.map((participant) => participant.name || participant.identity));
+    remoteParticipants.forEach((participant) => ensureParticipantTile(participant));
+    setTrackPlaceholderVisible(cameraRef.current, remoteParticipants.length === 0);
   };
 
   const clearHostScreen = () => {
@@ -440,7 +500,12 @@ export default function JoinCall() {
   const attachExistingTracks = (room) => {
     getRemoteParticipants(room).forEach((participant) => {
       participant.trackPublications.forEach((publication) => {
-        if (publication.track) attachTrack(publication.track, participant);
+        if (publication.track) {
+          if (publication.track.kind === Track.Kind.Video) {
+            publication.setVideoQuality?.(VideoQuality.HIGH);
+          }
+          attachTrack(publication.track, participant);
+        }
       });
     });
   };
@@ -535,47 +600,21 @@ export default function JoinCall() {
     const participantId = participant?.identity || participant?.sid || 'remote';
     let tile = Array.from(cameraRef.current?.querySelectorAll('[data-face-tile="true"]') || [])
       .find((item) => item.dataset.participantId === participantId);
-    if (tile) return tile;
+    if (tile) {
+      ensureParticipantTilePlaceholder(tile, participant);
+      return tile;
+    }
 
     tile = document.createElement('div');
     tile.dataset.participantId = participantId;
     tile.dataset.faceTile = 'true';
-    tile.style.aspectRatio = '1 / 1';
+    tile.style.aspectRatio = '16 / 9';
     tile.style.background = '#050505';
     tile.style.border = '1px solid #2A2A2A';
     tile.style.borderRadius = '8px';
     tile.style.overflow = 'hidden';
     tile.style.position = 'relative';
-
-    const empty = document.createElement('div');
-    empty.dataset.emptyParticipant = 'true';
-    empty.style.alignItems = 'center';
-    empty.style.color = '#D4D4D4';
-    empty.style.display = 'flex';
-    empty.style.flexDirection = 'column';
-    empty.style.fontSize = '13px';
-    empty.style.fontWeight = '900';
-    empty.style.gap = '8px';
-    empty.style.height = '100%';
-    empty.style.justifyContent = 'center';
-    empty.style.padding = '12px';
-    empty.style.textAlign = 'center';
-    const initial = document.createElement('strong');
-    initial.textContent = (participant?.name || participantId || 'G').slice(0, 1).toUpperCase();
-    initial.style.alignItems = 'center';
-    initial.style.background = '#1D4ED8';
-    initial.style.borderRadius = '999px';
-    initial.style.color = '#FFFFFF';
-    initial.style.display = 'flex';
-    initial.style.fontSize = '18px';
-    initial.style.height = '40px';
-    initial.style.justifyContent = 'center';
-    initial.style.width = '40px';
-    const emptyText = document.createElement('span');
-    emptyText.textContent = 'Camera is off';
-    empty.appendChild(initial);
-    empty.appendChild(emptyText);
-    tile.appendChild(empty);
+    ensureParticipantTilePlaceholder(tile, participant);
 
     const label = document.createElement('span');
     label.textContent = participant?.name || participant?.identity || 'Guest';
@@ -592,6 +631,40 @@ export default function JoinCall() {
 
     cameraRef.current?.appendChild(tile);
     return tile;
+  };
+
+  const ensureParticipantTilePlaceholder = (tile, participant) => {
+    if (!tile || tile.querySelector('video') || tile.querySelector('[data-empty-participant="true"]')) return;
+    const participantId = participant?.identity || tile.dataset.participantId || 'Guest';
+    const empty = document.createElement('div');
+    empty.dataset.emptyParticipant = 'true';
+    empty.style.alignItems = 'center';
+    empty.style.color = '#D4D4D4';
+    empty.style.display = 'flex';
+    empty.style.flexDirection = 'column';
+    empty.style.fontSize = '13px';
+    empty.style.fontWeight = '900';
+    empty.style.gap = '8px';
+    empty.style.height = '100%';
+    empty.style.justifyContent = 'center';
+    empty.style.padding = '12px';
+    empty.style.textAlign = 'center';
+    const initial = document.createElement('strong');
+    initial.textContent = (participant?.name || participantId).slice(0, 1).toUpperCase();
+    initial.style.alignItems = 'center';
+    initial.style.background = '#1D4ED8';
+    initial.style.borderRadius = '999px';
+    initial.style.color = '#FFFFFF';
+    initial.style.display = 'flex';
+    initial.style.fontSize = '18px';
+    initial.style.height = '40px';
+    initial.style.justifyContent = 'center';
+    initial.style.width = '40px';
+    const emptyText = document.createElement('span');
+    emptyText.textContent = 'Camera is off';
+    empty.appendChild(initial);
+    empty.appendChild(emptyText);
+    tile.appendChild(empty);
   };
 
   const removeParticipantTile = (participantId) => {
@@ -649,9 +722,9 @@ export default function JoinCall() {
   };
 
   return (
-    <div style={pageStyle}>
+    <div data-join-call-root="true" style={pageStyle}>
       <style>{responsiveStyles}</style>
-      <main style={panelStyle}>
+      <main data-call-panel="true" data-connected={connected ? 'true' : 'false'} style={panelStyle}>
         {fatalError && (
           <section style={fatalErrorStyle}>
             <strong>Call page error</strong>
@@ -666,74 +739,83 @@ export default function JoinCall() {
           <span style={roomPillStyle}>{roomCode}</span>
         </div>
 
-        <label style={labelStyle}>
-          Your name
-          <input value={name} onChange={(event) => setName(event.target.value)} disabled={connected} required placeholder="Enter your name" style={inputStyle} />
-        </label>
-
-        <div className="join-actions" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-          <button disabled={connected || !roomCode || !name.trim()} onClick={joinRoom} style={primaryButtonStyle}>
-            <Play size={17} /> Join
-          </button>
-          <button disabled={!connected} onClick={leaveRoom} style={secondaryButtonStyle}>
-            <PhoneOff size={17} /> Leave
-          </button>
-        </div>
-
-        {connected && (
-          <div className="join-actions" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginTop: '10px' }}>
-            <button onClick={toggleMic} style={controlButtonStyle(micOn)}>
-              <Mic size={17} /> {micOn ? 'Mute' : 'Mic'}
+        {!connected && (
+          <section data-prejoin="true" style={prejoinStyle}>
+            <label style={labelStyle}>
+              Your name
+              <input value={name} onChange={(event) => setName(event.target.value)} required placeholder="Enter your name" style={inputStyle} />
+            </label>
+            <button disabled={!roomCode || !name.trim()} onClick={joinRoom} style={primaryButtonStyle}>
+              <Play size={17} /> Join Call
             </button>
-            <button onClick={toggleCamera} style={controlButtonStyle(cameraOn)}>
-              <Camera size={17} /> {cameraOn ? 'Hide Camera' : 'Camera'}
-            </button>
-            <button onClick={toggleScreenShare} style={controlButtonStyle(screenOn)}>
-              <ScreenShare size={17} /> {screenOn ? 'Stop Share' : 'Share Screen'}
-            </button>
-            <button onClick={toggleWhiteboard} style={controlButtonStyle(screenOn)}>
-              <SquarePen size={17} /> {screenOn ? 'Stop Board' : 'Whiteboard'}
-            </button>
-          </div>
+          </section>
         )}
 
-        <p style={statusStyle}>{status}</p>
+        <p data-call-status="true" style={statusStyle}>{status}</p>
         <div ref={audioRef} aria-hidden="true" style={audioSinkStyle} />
         <canvas ref={whiteboardCanvasRef} aria-hidden="true" style={hiddenCanvasStyle} />
 
-        <section className="viewer-section" style={{ ...viewerStyle, display: connected && !hasHostScreen ? 'none' : 'block' }}>
-          <div style={viewerHeaderStyle}>
-            <span style={viewerTitleStyle}><Video size={18} /> Host Screen</span>
-            {hasHostScreen && (
-              <button onClick={() => mediaRef.current?.requestFullscreen?.()} style={viewerHeaderButtonStyle}>Fullscreen</button>
-            )}
-          </div>
-          <div className="media-box" ref={mediaRef} style={mediaBoxStyle}>
-            <span data-placeholder="true">{connected ? 'No host screen yet.' : 'Join to view the live screen or whiteboard.'}</span>
-          </div>
-        </section>
+        <div
+          data-call-content="true"
+          data-has-presentation={hasHostScreen ? 'true' : 'false'}
+          style={{ display: connected ? 'grid' : 'none', gap: '10px' }}
+        >
+          <section className="viewer-section" style={{ ...viewerStyle, display: hasHostScreen ? 'block' : 'none' }}>
+            <div style={viewerHeaderStyle}>
+              <span style={viewerTitleStyle}><Video size={18} /> Presentation</span>
+              <button
+                aria-label="Fullscreen presentation"
+                onClick={() => mediaRef.current?.requestFullscreen?.()}
+                style={viewerHeaderButtonStyle}
+              >
+                <Expand size={16} />
+              </button>
+            </div>
+            <div className="media-box" ref={mediaRef} style={mediaBoxStyle}>
+              <span data-placeholder="true">No presentation yet.</span>
+            </div>
+          </section>
 
-        <section style={viewerStyle}>
-          <div style={viewerHeaderStyle}>
-            <Camera size={18} />
-            People
-          </div>
-          <div className="camera-box" ref={cameraRef} style={cameraBoxStyle}>
-            {connected && (
-              <div style={localFaceTileStyle}>
+          <section data-people-section="true" style={viewerStyle}>
+            <div style={viewerHeaderStyle}>
+              <span style={viewerTitleStyle}><Camera size={18} /> People</span>
+              <span style={peopleCountStyle}>{participants.length + 1}</span>
+            </div>
+            <div className="camera-box" ref={cameraRef} style={cameraBoxStyle}>
+              <div data-local-face="true" style={localFaceTileStyle}>
                 <video ref={localCameraRef} autoPlay muted playsInline style={{ ...localCameraStyle, display: cameraOn ? 'block' : 'none' }} />
                 {!cameraOn && <div style={faceOffStyle}>Your camera is off</div>}
-                <span style={faceLabelStyle}>You</span>
+                <span style={faceLabelStyle}>{name || 'You'} (You)</span>
               </div>
-            )}
-            {!connected && <span data-placeholder="true">Join to use camera and mic.</span>}
-          </div>
-        </section>
+              <span data-placeholder="true">Waiting for other cameras.</span>
+            </div>
+          </section>
 
-        <section style={participantsStyle}>
-          <h2 style={sectionTitleStyle}><Users size={17} /> Participants</h2>
-          <p style={mutedStyle}>{participants.length ? participants.join(', ') : 'No remote participants yet.'}</p>
-        </section>
+          <section data-participants-summary="true" style={participantsStyle}>
+            <h2 style={sectionTitleStyle}><Users size={17} /> {participants.length + 1} in call</h2>
+            <p style={mutedStyle}>{participants.length ? participants.join(', ') : 'Waiting for others to join.'}</p>
+          </section>
+        </div>
+
+        {connected && (
+          <div data-call-control-dock="true" style={callControlDockStyle}>
+            <button aria-label={micOn ? 'Mute microphone' : 'Turn microphone on'} onClick={toggleMic} style={controlButtonStyle(micOn)}>
+              <Mic size={18} /><span>{micOn ? 'Mute' : 'Mic'}</span>
+            </button>
+            <button aria-label={cameraOn ? 'Turn camera off' : 'Turn camera on'} onClick={toggleCamera} style={controlButtonStyle(cameraOn)}>
+              <Camera size={18} /><span>{cameraOn ? 'Camera Off' : 'Camera'}</span>
+            </button>
+            <button aria-label={screenOn ? 'Stop sharing' : 'Share screen'} onClick={toggleScreenShare} style={controlButtonStyle(screenOn)}>
+              <ScreenShare size={18} /><span>{screenOn ? 'Stop Share' : 'Share'}</span>
+            </button>
+            <button aria-label={screenOn ? 'Stop whiteboard' : 'Share whiteboard'} onClick={toggleWhiteboard} style={controlButtonStyle(screenOn)}>
+              <SquarePen size={18} /><span>{screenOn ? 'Stop Board' : 'Board'}</span>
+            </button>
+            <button aria-label="Leave call" onClick={leaveRoom} style={leaveButtonStyle}>
+              <PhoneOff size={19} /><span>Leave</span>
+            </button>
+          </div>
+        )}
       </main>
     </div>
   );
@@ -746,7 +828,7 @@ const pageStyle = {
   display: 'flex',
   fontFamily: 'Inter, system-ui, sans-serif',
   justifyContent: 'center',
-  minHeight: '100vh',
+  minHeight: '100dvh',
   padding: '18px',
   WebkitTextSizeAdjust: '100%'
 };
@@ -756,10 +838,15 @@ const panelStyle = {
   border: '1px solid #242424',
   borderRadius: '8px',
   color: '#FFFFFF',
-  maxWidth: '760px',
+  maxWidth: '520px',
   padding: '18px',
   width: '100%',
   minHeight: 'auto'
+};
+
+const prejoinStyle = {
+  display: 'grid',
+  gap: '12px'
 };
 
 const fatalErrorStyle = {
@@ -791,7 +878,7 @@ const brandStyle = {
 };
 
 const titleStyle = {
-  fontSize: 'clamp(24px, 7vw, 30px)',
+  fontSize: '28px',
   fontWeight: 900,
   letterSpacing: 0,
   marginBottom: 0
@@ -862,8 +949,33 @@ const controlButtonStyle = (active) => ({
   ...secondaryButtonStyle,
   background: active ? '#FFFFFF' : '#000000',
   border: `1px solid ${active ? '#FFFFFF' : '#333333'}`,
-  color: active ? '#000000' : '#FFFFFF'
+  color: active ? '#000000' : '#FFFFFF',
+  flexDirection: 'column',
+  fontSize: '11px',
+  gap: '4px',
+  minHeight: '54px',
+  padding: '6px'
 });
+
+const leaveButtonStyle = {
+  ...controlButtonStyle(false),
+  background: '#B42318',
+  border: '1px solid #B42318'
+};
+
+const callControlDockStyle = {
+  background: 'rgba(13, 13, 13, 0.96)',
+  border: '1px solid #2A2A2A',
+  borderRadius: '8px',
+  bottom: '10px',
+  display: 'grid',
+  gap: '8px',
+  gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
+  marginTop: '12px',
+  padding: '8px',
+  position: 'sticky',
+  zIndex: 20
+};
 
 const statusStyle = {
   color: '#D4D4D4',
@@ -892,7 +1004,7 @@ const viewerStyle = {
   border: '1px solid #2A2A2A',
   borderRadius: '8px',
   overflow: 'hidden',
-  marginTop: '12px'
+  marginTop: 0
 };
 
 const viewerHeaderStyle = {
@@ -913,15 +1025,31 @@ const viewerTitleStyle = {
 };
 
 const viewerHeaderButtonStyle = {
+  alignItems: 'center',
   background: '#FFFFFF',
   border: 'none',
   borderRadius: '999px',
   color: '#000000',
   cursor: 'pointer',
+  display: 'inline-flex',
+  height: '32px',
+  justifyContent: 'center',
+  padding: 0,
+  width: '32px'
+};
+
+const peopleCountStyle = {
+  alignItems: 'center',
+  background: '#FFFFFF',
+  borderRadius: '999px',
+  color: '#000000',
+  display: 'inline-flex',
   fontSize: '12px',
   fontWeight: 900,
-  minHeight: '30px',
-  padding: '0 10px'
+  height: '28px',
+  justifyContent: 'center',
+  minWidth: '28px',
+  padding: '0 8px'
 };
 
 const mediaBoxStyle = {
@@ -932,7 +1060,7 @@ const mediaBoxStyle = {
   display: 'flex',
   flexDirection: 'column',
   justifyContent: 'center',
-  minHeight: '220px',
+  minHeight: 0,
   overflow: 'hidden',
   padding: '10px'
 };
@@ -960,7 +1088,7 @@ const localCameraStyle = {
 };
 
 const localFaceTileStyle = {
-  aspectRatio: '1 / 1',
+  aspectRatio: '16 / 9',
   background: '#050505',
   border: '1px solid #2A2A2A',
   borderRadius: '8px',
@@ -994,8 +1122,8 @@ const faceLabelStyle = {
 
 const participantsStyle = {
   borderTop: '1px solid #2A2A2A',
-  marginTop: '16px',
-  paddingTop: '16px'
+  marginTop: 0,
+  paddingTop: '12px'
 };
 
 const sectionTitleStyle = {
@@ -1008,45 +1136,82 @@ const sectionTitleStyle = {
 };
 
 const responsiveStyles = `
-  @media (max-width: 640px) {
+  [data-call-panel="true"][data-connected="true"] {
+    max-width: 1120px !important;
+  }
+
+  [data-call-content="true"][data-has-presentation="true"] {
+    align-items: start;
+    grid-template-columns: minmax(0, 1.7fr) minmax(280px, 0.7fr);
+  }
+
+  [data-call-content="true"][data-has-presentation="false"] [data-people-section="true"] {
+    grid-column: 1 / -1;
+  }
+
+  [data-participants-summary="true"] {
+    grid-column: 1 / -1;
+  }
+
+  @media (max-width: 720px) {
     body {
       overflow: auto !important;
     }
 
     #root {
-      min-height: 100vh;
+      min-height: 100dvh;
     }
 
-    .join-actions {
-      bottom: 0;
-      grid-template-columns: 1fr 1fr !important;
-      left: 0;
-      padding: 10px 0 0;
-      position: sticky;
-      z-index: 10;
+    [data-join-call-root="true"] {
+      min-height: 100dvh !important;
+      padding: 0 !important;
+    }
+
+    [data-call-panel="true"] {
+      border: 0 !important;
+      border-radius: 0 !important;
+      min-height: 100dvh !important;
+      padding: 14px !important;
+    }
+
+    [data-call-panel="true"] h1 {
+      font-size: 24px !important;
+    }
+
+    [data-call-panel="true"][data-connected="true"] {
+      padding-bottom: 86px !important;
+    }
+
+    [data-call-content="true"] {
+      grid-template-columns: minmax(0, 1fr) !important;
+    }
+
+    [data-call-content="true"] > * {
+      grid-column: 1 !important;
     }
 
     .viewer-section {
-      margin-left: -10px;
-      margin-right: -10px;
+      margin-left: -6px;
+      margin-right: -6px;
     }
 
     .media-box {
       aspect-ratio: 16 / 9 !important;
-      min-height: 230px !important;
-      max-height: 46vh !important;
+      min-height: 0 !important;
+      max-height: none !important;
       padding: 8px !important;
     }
 
     .media-box video {
-      max-height: 46vh !important;
+      max-height: none !important;
       object-fit: contain;
       transform: none !important;
     }
 
     .camera-box {
       grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-      min-height: 130px !important;
+      min-height: 110px !important;
+      overflow-x: auto !important;
     }
 
     .camera-box video {
@@ -1054,9 +1219,32 @@ const responsiveStyles = `
       transform: none !important;
     }
 
-    input,
-    button {
+    input {
       font-size: 16px !important;
+    }
+
+    [data-call-control-dock="true"] {
+      border-bottom: 0 !important;
+      border-bottom-left-radius: 0 !important;
+      border-bottom-right-radius: 0 !important;
+      bottom: 0 !important;
+      left: 0 !important;
+      margin: 0 !important;
+      padding: 8px 10px calc(8px + env(safe-area-inset-bottom)) !important;
+      position: fixed !important;
+      right: 0 !important;
+    }
+
+    [data-call-control-dock="true"] button {
+      min-height: 48px !important;
+    }
+
+    [data-call-control-dock="true"] button span {
+      display: none !important;
+    }
+
+    [data-call-status="true"] {
+      margin: 10px 0 !important;
     }
   }
 `;
