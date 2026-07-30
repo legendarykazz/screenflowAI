@@ -13,6 +13,7 @@ import {
   Sparkles,
   Square,
   Timer,
+  Upload,
   ZoomIn,
   ZoomOut,
   Volume2,
@@ -80,6 +81,7 @@ export default function Recording({ onOpenProject, license }) {
   const [countdown, setCountdown] = useState(true);
   const [countdownVal, setCountdownVal] = useState(0);
   const [statusMessage, setStatusMessage] = useState('Ready to capture a polished screen recording.');
+  const [recordingError, setRecordingError] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const [recordTime, setRecordTime] = useState(0);
   const [brandKit, setBrandKit] = useState(null);
@@ -102,6 +104,7 @@ export default function Recording({ onOpenProject, license }) {
   const timerIntervalRef = useRef(null);
   const trackingEventsRef = useRef([]);
   const audioCtxRef = useRef(null);
+  const mobileImportRef = useRef(null);
 
   // Live Canvas Zoom References & Refs
   const canvasRef = useRef(null);
@@ -123,6 +126,12 @@ export default function Recording({ onOpenProject, license }) {
 
   const activePreset = cinematicPresets.find((preset) => preset.id === presetId) || cinematicPresets[0];
   const isElectronRuntime = !!window.electron?.getAppVersion;
+  const supportsBrowserScreenCapture = typeof navigator.mediaDevices?.getDisplayMedia === 'function';
+  const supportsCameraCapture = typeof navigator.mediaDevices?.getUserMedia === 'function'
+    && typeof window.MediaRecorder !== 'undefined';
+  const forceCameraOnlyMode = import.meta.env.DEV
+    && new URLSearchParams(window.location.search).has('cameraOnly');
+  const isCameraOnlyBrowser = !isElectronRuntime && (!supportsBrowserScreenCapture || forceCameraOnlyMode);
   const withTimeout = (promise, ms, label) => (
     Promise.race([
       promise,
@@ -200,6 +209,14 @@ export default function Recording({ onOpenProject, license }) {
     };
   }, [isRecording]);
 
+  useEffect(() => {
+    if (!isCameraOnlyBrowser) return;
+    setRecordingMode('Camera');
+    setSystemAudio(false);
+    setWebcamEnabled(false);
+    setShowCursor(false);
+  }, [isCameraOnlyBrowser]);
+
   // Dedicated component unmount cleanup (only runs once on unmount)
   useEffect(() => {
     return () => {
@@ -211,7 +228,7 @@ export default function Recording({ onOpenProject, license }) {
 
   const loadDevices = async () => {
     let foundSources = 0;
-    if (window.electron?.getSources) {
+    if (isElectronRuntime && window.electron?.getSources) {
       const srcList = await window.electron.getSources();
       foundSources = srcList.length;
       setSources(srcList);
@@ -219,6 +236,9 @@ export default function Recording({ onOpenProject, license }) {
     }
 
     try {
+      if (!navigator.mediaDevices?.enumerateDevices) {
+        throw new Error('Media devices are unavailable in this browser.');
+      }
       const devices = await navigator.mediaDevices.enumerateDevices();
       const mics = devices.filter((device) => device.kind === 'audioinput');
       const cams = devices.filter((device) => device.kind === 'videoinput');
@@ -226,10 +246,16 @@ export default function Recording({ onOpenProject, license }) {
       setCameras(cams);
       if (mics.length > 0) setSelectedMic(mics[0].deviceId);
       if (cams.length > 0) setSelectedCamera(cams[0].deviceId);
-      setStatusMessage(`Devices refreshed: ${foundSources || sources.length || 0} capture sources, ${mics.length} microphones, ${cams.length} cameras.`);
+      setStatusMessage(isCameraOnlyBrowser
+        ? 'Phone camera mode is ready. Record with your camera and microphone, or import a native phone screen recording.'
+        : `Devices refreshed: ${foundSources || sources.length || 0} capture sources, ${mics.length} microphones, ${cams.length} cameras.`
+      );
     } catch (error) {
       console.warn('Failed to list media devices:', error);
-      setStatusMessage('Device refresh failed. You can still use the system screen picker.');
+      setStatusMessage(isCameraOnlyBrowser
+        ? 'Camera access will be requested when you start. You can also import a video from your phone.'
+        : 'Device refresh failed. You can still use the system screen picker.'
+      );
     }
   };
 
@@ -381,14 +407,18 @@ export default function Recording({ onOpenProject, license }) {
       ? [
           'video/webm;codecs=vp9,opus',
           'video/webm;codecs=vp8,opus',
-          'video/webm'
+          'video/webm',
+          'video/mp4;codecs=h264,aac',
+          'video/mp4'
         ]
       : [
           'video/webm;codecs=vp9',
           'video/webm;codecs=vp8',
-          'video/webm'
+          'video/webm',
+          'video/mp4;codecs=h264',
+          'video/mp4'
         ];
-    return types.find((type) => MediaRecorder.isTypeSupported(type)) || '';
+    return types.find((type) => window.MediaRecorder?.isTypeSupported?.(type)) || '';
   };
 
   const createComposedVideoStream = async (screenStream, cropRegion, cameraStream) => {
@@ -671,6 +701,63 @@ export default function Recording({ onOpenProject, license }) {
     startRecordingPipeline(cropStreamRef.current, finalArea);
   };
 
+  const describeRecordingError = (error) => {
+    if (error?.name === 'NotAllowedError' || error?.name === 'SecurityError') {
+      return 'Camera or microphone permission was not granted. Allow access in your browser settings, then try again.';
+    }
+    if (error?.name === 'NotFoundError' || error?.name === 'DevicesNotFoundError') {
+      return 'No usable camera or microphone was found on this device.';
+    }
+    if (error?.name === 'NotReadableError' || error?.name === 'TrackStartError') {
+      return 'The camera or microphone is already in use by another app. Close it there, then try again.';
+    }
+    if (error?.name === 'AbortError') {
+      return 'Recording setup was interrupted before the camera became ready.';
+    }
+    return error?.message || 'Recording could not start on this device.';
+  };
+
+  const handleMobileImport = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    if (!file.type.startsWith('video/')) {
+      setRecordingError('Choose a video file from your phone.');
+      return;
+    }
+
+    setRecordingError('');
+    setStatusMessage('Importing phone recording...');
+    const objectUrl = URL.createObjectURL(file);
+
+    try {
+      const duration = await new Promise((resolve) => {
+        const video = document.createElement('video');
+        video.preload = 'metadata';
+        video.onloadedmetadata = () => resolve(Number.isFinite(video.duration) ? video.duration : 0);
+        video.onerror = () => resolve(0);
+        video.src = objectUrl;
+      });
+      const importedName = file.name.replace(/\.[^.]+$/, '') || getRecordingProjectName();
+      const project = await window.electron.createProject(importedName);
+      const settings = buildProjectSettings();
+      await window.electron.updateProject(project.id, {
+        video_path: objectUrl,
+        raw_video_path: objectUrl,
+        duration,
+        ...settings,
+        settings
+      });
+      setStatusMessage('Phone recording imported. Opening editor...');
+      onOpenProject(project.id);
+    } catch (error) {
+      URL.revokeObjectURL(objectUrl);
+      setRecordingError(`Could not import this video. ${describeRecordingError(error)}`);
+      setStatusMessage('Video import failed.');
+    }
+  };
+
   const handleStart = async () => {
     console.log("Recording.handleStart() called. Current Mode:", recordingMode, "Selected Source:", selectedSource);
     if (isRecording) {
@@ -678,15 +765,27 @@ export default function Recording({ onOpenProject, license }) {
       return;
     }
 
+    setRecordingError('');
+    if (typeof window.MediaRecorder === 'undefined') {
+      setRecordingError('This browser cannot record video. Import a video from your phone instead.');
+      return;
+    }
+    if (isCameraOnlyBrowser && !supportsCameraCapture) {
+      setRecordingError('Camera recording is unavailable in this browser. Import a video from your phone instead.');
+      return;
+    }
+
     // Initialize AudioContext under a direct user gesture to bypass Chrome's autoplay/suspension policies
-    try {
-      const ctx = createAudioContext();
-      if (ctx.state === 'suspended') {
-        await ctx.resume();
+    if (!isCameraOnlyBrowser) {
+      try {
+        const ctx = createAudioContext();
+        if (ctx.state === 'suspended') {
+          await ctx.resume();
+        }
+        audioCtxRef.current = ctx;
+      } catch (err) {
+        console.warn("Failed to pre-initialize AudioContext on click:", err);
       }
-      audioCtxRef.current = ctx;
-    } catch (err) {
-      console.warn("Failed to pre-initialize AudioContext on click:", err);
     }
 
     if (countdown) {
@@ -721,10 +820,11 @@ export default function Recording({ onOpenProject, license }) {
     zoomCenterRef.current = { x: 0.5, y: 0.5 };
     targetZoomCenterRef.current = { x: 0.5, y: 0.5 };
     setRecordTime(0);
-    setStatusMessage('Hiding ScreenFlowAI before capture starts...');
+    setRecordingError('');
+    setStatusMessage(isCameraOnlyBrowser ? 'Preparing phone camera...' : 'Hiding ScreenFlowAI before capture starts...');
 
     try {
-      if (webcamEnabled && !cameraStreamRef.current) {
+      if (webcamEnabled && !isCameraOnlyBrowser && !cameraStreamRef.current) {
         setStatusMessage('Starting webcam overlay...');
         try {
           cameraStreamRef.current = await navigator.mediaDevices.getUserMedia({
@@ -768,7 +868,34 @@ export default function Recording({ onOpenProject, license }) {
         }
       };
 
-      if (targetSource && window.electron?.getSources) {
+      if (isCameraOnlyBrowser) {
+        setStatusMessage('Allow camera and microphone access to begin recording.');
+        const micConstraints = {
+          sampleRate: { ideal: 48000 },
+          channelCount: { ideal: 1 },
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          ...(selectedMic === 'default' ? {} : { deviceId: { exact: selectedMic } })
+        };
+        const cameraConstraints = selectedCamera === 'default'
+          ? {
+              facingMode: { ideal: 'user' },
+              width: { ideal: captureProfile.width },
+              height: { ideal: captureProfile.height },
+              frameRate: { ideal: Math.min(30, captureProfile.fps) }
+            }
+          : {
+              deviceId: { exact: selectedCamera },
+              width: { ideal: captureProfile.width },
+              height: { ideal: captureProfile.height },
+              frameRate: { ideal: Math.min(30, captureProfile.fps) }
+            };
+        screenStream = await navigator.mediaDevices.getUserMedia({
+          audio: micConstraints,
+          video: cameraConstraints
+        });
+      } else if (targetSource && isElectronRuntime && window.electron?.getSources) {
         // Programmatic direct screen capture without any picker prompts
         try {
           screenStream = await navigator.mediaDevices.getUserMedia({
@@ -796,6 +923,9 @@ export default function Recording({ onOpenProject, license }) {
         }
       } else {
         // Fallback for browser/standard context
+        if (!supportsBrowserScreenCapture) {
+          throw new Error('Screen capture is unavailable in this browser.');
+        }
         try {
           screenStream = await navigator.mediaDevices.getDisplayMedia({
             video: browserVideoConstraints,
@@ -812,13 +942,13 @@ export default function Recording({ onOpenProject, license }) {
 
       const screenTrack = screenStream.getVideoTracks()[0];
       if (screenTrack) {
-        screenTrack.contentHint = 'detail';
+        screenTrack.contentHint = isCameraOnlyBrowser ? 'motion' : 'detail';
         screenTrack.addEventListener('ended', () => {
           if (!stoppingRef.current) handleStopRef.current?.();
         }, { once: true });
       }
 
-      if (recordingMode === 'Custom Area') {
+      if (!isCameraOnlyBrowser && recordingMode === 'Custom Area') {
         cropStreamRef.current = screenStream;
         setShowCropSelector(true);
         // Wait for video load in crop preview
@@ -834,9 +964,9 @@ export default function Recording({ onOpenProject, license }) {
         startRecordingPipeline(screenStream, { x: 0, y: 0, w: 1, h: 1 });
       }
     } catch (error) {
-      alert("Recording initialization failed: " + error.stack);
       console.error('Recording initialization failed:', error);
-      setStatusMessage(`Could not start recording: ${error.message}`);
+      setRecordingError(describeRecordingError(error));
+      setStatusMessage('Recording did not start.');
       window.electron?.restoreWindow?.();
     }
   };
@@ -851,91 +981,103 @@ export default function Recording({ onOpenProject, license }) {
         cameraStream = cameraStreamRef.current;
       }
 
-      const composedVideoStream = await createComposedVideoStream(screenStream, cropRegion, cameraStream);
+      const composedVideoStream = isCameraOnlyBrowser
+        ? new MediaStream(screenStream.getVideoTracks())
+        : await createComposedVideoStream(screenStream, cropRegion, cameraStream);
       const composedVideoTrack = composedVideoStream.getVideoTracks()[0];
       if (composedVideoTrack) {
+        composedVideoTrack.contentHint = isCameraOnlyBrowser ? 'motion' : 'detail';
         combinedTracks.push(composedVideoTrack);
       }
 
       // 2. Mix microphone and system audio into a single track
       let micStream = null;
-      try {
-        const micConstraints = {
-          sampleRate: { ideal: 48000 },
-          sampleSize: { ideal: 16 },
-          channelCount: { ideal: 1 },
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          ...(selectedMic === 'default' ? {} : { deviceId: { exact: selectedMic } })
-        };
-        micStream = await navigator.mediaDevices.getUserMedia({
-          audio: micConstraints
-        });
-        micStreamRef.current = micStream;
-      } catch (error) {
-        console.warn('Microphone capture bypassed or failed:', error);
-      }
-
-      const systemAudioTrack = screenStream.getAudioTracks()[0];
-
-      // Use Web Audio API to mix audio tracks to prevent container corruption (multiple audio tracks in WebM is unsupported)
-      const audioCtx = audioCtxRef.current || createAudioContext();
-      audioCtxRef.current = audioCtx;
-      if (audioCtx.state === 'suspended') await audioCtx.resume();
-
-      const dest = audioCtx.createMediaStreamDestination();
-      const mixBus = audioCtx.createGain();
-      const limiter = audioCtx.createDynamicsCompressor();
-      limiter.threshold.value = -6;
-      limiter.knee.value = 12;
-      limiter.ratio.value = 8;
-      limiter.attack.value = 0.003;
-      limiter.release.value = 0.25;
-      mixBus.connect(limiter);
-      limiter.connect(dest);
-
       let hasAudio = false;
-      let connectedAudioSources = 0;
-      const fallbackAudioTracks = [];
-
-      if (micStream && micStream.getAudioTracks().length > 0) {
-        try {
-          const micSource = audioCtx.createMediaStreamSource(micStream);
-          const micGain = audioCtx.createGain();
-          micGain.gain.value = 1;
-          micSource.connect(micGain);
-          micGain.connect(mixBus);
-          connectedAudioSources += 1;
-        } catch (e) {
-          console.warn("Could not connect microphone to AudioContext:", e);
-          fallbackAudioTracks.push(...micStream.getAudioTracks());
+      if (isCameraOnlyBrowser) {
+        const mobileMicTrack = screenStream.getAudioTracks()[0];
+        if (mobileMicTrack) {
+          mobileMicTrack.contentHint = 'speech';
+          combinedTracks.push(mobileMicTrack);
+          hasAudio = true;
         }
-      }
-
-      if (systemAudio && systemAudioTrack) {
+      } else {
         try {
-          const sysStream = new MediaStream([systemAudioTrack]);
-          const sysSource = audioCtx.createMediaStreamSource(sysStream);
-          const systemGain = audioCtx.createGain();
-          systemGain.gain.value = 0.82;
-          sysSource.connect(systemGain);
-          systemGain.connect(mixBus);
-          connectedAudioSources += 1;
-        } catch (e) {
-          console.warn("Could not connect system audio to AudioContext:", e);
-          fallbackAudioTracks.push(systemAudioTrack);
+          const micConstraints = {
+            sampleRate: { ideal: 48000 },
+            sampleSize: { ideal: 16 },
+            channelCount: { ideal: 1 },
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            ...(selectedMic === 'default' ? {} : { deviceId: { exact: selectedMic } })
+          };
+          micStream = await navigator.mediaDevices.getUserMedia({
+            audio: micConstraints
+          });
+          micStreamRef.current = micStream;
+        } catch (error) {
+          console.warn('Microphone capture bypassed or failed:', error);
         }
-      }
 
-      if (connectedAudioSources > 0 && dest.stream.getAudioTracks().length > 0) {
-        const mixedAudioTrack = dest.stream.getAudioTracks()[0];
-        mixedAudioTrack.contentHint = 'speech';
-        combinedTracks.push(mixedAudioTrack);
-        hasAudio = true;
-      } else if (fallbackAudioTracks.length > 0) {
-        combinedTracks.push(fallbackAudioTracks[0]);
-        hasAudio = true;
+        const systemAudioTrack = screenStream.getAudioTracks()[0];
+
+        // Use Web Audio API to mix audio tracks to prevent container corruption (multiple audio tracks in WebM is unsupported)
+        const audioCtx = audioCtxRef.current || createAudioContext();
+        audioCtxRef.current = audioCtx;
+        if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+        const dest = audioCtx.createMediaStreamDestination();
+        const mixBus = audioCtx.createGain();
+        const limiter = audioCtx.createDynamicsCompressor();
+        limiter.threshold.value = -6;
+        limiter.knee.value = 12;
+        limiter.ratio.value = 8;
+        limiter.attack.value = 0.003;
+        limiter.release.value = 0.25;
+        mixBus.connect(limiter);
+        limiter.connect(dest);
+
+        let connectedAudioSources = 0;
+        const fallbackAudioTracks = [];
+
+        if (micStream && micStream.getAudioTracks().length > 0) {
+          try {
+            const micSource = audioCtx.createMediaStreamSource(micStream);
+            const micGain = audioCtx.createGain();
+            micGain.gain.value = 1;
+            micSource.connect(micGain);
+            micGain.connect(mixBus);
+            connectedAudioSources += 1;
+          } catch (e) {
+            console.warn("Could not connect microphone to AudioContext:", e);
+            fallbackAudioTracks.push(...micStream.getAudioTracks());
+          }
+        }
+
+        if (systemAudio && systemAudioTrack) {
+          try {
+            const sysStream = new MediaStream([systemAudioTrack]);
+            const sysSource = audioCtx.createMediaStreamSource(sysStream);
+            const systemGain = audioCtx.createGain();
+            systemGain.gain.value = 0.82;
+            sysSource.connect(systemGain);
+            systemGain.connect(mixBus);
+            connectedAudioSources += 1;
+          } catch (e) {
+            console.warn("Could not connect system audio to AudioContext:", e);
+            fallbackAudioTracks.push(systemAudioTrack);
+          }
+        }
+
+        if (connectedAudioSources > 0 && dest.stream.getAudioTracks().length > 0) {
+          const mixedAudioTrack = dest.stream.getAudioTracks()[0];
+          mixedAudioTrack.contentHint = 'speech';
+          combinedTracks.push(mixedAudioTrack);
+          hasAudio = true;
+        } else if (fallbackAudioTracks.length > 0) {
+          combinedTracks.push(fallbackAudioTracks[0]);
+          hasAudio = true;
+        }
       }
 
       const combinedStream = new MediaStream(combinedTracks.filter(Boolean));
@@ -1002,7 +1144,7 @@ export default function Recording({ onOpenProject, license }) {
           }
 
           const res = await withTimeout(
-            window.electron.saveRecordedFile(arrayBuffer, getRecordingProjectName()),
+            window.electron.saveRecordedFile(arrayBuffer, getRecordingProjectName(), mediaRecorder.mimeType),
             11 * 60 * 1000,
             'Saving recording'
           );
@@ -1052,7 +1194,9 @@ export default function Recording({ onOpenProject, license }) {
       setIsRecording(true);
       setStatusMessage(isElectronRuntime
         ? 'Recording! Ctrl+Alt+Up to zoom, Ctrl+Alt+Down to zoom out. Move mouse to track.'
-        : 'Recording! Use the floating web controls below to zoom or stop.'
+        : isCameraOnlyBrowser
+          ? 'Camera and microphone are recording. Keep this page open until you stop.'
+          : 'Recording! Use the floating web controls below to zoom or stop.'
       );
 
       if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
@@ -1062,9 +1206,9 @@ export default function Recording({ onOpenProject, license }) {
         setRecordTime(Math.floor(elapsed));
       }, 250);
     } catch (err) {
-      alert("Failed to start canvas stream recording pipeline: " + err.stack);
       console.error("Failed to start canvas stream recording pipeline:", err);
-      setStatusMessage(`Recording start failed: ${err.message}`);
+      setRecordingError(describeRecordingError(err));
+      setStatusMessage('Recording did not start.');
       setIsRecording(false);
       stoppingRef.current = false;
       window.electron?.stopRecording?.().catch(() => {});
@@ -1158,16 +1302,16 @@ export default function Recording({ onOpenProject, license }) {
     : cameras.find((camera) => camera.deviceId === selectedCamera)?.label || 'Selected camera';
 
   const captureSummary = [
-    ['Source', recordingMode === 'Custom Area' ? 'Custom area after start' : selectedSourceName],
+    ['Source', isCameraOnlyBrowser ? selectedCameraName : recordingMode === 'Custom Area' ? 'Custom area after start' : selectedSourceName],
     ['Quality', resolution],
     ['Microphone', selectedMicName],
-    ['System audio', systemAudio ? 'On' : 'Off'],
-    ['Webcam', webcamEnabled ? selectedCameraName : 'Off'],
-    ['Cursor', showCursor ? 'Recorded with highlight' : 'Hidden']
+    ['System audio', isCameraOnlyBrowser ? 'Not available on phone' : systemAudio ? 'On' : 'Off'],
+    ['Webcam', isCameraOnlyBrowser ? 'Primary video' : webcamEnabled ? selectedCameraName : 'Off'],
+    ['Cursor', isCameraOnlyBrowser ? 'Not used in camera mode' : showCursor ? 'Recorded with highlight' : 'Hidden']
   ];
 
   return (
-    <div className="responsive-page recording-page" style={{
+    <div className={`responsive-page recording-page${isCameraOnlyBrowser ? ' camera-only-recorder' : ''}`} style={{
       background: '#F5F7FB',
       color: '#172033',
       display: 'flex',
@@ -1184,7 +1328,10 @@ export default function Recording({ onOpenProject, license }) {
             Recorder
           </h1>
           <p style={{ color: '#5A657B', fontSize: '14px', marginTop: '4px' }}>
-            Choose the source, audio, cursor, and optional camera before recording.
+            {isCameraOnlyBrowser
+              ? 'Record with your phone camera and microphone, or import a video from your device.'
+              : 'Choose the source, audio, cursor, and optional camera before recording.'
+            }
           </p>
         </div>
         <button
@@ -1231,62 +1378,85 @@ export default function Recording({ onOpenProject, license }) {
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', marginBottom: '16px' }}>
               <div>
                 <h2 style={{ fontSize: '16px', fontWeight: 800 }}>Capture</h2>
-                <p style={{ color: '#647087', fontSize: '13px', marginTop: '3px' }}>Pick what to record. Custom area asks you to draw the crop after Start.</p>
+                <p style={{ color: '#647087', fontSize: '13px', marginTop: '3px' }}>
+                  {isCameraOnlyBrowser
+                    ? 'Phone browsers provide camera capture here. Native phone screen recordings can be imported below.'
+                    : 'Pick what to record. Custom area asks you to draw the crop after Start.'
+                  }
+                </p>
               </div>
               <Clapperboard size={21} color="#334155" />
             </div>
 
-            <div className="recording-mode-grid" style={{ background: '#EEF2F8', borderRadius: '8px', display: 'grid', gap: '6px', gridTemplateColumns: 'repeat(3, 1fr)', padding: '5px' }}>
-              {[
-                ['Fullscreen', Monitor],
-                ['Window', Laptop],
-                ['Custom Area', Focus]
-              ].map(([mode, Icon]) => (
-                <button
-                  key={mode}
-                  onClick={() => setRecordingMode(mode)}
-                  style={{
-                    alignItems: 'center',
-                    background: recordingMode === mode ? '#FFFFFF' : 'transparent',
-                    border: 'none',
-                    borderRadius: '6px',
-                    boxShadow: recordingMode === mode ? '0 4px 12px rgba(15, 23, 42, 0.08)' : 'none',
-                    color: recordingMode === mode ? '#172033' : '#647087',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    fontWeight: 800,
-                    gap: '8px',
-                    justifyContent: 'center',
-                    minHeight: '42px'
-                  }}
-                >
-                  <Icon size={16} />
-                  {mode}
-                </button>
-              ))}
-            </div>
+            {isCameraOnlyBrowser ? (
+              <div className="mobile-capture-notice">
+                <Camera size={20} />
+                <div>
+                  <strong>Phone camera mode</strong>
+                  <span>Mobile browsers cannot capture the phone screen. Use your phone&apos;s screen recorder, then import that video here for editing.</span>
+                </div>
+              </div>
+            ) : (
+              <div className="recording-mode-grid" style={{ background: '#EEF2F8', borderRadius: '8px', display: 'grid', gap: '6px', gridTemplateColumns: 'repeat(3, 1fr)', padding: '5px' }}>
+                {[
+                  ['Fullscreen', Monitor],
+                  ['Window', Laptop],
+                  ['Custom Area', Focus]
+                ].map(([mode, Icon]) => (
+                  <button
+                    key={mode}
+                    onClick={() => setRecordingMode(mode)}
+                    style={{
+                      alignItems: 'center',
+                      background: recordingMode === mode ? '#FFFFFF' : 'transparent',
+                      border: 'none',
+                      borderRadius: '6px',
+                      boxShadow: recordingMode === mode ? '0 4px 12px rgba(15, 23, 42, 0.08)' : 'none',
+                      color: recordingMode === mode ? '#172033' : '#647087',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      fontWeight: 800,
+                      gap: '8px',
+                      justifyContent: 'center',
+                      minHeight: '42px'
+                    }}
+                  >
+                    <Icon size={16} />
+                    {mode}
+                  </button>
+                ))}
+              </div>
+            )}
 
             <div className="recording-field-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginTop: '18px' }}>
-              <Field label="Source">
-                <select value={selectedSource || ''} onChange={(event) => setSelectedSource(event.target.value)} style={selectStyle}>
-                  {sources.length > 0 ? sources.map((source) => (
-                    <option key={source.id} value={source.id}>{source.name}</option>
-                  )) : (
-                    <option value="">Browser screen picker</option>
-                  )}
-                </select>
-              </Field>
+              {!isCameraOnlyBrowser && (
+                <Field label="Source">
+                  <select value={selectedSource || ''} onChange={(event) => setSelectedSource(event.target.value)} style={selectStyle}>
+                    {sources.length > 0 ? sources.map((source) => (
+                      <option key={source.id} value={source.id}>{source.name}</option>
+                    )) : (
+                      <option value="">Browser screen picker</option>
+                    )}
+                  </select>
+                </Field>
+              )}
               <Field label="Resolution">
                 <select value={resolution} onChange={(event) => setResolution(event.target.value)} style={selectStyle}>
                   <option>1080p - 30fps</option>
                   <option disabled={!isElectronRuntime}>1080p - 60fps</option>
-                  <option>4K UHD - 30fps</option>
+                  <option disabled={isCameraOnlyBrowser}>4K UHD - 30fps</option>
                 </select>
               </Field>
             </div>
+            {isCameraOnlyBrowser && (
+              <div className="recording-toggle-grid" style={{ display: 'grid', gridTemplateColumns: '1fr', marginTop: '18px' }}>
+                <ToggleRow checked={countdown} icon={Timer} label="5 second countdown" onChange={setCountdown} />
+              </div>
+            )}
           </div>
 
-          <div className="recording-card" style={{ ...controlCard, padding: '22px' }}>
+          {!isCameraOnlyBrowser && (
+            <div className="recording-card recording-motion-card" style={{ ...controlCard, padding: '22px' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', marginBottom: '16px' }}>
               <div>
                 <h2 style={{ fontSize: '16px', fontWeight: 800 }}>Motion preset</h2>
@@ -1324,7 +1494,9 @@ export default function Recording({ onOpenProject, license }) {
             </div>
 
             <div className="recording-toggle-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '18px', marginTop: '20px' }}>
-              <ToggleRow checked={showCursor} icon={MousePointer2} label="Cursor highlight" onChange={setShowCursor} />
+              {!isCameraOnlyBrowser && (
+                <ToggleRow checked={showCursor} icon={MousePointer2} label="Cursor highlight" onChange={setShowCursor} />
+              )}
               <ToggleRow checked={countdown} icon={Timer} label="5 second countdown" onChange={setCountdown} />
             </div>
 
@@ -1342,7 +1514,7 @@ export default function Recording({ onOpenProject, license }) {
               </div>
             )}
 
-            {showCursor && (
+            {showCursor && !isCameraOnlyBrowser && (
               <div style={{ borderTop: '1px solid #EDF1F7', marginTop: '18px', paddingTop: '18px' }}>
                 <span style={{ color: '#26344D', display: 'block', fontSize: '13px', fontWeight: 800, marginBottom: '10px' }}>Cursor color</span>
                 <div style={{ display: 'flex', gap: '10px' }}>
@@ -1365,12 +1537,18 @@ export default function Recording({ onOpenProject, license }) {
                 </div>
               </div>
             )}
-          </div>
+            </div>
+          )}
 
           <div className="recording-card" style={{ ...controlCard, padding: '22px' }}>
             <div style={{ marginBottom: '16px' }}>
               <h2 style={{ fontSize: '16px', fontWeight: 800 }}>Audio and camera</h2>
-              <p style={{ color: '#647087', fontSize: '13px', marginTop: '3px' }}>Choose what gets recorded into the edit.</p>
+              <p style={{ color: '#647087', fontSize: '13px', marginTop: '3px' }}>
+                {isCameraOnlyBrowser
+                  ? 'Your selected camera and microphone are recorded together.'
+                  : 'Choose what gets recorded into the edit.'
+                }
+              </p>
             </div>
             <div className="recording-field-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
               <Field icon={Mic} label="Microphone">
@@ -1382,8 +1560,13 @@ export default function Recording({ onOpenProject, license }) {
                   )}
                 </select>
               </Field>
-              <Field icon={Camera} label="Webcam">
-                <select disabled={!webcamEnabled} value={selectedCamera} onChange={(event) => setSelectedCamera(event.target.value)} style={{ ...selectStyle, opacity: webcamEnabled ? 1 : 0.55 }}>
+              <Field icon={Camera} label={isCameraOnlyBrowser ? 'Camera' : 'Webcam'}>
+                <select
+                  disabled={!isCameraOnlyBrowser && !webcamEnabled}
+                  value={selectedCamera}
+                  onChange={(event) => setSelectedCamera(event.target.value)}
+                  style={{ ...selectStyle, opacity: isCameraOnlyBrowser || webcamEnabled ? 1 : 0.55 }}
+                >
                   {cameras.length > 0 ? cameras.map((camera) => (
                     <option key={camera.deviceId} value={camera.deviceId}>{camera.label || `Camera ${camera.deviceId.slice(0, 5)}`}</option>
                   )) : (
@@ -1393,10 +1576,12 @@ export default function Recording({ onOpenProject, license }) {
               </Field>
             </div>
 
-            <div className="recording-toggle-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '18px', marginTop: '18px' }}>
-              <ToggleRow checked={systemAudio} icon={Volume2} label="System audio" onChange={setSystemAudio} />
-              <ToggleRow checked={webcamEnabled} icon={Camera} label="Webcam overlay" onChange={setWebcamEnabled} />
-            </div>
+            {!isCameraOnlyBrowser && (
+              <div className="recording-toggle-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '18px', marginTop: '18px' }}>
+                <ToggleRow checked={systemAudio} icon={Volume2} label="System audio" onChange={setSystemAudio} />
+                <ToggleRow checked={webcamEnabled} icon={Camera} label="Webcam overlay" onChange={setWebcamEnabled} />
+              </div>
+            )}
           </div>
         </div>
 
@@ -1423,6 +1608,11 @@ export default function Recording({ onOpenProject, license }) {
                 {formatTime(recordTime)}
             </div>
             <p style={{ color: '#647087', fontSize: '13px', lineHeight: 1.45, margin: '8px 0 18px' }}>{statusMessage}</p>
+            {recordingError && (
+              <div className="recording-error" role="alert">
+                {recordingError}
+              </div>
+            )}
 
             {isRecording ? (
               <button onClick={handleStop} style={recordButtonStyle('#DC2626')}>
@@ -1430,10 +1620,37 @@ export default function Recording({ onOpenProject, license }) {
                 Stop recording
               </button>
             ) : (
-              <button onClick={handleStart} style={recordButtonStyle('#172033')}>
+              <button
+                disabled={isCameraOnlyBrowser && !supportsCameraCapture}
+                onClick={handleStart}
+                style={{
+                  ...recordButtonStyle('#172033'),
+                  opacity: isCameraOnlyBrowser && !supportsCameraCapture ? 0.55 : 1
+                }}
+              >
                 <Play size={17} fill="#FFFFFF" />
-                Start recording
+                {isCameraOnlyBrowser ? 'Record camera' : 'Start recording'}
               </button>
+            )}
+
+            {isCameraOnlyBrowser && !isRecording && (
+              <>
+                <input
+                  accept="video/*"
+                  onChange={handleMobileImport}
+                  ref={mobileImportRef}
+                  style={{ display: 'none' }}
+                  type="file"
+                />
+                <button
+                  className="mobile-import-button"
+                  onClick={() => mobileImportRef.current?.click()}
+                  type="button"
+                >
+                  <Upload size={17} />
+                  Import phone recording
+                </button>
+              </>
             )}
           </div>
 
@@ -1560,13 +1777,17 @@ export default function Recording({ onOpenProject, license }) {
         <div style={webRecordingDockStyle}>
           <span style={webRecordingLiveStyle}>REC</span>
           <span style={webRecordingTimeStyle}>{formatTime(recordTime)}</span>
-          <button onClick={() => handleManualZoom('out')} style={webDockButtonStyle} title="Zoom out">
-            <ZoomOut size={18} />
-          </button>
-          <span style={webZoomPillStyle}>{targetZoomLevelRef.current.toFixed(1)}x</span>
-          <button onClick={() => handleManualZoom('in')} style={webDockButtonStyle} title="Zoom in">
-            <ZoomIn size={18} />
-          </button>
+          {!isCameraOnlyBrowser && (
+            <>
+              <button onClick={() => handleManualZoom('out')} style={webDockButtonStyle} title="Zoom out">
+                <ZoomOut size={18} />
+              </button>
+              <span style={webZoomPillStyle}>{targetZoomLevelRef.current.toFixed(1)}x</span>
+              <button onClick={() => handleManualZoom('in')} style={webDockButtonStyle} title="Zoom in">
+                <ZoomIn size={18} />
+              </button>
+            </>
+          )}
           <button onClick={handleStop} style={webStopButtonStyle}>
             <Square size={16} fill="#FFFFFF" />
             Stop
@@ -1589,7 +1810,7 @@ export default function Recording({ onOpenProject, license }) {
           fontFamily: 'system-ui, -apple-system, sans-serif'
         }}>
           <div style={{ fontSize: '18px', fontWeight: 600, color: '#FF4D7E', textTransform: 'uppercase', letterSpacing: '2px', marginBottom: '16px' }}>
-            Preparing Screen Capture
+            {isCameraOnlyBrowser ? 'Preparing Camera' : 'Preparing Screen Capture'}
           </div>
           <div style={{ 
             fontSize: '120px', 
@@ -1600,7 +1821,7 @@ export default function Recording({ onOpenProject, license }) {
             {countdownVal}
           </div>
           <div style={{ fontSize: '14px', color: '#94A3B8', marginTop: '16px' }}>
-            Get ready to record your desktop!
+            {isCameraOnlyBrowser ? 'Get ready to record with your phone.' : 'Get ready to record your desktop!'}
           </div>
           <style>
             {`

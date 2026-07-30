@@ -4,7 +4,21 @@ export function registerScreenFlowServiceWorker() {
   if (!['http:', 'https:'].includes(window.location.protocol)) return;
 
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch((error) => {
+    const hadController = !!navigator.serviceWorker.controller;
+    let refreshing = false;
+
+    if (hadController) {
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (refreshing) return;
+        refreshing = true;
+        window.location.reload();
+      });
+    }
+
+    navigator.serviceWorker.register('/sw.js', {
+      scope: '/',
+      updateViaCache: 'none'
+    }).then((registration) => registration.update()).catch((error) => {
       console.warn('ScreenFlow service worker registration failed:', error);
     });
   });

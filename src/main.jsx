@@ -212,9 +212,9 @@ if (!window.electron) {
     },
     startRecording: async () => ({ success: true }),
     stopRecording: async () => ({ events: mockCursorEvents }),
-    saveRecordedFile: async (uint8Array) => {
+    saveRecordedFile: async (uint8Array, projectName, mimeType = 'video/webm') => {
       try {
-        const blob = new Blob([uint8Array], { type: 'video/webm' });
+        const blob = new Blob([uint8Array], { type: mimeType || 'video/webm' });
         const url = URL.createObjectURL(blob);
         return {
           success: true,

@@ -694,6 +694,68 @@ input[type="checkbox"]:checked::after {
   display: none;
 }
 
+.mobile-capture-notice {
+  align-items: flex-start;
+  background: #eefaf7;
+  border: 1px solid #bce8dc;
+  border-radius: 8px;
+  color: #0f766e;
+  display: flex;
+  gap: 12px;
+  padding: 14px;
+}
+
+.mobile-capture-notice svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.mobile-capture-notice strong,
+.mobile-capture-notice span {
+  display: block;
+}
+
+.mobile-capture-notice strong {
+  color: #134e4a;
+  font-size: 14px;
+}
+
+.mobile-capture-notice span {
+  font-size: 13px;
+  line-height: 1.5;
+  margin-top: 3px;
+}
+
+.recording-error {
+  background: #fff1f2;
+  border: 1px solid #fecdd3;
+  border-radius: 8px;
+  color: #9f1239;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
+  margin: -6px 0 14px;
+  padding: 11px 12px;
+}
+
+.mobile-import-button {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #ccd6e5;
+  border-radius: 8px;
+  color: #26344d;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 14px;
+  font-weight: 900;
+  gap: 9px;
+  justify-content: center;
+  margin-top: 10px;
+  min-height: 48px;
+  padding: 0 16px;
+  width: 100%;
+}
+
 @media (max-width: 1180px) {
   .app-sidebar {
     align-items: center;

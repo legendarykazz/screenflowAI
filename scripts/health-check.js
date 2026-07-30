@@ -136,6 +136,10 @@ function checkRecordingPipeline() {
   assertIncludes(recording, 'createDynamicsCompressor()', 'Mixed audio is protected from clipping');
   assertIncludes(recording, 'mediaRecorder.start(1000)', 'Recorder flushes media chunks throughout capture');
   assertIncludes(recording, 'recorder.requestData()', 'Recorder requests the final media chunk before stopping');
+  assertIncludes(recording, 'isCameraOnlyBrowser', 'Recorder detects browsers without mobile screen capture');
+  assertIncludes(recording, 'Import phone recording', 'Recorder offers native phone video import');
+  assertIncludes(recording, "screenStream = await navigator.mediaDevices.getUserMedia({", 'Recorder can capture phone camera and microphone');
+  assertIncludes(recording, 'describeRecordingError(error)', 'Recorder reports mobile capture failures inline');
   assertIncludes(main, "coordinate_space: 'normalized'", 'Global cursor tracking stores DPI-safe normalized coordinates');
   assertIncludes(database, 'coordinate_space: e.coordinate_space || null', 'Cursor coordinate metadata persists with projects');
   assertIncludes(editor, "previous.coordinate_space === 'normalized'", 'Editor understands normalized cursor coordinates');
@@ -157,6 +161,9 @@ function checkPlatformShells() {
   assertIncludes(main, 'getInitialPage', 'PWA shortcuts can open a specific ScreenFlow workspace');
   assertIncludes(main, '<InstallPrompt />', 'Web app exposes an install action when the browser permits it');
   assertIncludes(pwa, "navigator.serviceWorker.register('/sw.js'", 'Production web app registers the service worker');
+  assertIncludes(pwa, "updateViaCache: 'none'", 'Production service worker bypasses stale update caches');
+  assertIncludes(pwa, "addEventListener('controllerchange'", 'Production app reloads when a new service worker takes control');
+  assertIncludes(serviceWorker, "screenflow-shell-v2", 'PWA shell cache version is current');
   assertIncludes(serviceWorker, "caches.match('/offline.html')", 'PWA provides an offline navigation fallback');
   if (extensionManifest.manifest_version === 3) pass('Chrome companion uses Manifest V3');
   else fail('Chrome companion must use Manifest V3');
