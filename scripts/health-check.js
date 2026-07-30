@@ -38,6 +38,12 @@ function checkRequiredFiles() {
     'src/pages/LiveCall.jsx',
     'src/pages/JoinCall.jsx',
     'src/lib/callAudio.js',
+    'src/lib/pwa.js',
+    'public/manifest.webmanifest',
+    'public/sw.js',
+    'extension/manifest.json',
+    'extension/background.js',
+    'extension/offscreen.js',
     'api/livekit-token.js',
     'electron/main.js',
     'electron/preload.js'
@@ -137,6 +143,48 @@ function checkRecordingPipeline() {
   assertIncludes(renderer, 'project.raw_video_path && fs.existsSync(project.raw_video_path)', 'Exports use the untouched source recording');
 }
 
+function checkPlatformShells() {
+  const main = read('src/main.jsx');
+  const pwa = read('src/lib/pwa.js');
+  const serviceWorker = read('public/sw.js');
+  const extensionManifest = JSON.parse(read('extension/manifest.json'));
+  const extensionBackground = read('extension/background.js');
+  const extensionRecorder = read('extension/offscreen.js');
+  const packageJson = JSON.parse(read('package.json'));
+  const viteConfig = read('vite.config.js');
+  const releaseWorkflow = read('.github/workflows/release-platforms.yml');
+
+  assertIncludes(main, 'getInitialPage', 'PWA shortcuts can open a specific ScreenFlow workspace');
+  assertIncludes(main, '<InstallPrompt />', 'Web app exposes an install action when the browser permits it');
+  assertIncludes(pwa, "navigator.serviceWorker.register('/sw.js'", 'Production web app registers the service worker');
+  assertIncludes(serviceWorker, "caches.match('/offline.html')", 'PWA provides an offline navigation fallback');
+  if (extensionManifest.manifest_version === 3) pass('Chrome companion uses Manifest V3');
+  else fail('Chrome companion must use Manifest V3');
+  if (Number(extensionManifest.minimum_chrome_version) >= 116) pass('Chrome companion requires offscreen-capable Chrome');
+  else fail('Chrome companion must require Chrome 116 or newer');
+  if (extensionManifest.permissions?.includes('tabCapture') && extensionManifest.permissions?.includes('offscreen')) {
+    pass('Chrome companion declares tab capture and offscreen permissions');
+  } else {
+    fail('Chrome companion is missing tab capture or offscreen permission');
+  }
+  assertIncludes(extensionBackground, 'chrome.tabCapture.getMediaStreamId', 'Chrome companion requests the active tab stream');
+  assertIncludes(extensionRecorder, 'videoBitsPerSecond: 12_000_000', 'Chrome companion records high-quality tab video');
+  assertIncludes(extensionRecorder, 'recorder.requestData()', 'Chrome companion flushes the final media chunk');
+  assertIncludes(viteConfig, "mode === 'desktop'", 'Web and desktop builds use platform-safe asset paths');
+  if (packageJson.scripts?.['build:desktop']?.includes('--mode desktop')) {
+    pass('Windows packaging selects the desktop Vite mode');
+  } else {
+    fail('Windows packaging does not select the desktop Vite mode');
+  }
+  assertIncludes(releaseWorkflow, 'run: npm run dist:win', 'CI packages Windows with the desktop build');
+  assertIncludes(releaseWorkflow, 'run: npm run release:win', 'Tagged CI releases use the desktop build');
+  if (packageJson.build?.publish?.owner === 'legendarykazz' && packageJson.build?.publish?.repo === 'screenflowAI') {
+    pass('Windows updater targets the ScreenFlowAI GitHub repository');
+  } else {
+    fail('Windows updater GitHub repository is not configured correctly');
+  }
+}
+
 function runBuild() {
   if (process.argv.includes('--skip-build')) {
     pass('Production Vite build skipped by --skip-build');
@@ -175,6 +223,7 @@ function main() {
   checkPresenterLiveCall();
   checkElectronBridge();
   checkRecordingPipeline();
+  checkPlatformShells();
   runBuild();
 
   passes.forEach((message) => console.log(`OK  ${message}`));

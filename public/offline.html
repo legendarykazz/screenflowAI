@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#1A1F36" />
+    <title>ScreenFlow AI - Offline</title>
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        align-items: center;
+        background: #131625;
+        color: #ffffff;
+        display: flex;
+        font-family: Inter, system-ui, sans-serif;
+        justify-content: center;
+        margin: 0;
+        min-height: 100vh;
+        padding: 20px;
+      }
+      main {
+        max-width: 420px;
+        text-align: center;
+      }
+      .icon {
+        align-items: center;
+        background: linear-gradient(135deg, #7c3aed, #ff4d7e);
+        border-radius: 16px;
+        display: inline-flex;
+        font-size: 30px;
+        font-weight: 900;
+        height: 68px;
+        justify-content: center;
+        margin-bottom: 20px;
+        width: 68px;
+      }
+      h1 { font-size: 24px; margin: 0 0 8px; }
+      p { color: #c1c8e4; font-size: 14px; line-height: 1.55; margin: 0 0 18px; }
+      button {
+        background: #ffffff;
+        border: 0;
+        border-radius: 8px;
+        color: #172033;
+        cursor: pointer;
+        font-weight: 800;
+        min-height: 42px;
+        padding: 0 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <span class="icon">S</span>
+      <h1>You are offline</h1>
+      <p>Your saved local workspace remains on this device. Live calls and cloud connections resume when the network returns.</p>
+      <button onclick="window.location.reload()">Try again</button>
+    </main>
+  </body>
+</html>

@@ -3,11 +3,21 @@
   "version": "1.0.0",
   "description": "Premium Windows alternative to Screen Studio with AI editing, zoom, and exports",
   "author": "ScreenFlowAI",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/legendarykazz/screenflowAI.git"
+  },
   "main": "electron/main.js",
   "type": "commonjs",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && electron-builder --publish never",
+    "build:web": "vite build",
+    "build:desktop": "vite build --mode desktop",
+    "build:extension": "node scripts/build-extension.js",
+    "build:platforms": "npm run build:web && npm run build:extension",
+    "build": "npm run build:desktop && electron-builder --publish never",
+    "dist:win": "npm run build:desktop && electron-builder --win nsis --publish never",
+    "release:win": "npm run build:desktop && electron-builder --win nsis --publish always",
     "vercel-build": "vite build",
     "health": "node scripts/health-check.js",
     "health:quick": "node scripts/health-check.js --skip-build",
@@ -37,7 +47,16 @@
       "output": "release"
     },
     "win": {
-      "target": "nsis",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "artifactName": "ScreenFlowAI-Setup-${version}-${arch}.${ext}",
       "signAndEditExecutable": false
     },
     "nsis": {
@@ -49,8 +68,8 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "yourusername",
-      "repo": "screenflow-ai"
+      "owner": "legendarykazz",
+      "repo": "screenflowAI"
     }
   }
 }

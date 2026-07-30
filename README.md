@@ -1,6 +1,6 @@
 # ScreenFlow AI
 
-ScreenFlow AI is a high-end Windows desktop alternative to Screen Studio, built with Electron, React (Vite), Node.js, a local JSON project store, and FFmpeg. It offers automated zoom easing, mouse cursor tracking, customizable canvas backgrounds, AI captions through OpenAI Whisper, and video export processing.
+ScreenFlow AI is a shared video workspace delivered as an installable mobile web app, a Chrome tab-capture extension, and a full Electron desktop application. The product includes recording, editing, live calls, screen annotation, whiteboarding, AI notes, and football analysis.
 
 ---
 
@@ -11,12 +11,15 @@ ScreenFlowAI/
 |-- package.json             # Node.js dependencies and scripts
 |-- vite.config.js           # Vite compilation configuration
 |-- index.html               # Entry HTML page
+|-- public/                  # PWA manifest, service worker, offline shell, icons
+|-- extension/               # Chrome Manifest V3 capture companion
 |-- electron/
 |   |-- main.js              # Main process, IPC channels, media streaming, global mouse hook
 |   |-- preload.js           # Secure context bridge between Electron and React
 |   |-- database.js          # Local JSON project store operations
 |   `-- renderer-engine.js   # FFmpeg exporter and compositor
-`-- src/                     # React frontend application
+|-- scripts/                 # Health, icon, and platform build tools
+`-- src/                     # Shared React application
     |-- main.jsx             # Routing and entrypoint mount
     |-- index.css            # Core layout styling and visual tokens
     |-- components/          # Frameless TitleBar, Sidebar navigation
@@ -47,7 +50,7 @@ ScreenFlow AI currently stores project data in a JSON file named `screenflow_ai_
 
 ---
 
-## Build Instructions
+## Platform Builds
 
 ### Prerequisites
 
@@ -71,17 +74,39 @@ ScreenFlow AI currently stores project data in a JSON file named `screenflow_ai_
 
 ---
 
-## Deployment & Production Release Workflow
-
-ScreenFlow AI uses `electron-builder` to package the Windows binary.
-
-To build the executable installer:
+### Web and Mobile PWA
 
 ```bash
-npm run build
+npm run build:web
 ```
 
-This script runs `vite build` to compile production React assets, then invokes `electron-builder` to package the app into the `/dist` directory.
+Deploy `dist/app` over HTTPS. Android Chrome, desktop Chrome, and Edge can install the app directly. iPhone and iPad users can add it to the Home Screen from Safari.
+
+### Chrome Extension
+
+```bash
+npm run build:extension
+```
+
+Load `dist/extension` from `chrome://extensions` using **Load unpacked**. Chrome 116 or newer is required.
+
+### Windows App
+
+```bash
+npm run dist:win
+```
+
+The NSIS installer is written to `release/`.
+
+### Build Web and Extension Together
+
+```bash
+npm run build:platforms
+```
+
+Tagged GitHub releases matching `v*` run `.github/workflows/release-platforms.yml`, which packages the Chrome extension and publishes the Windows installer.
+
+See [docs/PLATFORMS.md](docs/PLATFORMS.md) for installation, release, capability, and security details.
 
 ---
 
@@ -90,3 +115,5 @@ This script runs `vite build` to compile production React assets, then invokes `
 1. **Project store test**: Verify projects are created and read back correctly from the local JSON data file.
 2. **Global hook test**: Record a clip and move/click the mouse outside the window. Verify cursor events are saved.
 3. **FFmpeg export test**: Render a short video and confirm the exported file plays correctly.
+4. **PWA test**: Confirm the manifest, service worker, offline page, and standalone install prompt load over HTTPS.
+5. **Extension test**: Record a normal Chrome tab with audio, stop it, and verify the complete WebM download.

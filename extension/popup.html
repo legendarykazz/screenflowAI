@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ScreenFlow AI Capture</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="popup-shell">
+      <header class="popup-header">
+        <img src="icons/icon48.png" alt="" />
+        <div>
+          <h1>ScreenFlow AI</h1>
+          <span>Chrome Capture</span>
+        </div>
+        <button id="settings-button" class="icon-button" title="Extension settings" aria-label="Extension settings">...</button>
+      </header>
+
+      <section class="capture-status" aria-live="polite">
+        <span id="status-dot" class="status-dot"></span>
+        <div>
+          <strong id="status-title">Ready</strong>
+          <span id="status-detail">Active tab + audio</span>
+        </div>
+        <time id="recording-time">00:00</time>
+      </section>
+
+      <button id="record-button" class="record-button">
+        <span id="record-icon" class="record-icon"></span>
+        <span id="record-label">Record active tab</span>
+      </button>
+
+      <p id="error-message" class="error-message" hidden></p>
+
+      <nav class="workspace-links" aria-label="ScreenFlow workspaces">
+        <button data-path="/?page=recording">Recorder</button>
+        <button data-path="/?page=livecall">Live Call</button>
+        <button data-path="/?page=football">Football Lab</button>
+        <button data-path="/">Workspace</button>
+      </nav>
+
+      <footer>
+        <span>Ctrl+Shift+U</span>
+        <span>WebM 1080p+</span>
+      </footer>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

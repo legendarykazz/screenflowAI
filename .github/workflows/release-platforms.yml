@@ -1,0 +1,55 @@
+name: Build ScreenFlow Platforms
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows-and-extension:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web app and Chrome extension
+        run: npm run build:platforms
+
+      - name: Package Chrome extension
+        shell: pwsh
+        run: Compress-Archive -Path dist/extension/* -DestinationPath dist/ScreenFlowAI-Chrome.zip -Force
+
+      - name: Build Windows installer
+        if: github.ref_type != 'tag'
+        run: npm run dist:win
+
+      - name: Build and publish tagged Windows release
+        if: github.ref_type == 'tag'
+        run: npm run release:win
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload platform artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScreenFlowAI-platform-builds
+          path: |
+            release/*.exe
+            release/*.yml
+            release/*.blockmap
+            dist/ScreenFlowAI-Chrome.zip
+          if-no-files-found: error

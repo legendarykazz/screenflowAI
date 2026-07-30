@@ -5,6 +5,7 @@ import './index.css';
 // Components & Pages
 import TitleBar from './components/TitleBar';
 import Sidebar from './components/Sidebar';
+import InstallPrompt from './components/InstallPrompt';
 import Dashboard from './pages/Dashboard';
 import Recording from './pages/Recording';
 import Projects from './pages/Projects';
@@ -17,6 +18,24 @@ import Widget from './pages/Widget';
 import FootballLab from './pages/FootballLab';
 import LiveCall from './pages/LiveCall';
 import JoinCall from './pages/JoinCall';
+import { registerScreenFlowServiceWorker } from './lib/pwa';
+
+const APP_PAGES = new Set([
+  'dashboard',
+  'recording',
+  'projects',
+  'exports',
+  'brandkit',
+  'aitools',
+  'livecall',
+  'football',
+  'settings'
+]);
+
+function getInitialPage() {
+  const requestedPage = new URLSearchParams(window.location.search).get('page');
+  return APP_PAGES.has(requestedPage) ? requestedPage : 'dashboard';
+}
 
 class AppErrorBoundary extends React.Component {
   constructor(props) {
@@ -231,13 +250,36 @@ if (!window.electron) {
 }
 
 function App() {
-  const [currentPage, setCurrentPage] = useState('dashboard');
+  const [currentPage, setCurrentPage] = useState(getInitialPage);
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [license, setLicense] = useState({ plan: 'free', key: '' });
 
   useEffect(() => {
     checkLicenseStatus();
   }, []);
+
+  useEffect(() => {
+    const handleHistoryChange = () => {
+      const requestedPage = new URLSearchParams(window.location.search).get('page');
+      if (APP_PAGES.has(requestedPage)) setCurrentPage(requestedPage);
+    };
+    window.addEventListener('popstate', handleHistoryChange);
+    return () => window.removeEventListener('popstate', handleHistoryChange);
+  }, []);
+
+  const navigateTo = (page) => {
+    setCurrentPage(page);
+    if (!APP_PAGES.has(page)) return;
+    if (!['http:', 'https:'].includes(window.location.protocol)) return;
+
+    const url = new URL(window.location.href);
+    if (page === 'dashboard') {
+      url.searchParams.delete('page');
+    } else {
+      url.searchParams.set('page', page);
+    }
+    window.history.pushState({ page }, '', url);
+  };
 
   const checkLicenseStatus = async () => {
     if (window.electron && window.electron.checkLicense) {
@@ -282,7 +324,7 @@ function App() {
           <Dashboard 
             onCreateProject={handleOpenProject} 
             onOpenProject={handleOpenProject}
-            navigateTo={setCurrentPage}
+            navigateTo={navigateTo}
           />
         );
       case 'recording':
@@ -294,7 +336,7 @@ function App() {
       case 'brandkit':
         return <BrandKit />;
       case 'aitools':
-        return <AITools navigateTo={setCurrentPage} />;
+        return <AITools navigateTo={navigateTo} />;
       case 'livecall':
         return <LiveCall />;
       case 'football':
@@ -307,7 +349,7 @@ function App() {
           />
         );
       default:
-        return <Dashboard onCreateProject={handleOpenProject} onOpenProject={handleOpenProject} navigateTo={setCurrentPage} />;
+        return <Dashboard onCreateProject={handleOpenProject} onOpenProject={handleOpenProject} navigateTo={navigateTo} />;
     }
   };
 
@@ -316,9 +358,9 @@ function App() {
       <TitleBar />
       <div className="main-shell">
         {currentPage !== 'editor' && (
-          <Sidebar 
-            currentPage={currentPage} 
-            setCurrentPage={setCurrentPage} 
+          <Sidebar
+            currentPage={currentPage}
+            setCurrentPage={navigateTo}
             license={license}
           />
         )}
@@ -326,6 +368,7 @@ function App() {
           {renderContent()}
         </main>
       </div>
+      <InstallPrompt />
     </div>
   );
 }
@@ -344,3 +387,5 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     )}
   </React.StrictMode>
 );
+
+registerScreenFlowServiceWorker();

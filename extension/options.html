@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ScreenFlow AI Capture Settings</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <img src="icons/icon128.png" alt="" />
+        <div>
+          <h1>ScreenFlow AI Capture</h1>
+          <p>Extension settings</p>
+        </div>
+      </header>
+      <section>
+        <label for="workspace-url">Workspace URL</label>
+        <input id="workspace-url" type="url" inputmode="url" />
+        <div class="actions">
+          <button id="save-button" class="primary">Save</button>
+          <button id="open-button">Open workspace</button>
+        </div>
+        <p id="status" aria-live="polite"></p>
+      </section>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>
