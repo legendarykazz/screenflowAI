@@ -37,6 +37,7 @@ function checkRequiredFiles() {
     'src/pages/FootballLab.jsx',
     'src/pages/LiveCall.jsx',
     'src/pages/JoinCall.jsx',
+    'src/lib/callAudio.js',
     'api/livekit-token.js',
     'electron/main.js',
     'electron/preload.js'
@@ -66,8 +67,12 @@ function checkLiveKitTokenRoles() {
 
 function checkJoinCallMedia() {
   const join = read('src/pages/JoinCall.jsx');
+  const callAudio = read('src/lib/callAudio.js');
   assertIncludes(join, "role: 'participant'", 'Join page requests participant role');
-  assertIncludes(join, 'echoCancellation: true', 'Join page can request call-optimized microphone audio');
+  assertIncludes(callAudio, 'echoCancellation: true', 'Join page can request call-optimized microphone audio');
+  assertIncludes(callAudio, 'sampleRate: { ideal: 48000 }', 'Conference microphones request 48 kHz voice capture');
+  assertIncludes(callAudio, 'AudioPresets.musicHighQuality', 'Conference microphones publish high-quality Opus audio');
+  assertIncludes(callAudio, 'red: true', 'Conference voice publishing enables packet redundancy');
   assertIncludes(join, "name: 'participant-mic'", 'Join page publishes participant microphone track');
   assertIncludes(join, "name: 'participant-camera'", 'Join page publishes participant camera track');
   assertIncludes(join, 'VideoQuality.HIGH', 'Join page requests high-quality remote video');
@@ -78,6 +83,9 @@ function checkJoinCallMedia() {
   assertIncludes(join, "track.source === Track.Source.ScreenShare", 'Join page identifies screen share tracks by source');
   assertIncludes(join, 'controlButtonStyle(micOn)', 'Join page shows active microphone state');
   assertIncludes(join, 'controlButtonStyle(cameraOn)', 'Join page shows active camera state');
+  assertIncludes(join, 'RoomEvent.AudioPlaybackStatusChanged', 'Join page detects browser audio playback blocking');
+  assertIncludes(join, 'resumeCallAudio(room)', 'Join page can explicitly resume call audio');
+  assertIncludes(join, 'targetRef.current.querySelector(`[data-track-sid="${track.sid}"]`)', 'Join page does not detach duplicate remote audio tracks');
 }
 
 function checkPresenterLiveCall() {
@@ -91,6 +99,8 @@ function checkPresenterLiveCall() {
   assertIncludes(live, 'RoomEvent.TrackSubscribed', 'Presenter subscribes to remote participant tracks');
   assertIncludes(live, 'attachRemoteTrack(track, participant)', 'Presenter renders remote media tracks');
   assertIncludes(live, 'updateRemoteParticipants(room)', 'Presenter updates participant count/list');
+  assertIncludes(live, 'RoomEvent.AudioPlaybackStatusChanged', 'Presenter detects browser audio playback blocking');
+  assertIncludes(live, 'audioSink.querySelector(`[data-track-sid="${track.sid}"]`)', 'Presenter attaches each remote microphone once');
 }
 
 function checkElectronBridge() {
@@ -106,6 +116,25 @@ function checkElectronBridge() {
   assertIncludes(main, 'desktopCapturer.getSources', 'Electron main can list screen/window sources');
   assertIncludes(main, "ipcMain.handle('recording:save-file'", 'Electron main can save recorded videos');
   assertIncludes(settings, 'handleSaveLiveKit', 'Settings page can save LiveKit credentials');
+}
+
+function checkRecordingPipeline() {
+  const recording = read('src/pages/Recording.jsx');
+  const editor = read('src/pages/Editor.jsx');
+  const main = read('electron/main.js');
+  const renderer = read('electron/renderer-engine.js');
+  const database = read('electron/database.js');
+
+  assertIncludes(recording, 'videoBitsPerSecond: 12_000_000', '1080p recording uses an explicit high-quality bitrate');
+  assertIncludes(recording, "sampleRate: { ideal: 48000 }", 'Microphone capture requests 48 kHz audio');
+  assertIncludes(recording, 'createDynamicsCompressor()', 'Mixed audio is protected from clipping');
+  assertIncludes(recording, 'mediaRecorder.start(1000)', 'Recorder flushes media chunks throughout capture');
+  assertIncludes(recording, 'recorder.requestData()', 'Recorder requests the final media chunk before stopping');
+  assertIncludes(main, "coordinate_space: 'normalized'", 'Global cursor tracking stores DPI-safe normalized coordinates');
+  assertIncludes(database, 'coordinate_space: e.coordinate_space || null', 'Cursor coordinate metadata persists with projects');
+  assertIncludes(editor, "previous.coordinate_space === 'normalized'", 'Editor understands normalized cursor coordinates');
+  assertIncludes(editor, 'mediaDuration || duration || 0', 'Editor playback follows the actual media duration');
+  assertIncludes(renderer, 'project.raw_video_path && fs.existsSync(project.raw_video_path)', 'Exports use the untouched source recording');
 }
 
 function runBuild() {
@@ -145,6 +174,7 @@ function main() {
   checkJoinCallMedia();
   checkPresenterLiveCall();
   checkElectronBridge();
+  checkRecordingPipeline();
   runBuild();
 
   passes.forEach((message) => console.log(`OK  ${message}`));

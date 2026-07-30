@@ -96,6 +96,9 @@ export default function Recording({ onOpenProject, license }) {
   const recorderRef = useRef(null);
   const chunksRef = useRef([]);
   const recordTimeRef = useRef(0);
+  const recordingStartedAtRef = useRef(0);
+  const recordingDurationRef = useRef(0);
+  const stoppingRef = useRef(false);
   const timerIntervalRef = useRef(null);
   const trackingEventsRef = useRef([]);
   const audioCtxRef = useRef(null);
@@ -106,6 +109,7 @@ export default function Recording({ onOpenProject, license }) {
   const cropVideoRef = useRef(null);
   const cropStreamRef = useRef(null);
   const cameraStreamRef = useRef(null);
+  const micStreamRef = useRef(null);
   const cameraVideoRef = useRef(null);
   const animationFrameIdRef = useRef(null);
 
@@ -113,8 +117,7 @@ export default function Recording({ onOpenProject, license }) {
   const targetZoomLevelRef = useRef(1.0);
   const zoomCenterRef = useRef({ x: 0.5, y: 0.5 });
   const targetZoomCenterRef = useRef({ x: 0.5, y: 0.5 });
-  const screenResolutionRef = useRef({ width: 1920, height: 1080 });
-  const latestCursorRef = useRef({ x: 960, y: 540 });
+  const latestCursorRef = useRef({ x: 0.5, y: 0.5, visible: true });
   const latestClickAtRef = useRef(0);
   const latestZoomLabelAtRef = useRef(0);
 
@@ -143,10 +146,17 @@ export default function Recording({ onOpenProject, license }) {
     if (window.electron?.onRecordingStatus) {
       unsubscribeRecordingStatus = window.electron.onRecordingStatus((status) => {
         if (status.type === 'cursor-move') {
-          latestCursorRef.current = { x: status.x, y: status.y };
-          if (status.screenWidth && status.screenHeight) {
-            screenResolutionRef.current = { width: status.screenWidth, height: status.screenHeight };
-          }
+          const normalizedX = status.coordinateSpace === 'normalized'
+            ? status.x
+            : status.x / Math.max(1, status.screenWidth || 1920);
+          const normalizedY = status.coordinateSpace === 'normalized'
+            ? status.y
+            : status.y / Math.max(1, status.screenHeight || 1080);
+          latestCursorRef.current = {
+            x: Math.max(0, Math.min(1, normalizedX)),
+            y: Math.max(0, Math.min(1, normalizedY)),
+            visible: status.visible !== false
+          };
         } else if (status.type === 'zoom') {
           if (status.direction === 'in') {
             targetZoomLevelRef.current = Math.min(3.0, targetZoomLevelRef.current + 0.25);
@@ -157,7 +167,11 @@ export default function Recording({ onOpenProject, license }) {
         } else if (status.type === 'cursor-click') {
           latestClickAtRef.current = performance.now();
           if (typeof status.x === 'number' && typeof status.y === 'number') {
-            latestCursorRef.current = { x: status.x, y: status.y };
+            latestCursorRef.current = {
+              x: Math.max(0, Math.min(1, status.x)),
+              y: Math.max(0, Math.min(1, status.y)),
+              visible: status.visible !== false
+            };
           }
         } else if (status.type === 'stop-recording-request') {
           handleStopRef.current?.();
@@ -190,8 +204,8 @@ export default function Recording({ onOpenProject, license }) {
   useEffect(() => {
     return () => {
       stopStreams();
+      cleanupCompositor();
       clearInterval(timerIntervalRef.current);
-      if (animationFrameIdRef.current) cancelAnimationFrame(animationFrameIdRef.current);
     };
   }, []);
 
@@ -239,6 +253,37 @@ export default function Recording({ onOpenProject, license }) {
     if (cameraStreamRef.current) {
       cameraStreamRef.current.getTracks().forEach((track) => track.stop());
       cameraStreamRef.current = null;
+    }
+    if (micStreamRef.current) {
+      micStreamRef.current.getTracks().forEach((track) => track.stop());
+      micStreamRef.current = null;
+    }
+    if (audioCtxRef.current) {
+      audioCtxRef.current.close().catch(() => {});
+      audioCtxRef.current = null;
+    }
+  };
+
+  const cleanupCompositor = () => {
+    if (animationFrameIdRef.current) {
+      cancelAnimationFrame(animationFrameIdRef.current);
+      animationFrameIdRef.current = null;
+    }
+
+    [hiddenVideoRef, cameraVideoRef].forEach((videoRef) => {
+      if (!videoRef.current) return;
+      try {
+        videoRef.current.pause();
+        videoRef.current.remove();
+      } catch (error) {}
+      videoRef.current = null;
+    });
+
+    if (canvasRef.current) {
+      try {
+        canvasRef.current.remove();
+      } catch (error) {}
+      canvasRef.current = null;
     }
   };
 
@@ -292,18 +337,55 @@ export default function Recording({ onOpenProject, license }) {
     return trimmedName || `Screen Recording ${new Date().toLocaleString()}`;
   };
 
-  const getCaptureFps = () => (resolution.includes('60fps') && isElectronRuntime ? 60 : 30);
+  const getCaptureProfile = () => {
+    if (resolution.startsWith('4K')) {
+      return {
+        width: 3840,
+        height: 2160,
+        fps: 30,
+        videoBitsPerSecond: 32_000_000,
+        audioBitsPerSecond: 192_000
+      };
+    }
+    if (resolution.includes('60fps') && isElectronRuntime) {
+      return {
+        width: 1920,
+        height: 1080,
+        fps: 60,
+        videoBitsPerSecond: 20_000_000,
+        audioBitsPerSecond: 192_000
+      };
+    }
+    return {
+      width: 1920,
+      height: 1080,
+      fps: 30,
+      videoBitsPerSecond: 12_000_000,
+      audioBitsPerSecond: 192_000
+    };
+  };
+
+  const getCaptureFps = () => getCaptureProfile().fps;
+
+  const createAudioContext = () => {
+    const AudioCtxClass = window.AudioContext || window.webkitAudioContext;
+    try {
+      return new AudioCtxClass({ sampleRate: 48000, latencyHint: 'interactive' });
+    } catch (error) {
+      return new AudioCtxClass();
+    }
+  };
 
   const getMimeType = (hasAudio) => {
     const types = hasAudio 
       ? [
-          'video/webm;codecs=vp8,opus',
           'video/webm;codecs=vp9,opus',
+          'video/webm;codecs=vp8,opus',
           'video/webm'
         ]
       : [
-          'video/webm;codecs=vp8',
           'video/webm;codecs=vp9',
+          'video/webm;codecs=vp8',
           'video/webm'
         ];
     return types.find((type) => MediaRecorder.isTypeSupported(type)) || '';
@@ -311,9 +393,13 @@ export default function Recording({ onOpenProject, license }) {
 
   const createComposedVideoStream = async (screenStream, cropRegion, cameraStream) => {
     const sourceTrack = screenStream.getVideoTracks()[0];
+    if (!sourceTrack) throw new Error('The selected source did not provide a video track.');
+    sourceTrack.contentHint = 'detail';
+
     const trackSettings = sourceTrack?.getSettings?.() || {};
-    const sourceWidth = trackSettings.width || 1920;
-    const sourceHeight = trackSettings.height || 1080;
+    const profile = getCaptureProfile();
+    let sourceWidth = trackSettings.width || profile.width;
+    let sourceHeight = trackSettings.height || profile.height;
     const fps = getCaptureFps();
 
     const video = document.createElement('video');
@@ -327,6 +413,8 @@ export default function Recording({ onOpenProject, license }) {
     hiddenVideoRef.current = video;
 
     await video.play();
+    sourceWidth = video.videoWidth || sourceWidth;
+    sourceHeight = video.videoHeight || sourceHeight;
 
     let cameraVideo = null;
     if (cameraStream?.getVideoTracks?.().length) {
@@ -351,7 +439,9 @@ export default function Recording({ onOpenProject, license }) {
     document.body.appendChild(canvas);
     canvasRef.current = canvas;
 
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
     const crop = cropRegion || { x: 0, y: 0, w: 1, h: 1 };
 
     const drawCursor = (x, y, clickActive) => {
@@ -437,11 +527,12 @@ export default function Recording({ onOpenProject, license }) {
 
     const render = () => {
       const cursor = latestCursorRef.current;
-      const screenSize = screenResolutionRef.current;
-      const normalizedX = Math.max(0, Math.min(1, cursor.x / Math.max(1, screenSize.width)));
-      const normalizedY = Math.max(0, Math.min(1, cursor.y / Math.max(1, screenSize.height)));
+      const normalizedX = Math.max(0, Math.min(1, cursor.x));
+      const normalizedY = Math.max(0, Math.min(1, cursor.y));
 
-      targetZoomCenterRef.current = { x: normalizedX, y: normalizedY };
+      if (cursor.visible !== false) {
+        targetZoomCenterRef.current = { x: normalizedX, y: normalizedY };
+      }
       zoomLevelRef.current += (targetZoomLevelRef.current - zoomLevelRef.current) * 0.12;
       zoomCenterRef.current.x += (targetZoomCenterRef.current.x - zoomCenterRef.current.x) * 0.12;
       zoomCenterRef.current.y += (targetZoomCenterRef.current.y - zoomCenterRef.current.y) * 0.12;
@@ -463,10 +554,14 @@ export default function Recording({ onOpenProject, license }) {
       ctx.drawImage(video, drawSx, drawSy, zoomSw, zoomSh, 0, 0, canvas.width, canvas.height);
       drawWebcamOverlay();
 
-      const cursorX = ((cursor.x - drawSx) / zoomSw) * canvas.width;
-      const cursorY = ((cursor.y - drawSy) / zoomSh) * canvas.height;
+      const sourceCursorX = normalizedX * sourceWidth;
+      const sourceCursorY = normalizedY * sourceHeight;
+      const cursorX = ((sourceCursorX - drawSx) / zoomSw) * canvas.width;
+      const cursorY = ((sourceCursorY - drawSy) / zoomSh) * canvas.height;
       const clickActive = performance.now() - latestClickAtRef.current < 420;
-      drawCursor(cursorX, cursorY, clickActive);
+      if (cursor.visible !== false) {
+        drawCursor(cursorX, cursorY, clickActive);
+      }
 
       const shouldShowZoomLabel = performance.now() - latestZoomLabelAtRef.current < 1800;
       if (shouldShowZoomLabel) {
@@ -489,7 +584,10 @@ export default function Recording({ onOpenProject, license }) {
     };
 
     render();
-    return canvas.captureStream(fps);
+    const composedStream = canvas.captureStream(fps);
+    const composedTrack = composedStream.getVideoTracks()[0];
+    if (composedTrack) composedTrack.contentHint = 'detail';
+    return composedStream;
   };
 
   // Drag-and-drop Crop UI handlers
@@ -582,8 +680,7 @@ export default function Recording({ onOpenProject, license }) {
 
     // Initialize AudioContext under a direct user gesture to bypass Chrome's autoplay/suspension policies
     try {
-      const AudioCtxClass = window.AudioContext || window.webkitAudioContext;
-      const ctx = new AudioCtxClass();
+      const ctx = createAudioContext();
       if (ctx.state === 'suspended') {
         await ctx.resume();
       }
@@ -616,6 +713,13 @@ export default function Recording({ onOpenProject, license }) {
     chunksRef.current = [];
     trackingEventsRef.current = [];
     recordTimeRef.current = 0;
+    recordingStartedAtRef.current = 0;
+    recordingDurationRef.current = 0;
+    stoppingRef.current = false;
+    zoomLevelRef.current = 1;
+    targetZoomLevelRef.current = 1;
+    zoomCenterRef.current = { x: 0.5, y: 0.5 };
+    targetZoomCenterRef.current = { x: 0.5, y: 0.5 };
     setRecordTime(0);
     setStatusMessage('Hiding ScreenFlowAI before capture starts...');
 
@@ -644,6 +748,25 @@ export default function Recording({ onOpenProject, license }) {
 
       let screenStream;
       const targetSource = selectedSource || (sources.length > 0 ? sources[0].id : null);
+      const captureProfile = getCaptureProfile();
+      const browserVideoConstraints = {
+        cursor: 'never',
+        width: { ideal: captureProfile.width, max: captureProfile.width },
+        height: { ideal: captureProfile.height, max: captureProfile.height },
+        frameRate: { ideal: captureProfile.fps, max: captureProfile.fps }
+      };
+      const electronVideoConstraints = {
+        cursor: 'never',
+        mandatory: {
+          chromeMediaSource: 'desktop',
+          chromeMediaSourceId: targetSource,
+          cursor: 'never',
+          maxWidth: captureProfile.width,
+          maxHeight: captureProfile.height,
+          minFrameRate: Math.min(30, captureProfile.fps),
+          maxFrameRate: captureProfile.fps
+        }
+      };
 
       if (targetSource && window.electron?.getSources) {
         // Programmatic direct screen capture without any picker prompts
@@ -654,40 +777,19 @@ export default function Recording({ onOpenProject, license }) {
                 chromeMediaSource: 'desktop'
               }
             } : false,
-            video: {
-              cursor: 'never',
-              mandatory: {
-                chromeMediaSource: 'desktop',
-                chromeMediaSourceId: targetSource,
-                cursor: 'never',
-                minFrameRate: 30,
-                maxFrameRate: getCaptureFps()
-              }
-            }
+            video: electronVideoConstraints
           });
         } catch (e) {
           console.warn("Direct capture with system audio failed, retrying video only...", e);
           try {
             screenStream = await navigator.mediaDevices.getUserMedia({
               audio: false,
-              video: {
-                cursor: 'never',
-                mandatory: {
-                  chromeMediaSource: 'desktop',
-                  chromeMediaSourceId: targetSource,
-                  cursor: 'never',
-                  minFrameRate: 30,
-                  maxFrameRate: getCaptureFps()
-                }
-              }
+              video: electronVideoConstraints
             });
           } catch (e2) {
             console.warn("Direct capture failed completely, falling back to getDisplayMedia picker...", e2);
             screenStream = await navigator.mediaDevices.getDisplayMedia({
-              video: {
-                cursor: 'never',
-                frameRate: getCaptureFps()
-              },
+              video: browserVideoConstraints,
               audio: systemAudio
             });
           }
@@ -696,22 +798,24 @@ export default function Recording({ onOpenProject, license }) {
         // Fallback for browser/standard context
         try {
           screenStream = await navigator.mediaDevices.getDisplayMedia({
-            video: {
-              cursor: 'never',
-              frameRate: getCaptureFps()
-            },
+            video: browserVideoConstraints,
             audio: systemAudio
           });
         } catch (e) {
           console.warn("Browser getDisplayMedia with audio failed, retrying video-only...", e);
           screenStream = await navigator.mediaDevices.getDisplayMedia({
-            video: {
-              cursor: 'never',
-              frameRate: getCaptureFps()
-            },
+            video: browserVideoConstraints,
             audio: false
           });
         }
+      }
+
+      const screenTrack = screenStream.getVideoTracks()[0];
+      if (screenTrack) {
+        screenTrack.contentHint = 'detail';
+        screenTrack.addEventListener('ended', () => {
+          if (!stoppingRef.current) handleStopRef.current?.();
+        }, { once: true });
       }
 
       if (recordingMode === 'Custom Area') {
@@ -756,9 +860,19 @@ export default function Recording({ onOpenProject, license }) {
       // 2. Mix microphone and system audio into a single track
       let micStream = null;
       try {
+        const micConstraints = {
+          sampleRate: { ideal: 48000 },
+          sampleSize: { ideal: 16 },
+          channelCount: { ideal: 1 },
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          ...(selectedMic === 'default' ? {} : { deviceId: { exact: selectedMic } })
+        };
         micStream = await navigator.mediaDevices.getUserMedia({
-          audio: selectedMic === 'default' ? true : { deviceId: selectedMic }
+          audio: micConstraints
         });
+        micStreamRef.current = micStream;
       } catch (error) {
         console.warn('Microphone capture bypassed or failed:', error);
       }
@@ -766,18 +880,36 @@ export default function Recording({ onOpenProject, license }) {
       const systemAudioTrack = screenStream.getAudioTracks()[0];
 
       // Use Web Audio API to mix audio tracks to prevent container corruption (multiple audio tracks in WebM is unsupported)
-      const audioCtx = audioCtxRef.current || new (window.AudioContext || window.webkitAudioContext)();
+      const audioCtx = audioCtxRef.current || createAudioContext();
+      audioCtxRef.current = audioCtx;
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+
       const dest = audioCtx.createMediaStreamDestination();
+      const mixBus = audioCtx.createGain();
+      const limiter = audioCtx.createDynamicsCompressor();
+      limiter.threshold.value = -6;
+      limiter.knee.value = 12;
+      limiter.ratio.value = 8;
+      limiter.attack.value = 0.003;
+      limiter.release.value = 0.25;
+      mixBus.connect(limiter);
+      limiter.connect(dest);
+
       let hasAudio = false;
+      let connectedAudioSources = 0;
+      const fallbackAudioTracks = [];
 
       if (micStream && micStream.getAudioTracks().length > 0) {
         try {
           const micSource = audioCtx.createMediaStreamSource(micStream);
-          micSource.connect(dest);
-          hasAudio = true;
+          const micGain = audioCtx.createGain();
+          micGain.gain.value = 1;
+          micSource.connect(micGain);
+          micGain.connect(mixBus);
+          connectedAudioSources += 1;
         } catch (e) {
           console.warn("Could not connect microphone to AudioContext:", e);
-          combinedTracks.push(...micStream.getAudioTracks()); // Direct fallback
+          fallbackAudioTracks.push(...micStream.getAudioTracks());
         }
       }
 
@@ -785,38 +917,45 @@ export default function Recording({ onOpenProject, license }) {
         try {
           const sysStream = new MediaStream([systemAudioTrack]);
           const sysSource = audioCtx.createMediaStreamSource(sysStream);
-          sysSource.connect(dest);
-          hasAudio = true;
+          const systemGain = audioCtx.createGain();
+          systemGain.gain.value = 0.82;
+          sysSource.connect(systemGain);
+          systemGain.connect(mixBus);
+          connectedAudioSources += 1;
         } catch (e) {
           console.warn("Could not connect system audio to AudioContext:", e);
-          combinedTracks.push(systemAudioTrack); // Direct fallback
+          fallbackAudioTracks.push(systemAudioTrack);
         }
       }
 
-      if (hasAudio && dest.stream.getAudioTracks().length > 0) {
-        combinedTracks.push(dest.stream.getAudioTracks()[0]);
+      if (connectedAudioSources > 0 && dest.stream.getAudioTracks().length > 0) {
+        const mixedAudioTrack = dest.stream.getAudioTracks()[0];
+        mixedAudioTrack.contentHint = 'speech';
+        combinedTracks.push(mixedAudioTrack);
+        hasAudio = true;
+      } else if (fallbackAudioTracks.length > 0) {
+        combinedTracks.push(fallbackAudioTracks[0]);
+        hasAudio = true;
       }
-
-      combinedTracks.forEach(track => {
-        if (track) {
-          track.onended = () => {
-            console.warn(`Track ended silently: kind=${track.kind}, label=${track.label}, enabled=${track.enabled}, readyState=${track.readyState}`);
-            alert(`Track ended silently: kind=${track.kind}, label=${track.label}`);
-          };
-        }
-      });
 
       const combinedStream = new MediaStream(combinedTracks.filter(Boolean));
       streamRef.current = combinedStream;
 
       let mediaRecorder;
+      const captureProfile = getCaptureProfile();
+      const mimeType = getMimeType(hasAudio);
+      const recorderOptions = {
+        ...(mimeType ? { mimeType } : {}),
+        videoBitsPerSecond: captureProfile.videoBitsPerSecond,
+        ...(hasAudio ? { audioBitsPerSecond: captureProfile.audioBitsPerSecond } : {})
+      };
       try {
-        const mimeType = getMimeType(hasAudio);
-        mediaRecorder = new MediaRecorder(combinedStream, mimeType ? { mimeType } : undefined);
+        mediaRecorder = new MediaRecorder(combinedStream, recorderOptions);
       } catch (mimeErr) {
         console.warn("MediaRecorder creation with preferred MIME type failed, trying default format...", mimeErr);
         try {
-          mediaRecorder = new MediaRecorder(combinedStream);
+          const { mimeType: ignoredMimeType, ...fallbackOptions } = recorderOptions;
+          mediaRecorder = new MediaRecorder(combinedStream, fallbackOptions);
         } catch (defaultErr) {
           throw new Error(`MediaRecorder initialization failed: ${defaultErr.message}`);
         }
@@ -844,6 +983,9 @@ export default function Recording({ onOpenProject, license }) {
           console.log(`Track state in onstop: kind=${t.kind}, label=${t.label}, readyState=${t.readyState}, enabled=${t.enabled}`);
         });
 
+        cleanupCompositor();
+        stopStreams();
+
         try {
           if (chunksRef.current.length === 0) {
             setStatusMessage('Recording failed: No video data was captured. Please check screen permissions.');
@@ -851,7 +993,7 @@ export default function Recording({ onOpenProject, license }) {
           }
 
           setStatusMessage('Saving capture and preparing cinematic edit...');
-          const blob = new Blob(chunksRef.current, { type: getMimeType(hasAudio) || 'video/webm' });
+          const blob = new Blob(chunksRef.current, { type: mediaRecorder.mimeType || getMimeType(hasAudio) || 'video/webm' });
           const arrayBuffer = await blob.arrayBuffer();
 
           if (!window.electron?.saveRecordedFile) {
@@ -861,7 +1003,7 @@ export default function Recording({ onOpenProject, license }) {
 
           const res = await withTimeout(
             window.electron.saveRecordedFile(arrayBuffer, getRecordingProjectName()),
-            45000,
+            11 * 60 * 1000,
             'Saving recording'
           );
 
@@ -872,13 +1014,17 @@ export default function Recording({ onOpenProject, license }) {
 
           const project = await window.electron.createProject(getRecordingProjectName());
           const settings = buildProjectSettings();
+          const measuredDuration = Math.max(
+            0.1,
+            Number(res.duration) || recordingDurationRef.current || recordTimeRef.current
+          );
 
           await window.electron.updateProject(project.id, {
             video_path: res.filePath,
             raw_video_path: res.rawFilePath || res.filePath,
             audio_path: hasAudio ? res.filePath : null,
             webcam_path: webcamEnabled && cameraStream ? res.filePath : null,
-            duration: recordTimeRef.current,
+            duration: measuredDuration,
             ...settings,
             webcam_enabled: webcamEnabled && !!cameraStream,
             webcam_baked: webcamEnabled && !!cameraStream,
@@ -892,13 +1038,17 @@ export default function Recording({ onOpenProject, license }) {
           setStatusMessage(`Recording stopped, but saving failed: ${err.message}`);
         } finally {
           setIsRecording(false);
-          stopStreams();
+          stoppingRef.current = false;
+          recorderRef.current = null;
         }
       };
 
       await window.electron?.startRecording?.(buildProjectSettings());
 
-      mediaRecorder.start();
+      recordingStartedAtRef.current = performance.now();
+      recordingDurationRef.current = 0;
+      stoppingRef.current = false;
+      mediaRecorder.start(1000);
       setIsRecording(true);
       setStatusMessage(isElectronRuntime
         ? 'Recording! Ctrl+Alt+Up to zoom, Ctrl+Alt+Down to zoom out. Move mouse to track.'
@@ -907,107 +1057,70 @@ export default function Recording({ onOpenProject, license }) {
 
       if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
       timerIntervalRef.current = setInterval(() => {
-        recordTimeRef.current += 1;
-        setRecordTime(recordTimeRef.current);
-      }, 1000);
+        const elapsed = Math.max(0, (performance.now() - recordingStartedAtRef.current) / 1000);
+        recordTimeRef.current = elapsed;
+        setRecordTime(Math.floor(elapsed));
+      }, 250);
     } catch (err) {
       alert("Failed to start canvas stream recording pipeline: " + err.stack);
       console.error("Failed to start canvas stream recording pipeline:", err);
       setStatusMessage(`Recording start failed: ${err.message}`);
       setIsRecording(false);
-      
-      // Clean up DOM video element
-      if (hiddenVideoRef.current) {
-        try {
-          hiddenVideoRef.current.pause();
-          document.body.removeChild(hiddenVideoRef.current);
-        } catch (e) {}
-        hiddenVideoRef.current = null;
-      }
-
-      if (cameraVideoRef.current) {
-        try {
-          cameraVideoRef.current.pause();
-          document.body.removeChild(cameraVideoRef.current);
-        } catch (e) {}
-        cameraVideoRef.current = null;
-      }
-
-      // Clean up DOM canvas element
-      if (canvasRef.current) {
-        try {
-          document.body.removeChild(canvasRef.current);
-        } catch (e) {}
-        canvasRef.current = null;
-      }
-
-      if (screenStream) {
-        try {
-          screenStream.getTracks().forEach(track => track.stop());
-        } catch (e) {}
-      }
+      stoppingRef.current = false;
+      window.electron?.stopRecording?.().catch(() => {});
+      cleanupCompositor();
+      stopStreams();
     }
   };
 
   const handleStop = async () => {
-    if (!isRecording) return;
+    if (!isRecording || stoppingRef.current) return;
 
-    if (animationFrameIdRef.current) cancelAnimationFrame(animationFrameIdRef.current);
+    stoppingRef.current = true;
     clearInterval(timerIntervalRef.current);
-    setIsRecording(false);
     setStatusMessage('Stopping capture and saving recording...');
 
-    // Stop recorder properly to flush final video chunks
-    if (recorderRef.current && recorderRef.current.state !== 'inactive') {
+    if (window.electron?.stopRecording) {
       try {
-        recorderRef.current.stop();
+        const res = await withTimeout(window.electron.stopRecording(), 3000, 'Stopping recorder shell');
+        if (res?.events) trackingEventsRef.current = res.events;
+      } catch (err) {
+        console.warn("Electron stopRecording cleanup warning:", err);
+      }
+    }
+
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== 'inactive') {
+      try {
+        recorder.requestData();
+      } catch (error) {
+        console.warn('Could not request the final recorder chunk:', error);
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      recordingDurationRef.current = Math.max(
+        0.1,
+        (performance.now() - recordingStartedAtRef.current) / 1000
+      );
+      recordTimeRef.current = recordingDurationRef.current;
+
+      try {
+        recorder.stop();
       } catch (err) {
         console.error("MediaRecorder stop failed:", err);
         setStatusMessage(`Could not stop recorder cleanly: ${err.message}`);
+        setIsRecording(false);
+        stoppingRef.current = false;
+        cleanupCompositor();
         stopStreams();
       }
-    } else {
-      stopStreams();
+      return;
     }
 
-    // Cursor/widget cleanup should never block the video from flushing and saving.
-    if (window.electron?.stopRecording) {
-      withTimeout(window.electron.stopRecording(), 3000, 'Stopping recorder shell')
-        .then((res) => {
-          if (res?.events) trackingEventsRef.current = res.events;
-        })
-        .catch((err) => {
-          console.warn("Electron stopRecording cleanup warning:", err);
-        });
-    }
-
-    // Clean up DOM video decoding element
-    if (hiddenVideoRef.current) {
-      try {
-        hiddenVideoRef.current.pause();
-        document.body.removeChild(hiddenVideoRef.current);
-      } catch (e) {}
-      hiddenVideoRef.current = null;
-    }
-
-    if (cameraVideoRef.current) {
-      try {
-        cameraVideoRef.current.pause();
-        document.body.removeChild(cameraVideoRef.current);
-      } catch (e) {}
-      cameraVideoRef.current = null;
-    }
-
-    // Clean up DOM canvas element
-    if (canvasRef.current) {
-      try {
-        document.body.removeChild(canvasRef.current);
-      } catch (e) {}
-      canvasRef.current = null;
-    }
-
-    // Stop camera/screen hardware tracks AFTER recorder closes
-    setTimeout(stopStreams, 500);
+    setIsRecording(false);
+    stoppingRef.current = false;
+    cleanupCompositor();
+    stopStreams();
   };
 
   const handleManualZoom = async (direction) => {

@@ -251,11 +251,19 @@ export default function Editor({ projectId, onCloseProject, license }) {
         video.src = source;
         video.muted = isMuted;
         video.preload = 'auto';
-        video.onloadedmetadata = () => {
-          if (proj.duration && proj.duration > 0) {
-            setDuration(proj.duration);
-          } else if (video.duration && isFinite(video.duration)) {
-            setDuration(video.duration);
+        video.onloadedmetadata = async () => {
+          const mediaDuration = Number.isFinite(video.duration) && video.duration > 0
+            ? video.duration
+            : 0;
+          const storedDuration = Number(proj.duration) || 0;
+          const resolvedDuration = mediaDuration || storedDuration || 0;
+
+          if (resolvedDuration > 0) {
+            setDuration(resolvedDuration);
+          }
+          if (mediaDuration > 0 && Math.abs(mediaDuration - storedDuration) > 0.08) {
+            setProject((current) => current ? { ...current, duration: mediaDuration } : current);
+            await window.electron.updateProject(projectId, { duration: mediaDuration });
           }
         };
         video.onloadeddata = () => {
@@ -344,6 +352,14 @@ export default function Editor({ projectId, onCloseProject, license }) {
     const eased = easeInOutCubic(progress);
     const rawX = next ? previous.x + (next.x - previous.x) * eased : previous.x;
     const rawY = next ? previous.y + (next.y - previous.y) * eased : previous.y;
+
+    if (previous.coordinate_space === 'normalized') {
+      return {
+        x: Math.min(width, Math.max(0, rawX * width)),
+        y: Math.min(height, Math.max(0, rawY * height)),
+        source: previous
+      };
+    }
 
     let minX = events[0].x;
     let maxX = events[0].x;
@@ -520,10 +536,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
     const timestamp = video.currentTime;
     setCurrentTime(timestamp);
     const mediaDuration = Number.isFinite(video.duration) ? video.duration : 0;
-    const playbackEnd = Math.max(0, Math.min(
-      mediaDuration || duration || 0,
-      duration || mediaDuration || 0
-    ));
+    const playbackEnd = Math.max(0, mediaDuration || duration || 0);
     if (isPlaying && playbackEnd > 0 && timestamp >= playbackEnd - 0.05) {
       video.pause();
       video.currentTime = playbackEnd;
@@ -597,7 +610,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
     const cursorPoint = getCursorPointAtTime(events, timestamp, width, height, video);
     let currentX = cursorPoint.x;
     let currentY = cursorPoint.y;
-    let cursorAlpha = 1;
+    let cursorAlpha = cursorPoint.source?.visible === false ? 0 : 1;
     let activeClick = getActiveClick(events, timestamp, width, height, video);
 
     if (settings.cursor_loop_to_start && duration > 1.5 && timestamp > duration - 1.2 && events.length > 0) {

@@ -1,5 +1,7 @@
 const { app, BrowserWindow, ipcMain, desktopCapturer, dialog, screen, protocol, net, crashReporter } = require('electron');
-app.disableHardwareAcceleration();
+if (process.env.SCREENFLOW_DISABLE_GPU === '1') {
+  app.disableHardwareAcceleration();
+}
 protocol.registerSchemesAsPrivileged([
   { scheme: 'screenflow-media', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } }
 ]);
@@ -18,6 +20,7 @@ let trackingInterval = null;
 let isRecording = false;
 let recordingStartTime = 0;
 let preferredDisplaySourceId = null;
+let recordingSourceMetadata = new Map();
 
 const shouldUseDevServer = process.env.SCREENFLOW_DEV_SERVER === '1' || process.env.NODE_ENV === 'development';
 
@@ -337,14 +340,18 @@ function transcodeRecordingForPreview(inputPath) {
   const ffmpegPath = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
   const args = [
     '-y',
+    '-fflags', '+genpts',
     '-i', inputPath,
     '-map', '0:v:0',
     '-map', '0:a?',
     '-c:v', 'libx264',
     '-pix_fmt', 'yuv420p',
-    '-preset', 'veryfast',
-    '-crf', '20',
+    '-preset', 'fast',
+    '-crf', '18',
     '-c:a', 'aac',
+    '-b:a', '192k',
+    '-ar', '48000',
+    '-avoid_negative_ts', 'make_zero',
     '-movflags', '+faststart',
     outputPath
   ];
@@ -354,8 +361,8 @@ function transcodeRecordingForPreview(inputPath) {
     let errorLog = '';
     const timeout = setTimeout(() => {
       proc.kill();
-      reject(new Error('FFmpeg preview transcode timed out after 30 seconds'));
-    }, 30000);
+      reject(new Error('FFmpeg preview transcode timed out after 10 minutes'));
+    }, 10 * 60 * 1000);
 
     proc.stderr.on('data', (data) => {
       errorLog += data.toString();
@@ -372,6 +379,38 @@ function transcodeRecordingForPreview(inputPath) {
       } else {
         reject(new Error(`FFmpeg preview transcode failed with code ${code}: ${errorLog.slice(-500)}`));
       }
+    });
+  });
+}
+
+function probeMediaDuration(inputPath) {
+  const ffprobePath = process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe';
+  const args = [
+    '-v', 'error',
+    '-show_entries', 'format=duration',
+    '-of', 'default=noprint_wrappers=1:nokey=1',
+    inputPath
+  ];
+
+  return new Promise((resolve) => {
+    const proc = spawn(ffprobePath, args);
+    let output = '';
+    const timeout = setTimeout(() => {
+      proc.kill();
+      resolve(null);
+    }, 8000);
+
+    proc.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+    proc.on('error', () => {
+      clearTimeout(timeout);
+      resolve(null);
+    });
+    proc.on('close', () => {
+      clearTimeout(timeout);
+      const duration = Number.parseFloat(output.trim());
+      resolve(Number.isFinite(duration) && duration > 0 ? duration : null);
     });
   });
 }
@@ -623,11 +662,27 @@ ipcMain.handle('recording:get-sources', async () => {
     types: ['screen', 'window'],
     thumbnailSize: { width: 150, height: 150 }
   });
-  return sources.map(s => ({
-    id: s.id,
-    name: s.name,
-    thumbnail: s.thumbnail.toDataURL()
-  }));
+  const displays = screen.getAllDisplays();
+  recordingSourceMetadata = new Map();
+
+  return sources.map((source) => {
+    const display = displays.find((item) => String(item.id) === String(source.display_id));
+    const sourceType = source.id.startsWith('screen:') ? 'screen' : 'window';
+    const metadata = {
+      id: source.id,
+      sourceType,
+      displayId: source.display_id || null,
+      bounds: display?.bounds || null,
+      scaleFactor: display?.scaleFactor || 1
+    };
+    recordingSourceMetadata.set(source.id, metadata);
+
+    return {
+      ...metadata,
+      name: source.name,
+      thumbnail: source.thumbnail.toDataURL()
+    };
+  });
 });
 
 ipcMain.handle('live:set-display-source', (_, sourceId) => {
@@ -702,6 +757,88 @@ function cleanEnvValue(value, name) {
     .trim();
 }
 
+function getCapturedWindowBounds(sourceId) {
+  if (process.platform !== 'win32') return Promise.resolve(null);
+  const match = /^window:(\d+):/.exec(String(sourceId || ''));
+  if (!match) return Promise.resolve(null);
+
+  const nativeHandle = match[1];
+  const script = `
+    Add-Type -TypeDefinition @"
+    using System;
+    using System.Runtime.InteropServices;
+    public static class ScreenFlowWindowBounds {
+      [StructLayout(LayoutKind.Sequential)]
+      public struct RECT {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+      }
+      [DllImport("dwmapi.dll")]
+      public static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out RECT rect, int size);
+      [DllImport("user32.dll")]
+      public static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+      [DllImport("user32.dll")]
+      public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+    }
+    "@
+    try { [ScreenFlowWindowBounds]::SetProcessDpiAwarenessContext([IntPtr](-4)) | Out-Null } catch {}
+    $rect = New-Object ScreenFlowWindowBounds+RECT
+    $result = [ScreenFlowWindowBounds]::DwmGetWindowAttribute([IntPtr]${nativeHandle}, 9, [ref]$rect, [Runtime.InteropServices.Marshal]::SizeOf($rect))
+    if ($result -ne 0) {
+      $ok = [ScreenFlowWindowBounds]::GetWindowRect([IntPtr]${nativeHandle}, [ref]$rect)
+      if (-not $ok) { exit 1 }
+    }
+    Write-Output "$($rect.Left),$($rect.Top),$($rect.Right),$($rect.Bottom)"
+  `;
+
+  return new Promise((resolve) => {
+    const proc = spawn('powershell', ['-NoProfile', '-Command', script]);
+    let output = '';
+    const timeout = setTimeout(() => {
+      proc.kill();
+      resolve(null);
+    }, 2500);
+
+    proc.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+    proc.on('error', () => {
+      clearTimeout(timeout);
+      resolve(null);
+    });
+    proc.on('close', (code) => {
+      clearTimeout(timeout);
+      if (code !== 0) {
+        resolve(null);
+        return;
+      }
+
+      const values = output.trim().split(',').map(Number);
+      if (values.length !== 4 || values.some((value) => !Number.isFinite(value))) {
+        resolve(null);
+        return;
+      }
+
+      const [left, top, right, bottom] = values;
+      try {
+        const topLeft = screen.screenToDipPoint({ x: left, y: top });
+        const bottomRight = screen.screenToDipPoint({ x: right, y: bottom });
+        const bounds = {
+          x: topLeft.x,
+          y: topLeft.y,
+          width: bottomRight.x - topLeft.x,
+          height: bottomRight.y - topLeft.y
+        };
+        resolve(bounds.width > 0 && bounds.height > 0 ? bounds : null);
+      } catch (error) {
+        resolve(null);
+      }
+    });
+  });
+}
+
 // IPC - Recording and Global Tracker
 ipcMain.handle('recording:start', async (event, options) => {
   if (isRecording) return false;
@@ -711,7 +848,23 @@ ipcMain.handle('recording:start', async (event, options) => {
   trackingEvents = [];
 
   const primaryDisplay = screen.getPrimaryDisplay();
-  const displayBounds = primaryDisplay.bounds;
+  const selectedSource = recordingSourceMetadata.get(options?.recording_source);
+  const selectedDisplay = screen.getAllDisplays().find(
+    (display) => String(display.id) === String(selectedSource?.displayId)
+  );
+  const windowBounds = selectedSource?.sourceType === 'window'
+    ? await getCapturedWindowBounds(options?.recording_source)
+    : null;
+  const displayBounds = windowBounds || selectedSource?.bounds || selectedDisplay?.bounds || primaryDisplay.bounds;
+  const normalizePoint = (point) => {
+    const rawX = (point.x - displayBounds.x) / Math.max(1, displayBounds.width);
+    const rawY = (point.y - displayBounds.y) / Math.max(1, displayBounds.height);
+    return {
+      x: Math.max(0, Math.min(1, rawX)),
+      y: Math.max(0, Math.min(1, rawY)),
+      visible: rawX >= 0 && rawX <= 1 && rawY >= 0 && rawY <= 1
+    };
+  };
 
   logActivity('RECORDING_START', 'Global cursor and window capture started.');
 
@@ -731,15 +884,16 @@ ipcMain.handle('recording:start', async (event, options) => {
   // Start polling cursor coordinates at 60Hz
   trackingInterval = setInterval(() => {
     const point = screen.getCursorScreenPoint();
-    const relX = point.x - displayBounds.x;
-    const relY = point.y - displayBounds.y;
+    const normalized = normalizePoint(point);
     
     // Broadcast live cursor coordinate to the renderer for live canvas zoom tracking
     if (mainWindow) {
       sendRecordingStatus({ 
         type: 'cursor-move', 
-        x: relX, 
-        y: relY,
+        x: normalized.x,
+        y: normalized.y,
+        visible: normalized.visible,
+        coordinateSpace: 'normalized',
         screenWidth: displayBounds.width,
         screenHeight: displayBounds.height
       });
@@ -747,8 +901,10 @@ ipcMain.handle('recording:start', async (event, options) => {
 
     trackingEvents.push({
       timestamp: (Date.now() - recordingStartTime) / 1000,
-      x: relX,
-      y: relY,
+      x: normalized.x,
+      y: normalized.y,
+      visible: normalized.visible,
+      coordinate_space: 'normalized',
       event_type: 'move'
     });
   }, 16);
@@ -807,26 +963,31 @@ ipcMain.handle('recording:start', async (event, options) => {
   try {
     trackingProcess = spawn('powershell', ['-NoProfile', '-Command', psScript]);
     trackingProcess.stdout.on('data', (data) => {
-      const output = data.toString().trim();
-      const parts = output.split(',');
-      if (parts.length === 2) {
+      const lines = data.toString().split(/\r?\n/).filter(Boolean);
+      lines.forEach((output) => {
+        const parts = output.trim().split(',');
+        if (parts.length !== 2) return;
+
         const type = parts[1];
         const point = screen.getCursorScreenPoint();
-        const relX = point.x - displayBounds.x;
-        const relY = point.y - displayBounds.y;
+        const normalized = normalizePoint(point);
         trackingEvents.push({
           timestamp: (Date.now() - recordingStartTime) / 1000,
-          x: relX,
-          y: relY,
+          x: normalized.x,
+          y: normalized.y,
+          visible: normalized.visible,
+          coordinate_space: 'normalized',
           event_type: type
         });
         sendRecordingStatus({
           type: 'cursor-click',
           eventType: type,
-          x: relX,
-          y: relY
+          x: normalized.x,
+          y: normalized.y,
+          visible: normalized.visible,
+          coordinateSpace: 'normalized'
         });
-      }
+      });
     });
   } catch (err) {
     logActivity('HOOK_ERROR', `Failed to start PowerShell tracking hook: ${err.message}`);
@@ -915,11 +1076,13 @@ ipcMain.handle('recording:save-file', async (_, arrayBuffer, fileName) => {
 
     try {
       const previewPath = await transcodeRecordingForPreview(filePath);
+      const duration = await probeMediaDuration(previewPath);
       logActivity('RECORDING_TRANSCODE_PREVIEW', `Prepared playable preview file: ${previewPath}`);
-      return { success: true, filePath: previewPath, rawFilePath: filePath };
+      return { success: true, filePath: previewPath, rawFilePath: filePath, duration };
     } catch (transcodeErr) {
+      const duration = await probeMediaDuration(filePath);
       logActivity('RECORDING_TRANSCODE_WARNING', `Preview transcode failed, falling back to raw recording: ${transcodeErr.message}`);
-      return { success: true, filePath, rawFilePath: filePath, warning: transcodeErr.message };
+      return { success: true, filePath, rawFilePath: filePath, duration, warning: transcodeErr.message };
     }
   } catch (err) {
     logActivity('RECORDING_SAVE_ERROR', `Failed to save recorded file: ${err.message}`);

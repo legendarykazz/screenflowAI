@@ -248,6 +248,8 @@ function saveCursorEvents(projectId, events) {
     timestamp: e.timestamp,
     x: e.x,
     y: e.y,
+    visible: e.visible !== false,
+    coordinate_space: e.coordinate_space || null,
     event_type: e.event_type
   }));
 

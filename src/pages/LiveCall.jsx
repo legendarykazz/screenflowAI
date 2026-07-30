@@ -8,6 +8,12 @@ import {
   VideoQuality
 } from 'livekit-client';
 import {
+  CALL_AUDIO_CAPTURE_OPTIONS,
+  CALL_AUDIO_PUBLISH_OPTIONS,
+  prepareCallAudioTrack,
+  resumeCallAudio
+} from '../lib/callAudio';
+import {
   Bot,
   Camera,
   Circle,
@@ -31,7 +37,8 @@ import {
   Square,
   Type,
   Users,
-  Video
+  Video,
+  Volume2
 } from 'lucide-react';
 
 const toolOptions = [
@@ -112,6 +119,7 @@ export default function LiveCall() {
   const [liveKitStatus, setLiveKitStatus] = useState('Not connected');
   const [remoteParticipants, setRemoteParticipants] = useState([]);
   const [isLiveKitConnected, setIsLiveKitConnected] = useState(false);
+  const [audioPlaybackBlocked, setAudioPlaybackBlocked] = useState(false);
   const [captionRecording, setCaptionRecording] = useState(false);
   const [captionGenerating, setCaptionGenerating] = useState(false);
   const [callCaptions, setCallCaptions] = useState([]);
@@ -244,17 +252,18 @@ export default function LiveCall() {
 
     try {
       const audioStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          autoGainControl: true,
-          echoCancellation: true,
-          noiseSuppression: true
-        }
+        audio: CALL_AUDIO_CAPTURE_OPTIONS
       });
+      prepareCallAudioTrack(audioStream.getAudioTracks()[0]);
       audioStreamRef.current = audioStream;
-      setMicOn(true);
       await publishMicStream(audioStream);
+      setMicOn(true);
       setNotes((current) => ['Microphone enabled. AI notetaker can attach live transcription later.', ...current]);
     } catch (error) {
+      audioStreamRef.current?.getTracks().forEach((track) => track.stop());
+      audioStreamRef.current = null;
+      liveKitAudioTrackRef.current = null;
+      setMicOn(false);
       setStatus(error?.message || 'Microphone permission was not granted.');
     }
   };
@@ -317,6 +326,7 @@ export default function LiveCall() {
     setIsLive(false);
     setMicOn(false);
     setCameraOn(false);
+    setAudioPlaybackBlocked(false);
     setSourceName(shareMode === 'whiteboard' ? 'Whiteboard' : 'No screen selected');
     setStatus('Live room ended.');
   };
@@ -442,7 +452,8 @@ export default function LiveCall() {
     try {
       let audioStream = audioStreamRef.current;
       if (!audioStream?.getAudioTracks?.().length) {
-        audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioStream = await navigator.mediaDevices.getUserMedia({ audio: CALL_AUDIO_CAPTURE_OPTIONS });
+        prepareCallAudioTrack(audioStream.getAudioTracks()[0]);
         audioStreamRef.current = audioStream;
         setMicOn(true);
         await publishMicStream(audioStream);
@@ -509,29 +520,39 @@ export default function LiveCall() {
 
   const connectLiveKit = async () => {
     if (liveKitRoomRef.current) return liveKitRoomRef.current;
+    let room = null;
     try {
       if (!window.electron?.createLiveKitToken) {
         setLiveKitStatus('LiveKit token bridge is unavailable.');
         return null;
       }
 
-      setLiveKitStatus('Creating LiveKit token...');
-      const tokenResult = await window.electron.createLiveKitToken(roomCode, participantName || 'Presenter');
-      if (!tokenResult.success) {
-        setLiveKitStatus(tokenResult.error);
-        return null;
-      }
-
-      setLiveKitStatus(`Connecting to ${tokenResult.url}...`);
-      const room = new Room({
+      room = new Room({
         adaptiveStream: {
           pauseVideoInBackground: false,
           pixelDensity: 2
         },
         dynacast: true
       });
+      resumeCallAudio(room)
+        .then((canPlay) => setAudioPlaybackBlocked(!canPlay))
+        .catch(() => setAudioPlaybackBlocked(true));
+
+      setLiveKitStatus('Creating LiveKit token...');
+      const tokenResult = await window.electron.createLiveKitToken(roomCode, participantName || 'Presenter');
+      if (!tokenResult.success) {
+        room.disconnect();
+        setAudioPlaybackBlocked(false);
+        setLiveKitStatus(tokenResult.error);
+        return null;
+      }
+
+      setLiveKitStatus(`Connecting to ${tokenResult.url}...`);
 
       room.on(RoomEvent.ParticipantConnected, () => updateRemoteParticipants(room));
+      room.on(RoomEvent.AudioPlaybackStatusChanged, (canPlay) => {
+        setAudioPlaybackBlocked(!canPlay);
+      });
       room.on(RoomEvent.ParticipantDisconnected, (participant) => {
         remoteMediaRef.current
           ?.querySelectorAll(`[data-participant-id="${participant.identity}"]`)
@@ -570,6 +591,7 @@ export default function LiveCall() {
         liveKitAudioTrackRef.current = null;
         liveKitCameraTrackRef.current = null;
         setIsLiveKitConnected(false);
+        setAudioPlaybackBlocked(false);
         setLiveKitStatus(reason ? `Disconnected: ${String(reason)}` : 'Disconnected');
         setRemoteParticipants([]);
       });
@@ -581,6 +603,7 @@ export default function LiveCall() {
       liveKitRoomRef.current = room;
       setIsLiveKitConnected(true);
       setLiveKitStatus(`Connected as ${tokenResult.identity}`);
+      setAudioPlaybackBlocked(!room.canPlaybackAudio);
       updateRemoteParticipants(room);
 
       if (outputStreamRef.current || streamRef.current) await publishActiveOutput();
@@ -588,7 +611,10 @@ export default function LiveCall() {
       if (cameraStreamRef.current) await publishCameraStream(cameraStreamRef.current);
       return room;
     } catch (error) {
+      room?.disconnect();
+      if (liveKitRoomRef.current === room) liveKitRoomRef.current = null;
       setIsLiveKitConnected(false);
+      setAudioPlaybackBlocked(false);
       const message = error?.message || error?.reason || error?.toString?.() || 'LiveKit connection failed.';
       setLiveKitStatus(`Connect failed: ${message}`);
       return null;
@@ -602,10 +628,24 @@ export default function LiveCall() {
     liveKitAudioTrackRef.current = null;
     liveKitCameraTrackRef.current = null;
     setIsLiveKitConnected(false);
+    setAudioPlaybackBlocked(false);
     setLiveKitStatus('Disconnected');
     setRemoteParticipants([]);
     if (remoteMediaRef.current) remoteMediaRef.current.innerHTML = '';
     if (remoteAudioRef.current) remoteAudioRef.current.innerHTML = '';
+  };
+
+  const enableCallAudio = async () => {
+    const room = liveKitRoomRef.current;
+    if (!room) return;
+    try {
+      await resumeCallAudio(room);
+      setAudioPlaybackBlocked(false);
+      setLiveKitStatus('Call audio is on.');
+    } catch (error) {
+      setAudioPlaybackBlocked(true);
+      setLiveKitStatus('Your browser blocked call audio. Tap Enable sound again.');
+    }
   };
 
   const sendRoomCommand = async (type, targetIdentity = '') => {
@@ -674,10 +714,12 @@ export default function LiveCall() {
       await room.localParticipant.unpublishTrack(liveKitAudioTrackRef.current);
     }
 
+    prepareCallAudioTrack(audioTrack);
     liveKitAudioTrackRef.current = audioTrack;
     await room.localParticipant.publishTrack(audioTrack, {
       name: 'presenter-mic',
-      source: Track.Source.Microphone
+      source: Track.Source.Microphone,
+      ...CALL_AUDIO_PUBLISH_OPTIONS
     });
   };
 
@@ -709,9 +751,19 @@ export default function LiveCall() {
   };
 
   const attachRemoteTrack = (track, participant) => {
-    if (!remoteMediaRef.current) return;
     const participantId = participant?.identity || 'remote';
     const isRemoteScreen = track.kind === 'video' && (track.name?.includes('screen') || track.name?.includes('whiteboard') || track.source === Track.Source.ScreenShare);
+    const isAudio = track.kind === 'audio';
+
+    if (isAudio) {
+      const audioSink = remoteAudioRef.current;
+      if (!audioSink || audioSink.querySelector(`[data-track-sid="${track.sid}"]`)) return;
+    } else if (!remoteMediaRef.current) {
+      return;
+    }
+
+    const tile = isAudio ? null : ensureRemoteParticipantTile(participant, isRemoteScreen ? 'share' : 'camera');
+    if (!isAudio && (!tile || tile.querySelector(`[data-track-sid="${track.sid}"]`))) return;
 
     const element = track.attach();
     element.dataset.trackSid = track.sid;
@@ -725,28 +777,21 @@ export default function LiveCall() {
     element.style.objectFit = isRemoteScreen ? 'contain' : 'cover';
     element.style.transform = 'none';
 
-    if (track.kind === 'audio') {
+    if (isAudio) {
       element.muted = false;
+      element.volume = 1;
       element.style.display = 'none';
       remoteAudioRef.current?.appendChild(element);
-      element.play?.().catch(() => {
-        setLiveKitStatus('Connected. Click the call window once if browser audio is blocked.');
-      });
+      element.play?.()
+        .then(() => setAudioPlaybackBlocked(false))
+        .catch(() => {
+          setAudioPlaybackBlocked(true);
+          setLiveKitStatus('Connected. Enable sound to hear the other person.');
+        });
       return;
     }
 
-    const tile = ensureRemoteParticipantTile(participant, isRemoteScreen ? 'share' : 'camera');
-    if (!tile) {
-      element.remove();
-      return;
-    }
     tile.querySelector('[data-empty-participant="true"]')?.remove();
-
-    const alreadyAttached = Array.from(tile.querySelectorAll('[data-track-sid]')).some((attached) => attached.dataset.trackSid === track.sid);
-    if (alreadyAttached) {
-      element.remove();
-      return;
-    }
 
     if (track.kind === 'video') {
       Array.from(tile.querySelectorAll('video')).forEach((video) => video.remove());
@@ -1462,6 +1507,11 @@ export default function LiveCall() {
           )}
           <div ref={remoteAudioRef} aria-hidden="true" style={remoteAudioSinkStyle} />
           <div data-meet-dock="true" style={meetControlDockStyle}>
+            {audioPlaybackBlocked && (
+              <button onClick={enableCallAudio} style={dockButtonStyle(true)} className="tooltip" data-tooltip="Enable call sound">
+                <Volume2 size={18} />
+              </button>
+            )}
             <button onClick={toggleMic} style={dockButtonStyle(micOn)} className="tooltip" data-tooltip={micOn ? 'Mute microphone' : 'Turn microphone on'}>
               <Mic size={18} />
             </button>

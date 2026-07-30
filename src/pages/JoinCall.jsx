@@ -7,7 +7,13 @@ import {
   VideoPresets,
   VideoQuality
 } from 'livekit-client';
-import { Camera, Expand, Mic, PhoneOff, Play, ScreenShare, SquarePen, Users, Video } from 'lucide-react';
+import { Camera, Expand, Mic, PhoneOff, Play, ScreenShare, SquarePen, Users, Video, Volume2 } from 'lucide-react';
+import {
+  CALL_AUDIO_CAPTURE_OPTIONS,
+  CALL_AUDIO_PUBLISH_OPTIONS,
+  prepareCallAudioTrack,
+  resumeCallAudio
+} from '../lib/callAudio';
 
 export default function JoinCall() {
   const roomRef = useRef(null);
@@ -42,6 +48,7 @@ export default function JoinCall() {
   const [hasHostScreen, setHasHostScreen] = useState(false);
   const [participants, setParticipants] = useState([]);
   const [fatalError, setFatalError] = useState('');
+  const [audioPlaybackBlocked, setAudioPlaybackBlocked] = useState(false);
 
   useEffect(() => {
     if (localCameraRef.current) {
@@ -77,6 +84,7 @@ export default function JoinCall() {
   }, []);
 
   const joinRoom = async () => {
+    let room = null;
     try {
       const participantName = name.trim();
       if (!participantName) {
@@ -88,6 +96,18 @@ export default function JoinCall() {
         roomRef.current = null;
       }
       resetCallState('Ready to reconnect');
+      room = new Room({
+        adaptiveStream: {
+          pauseVideoInBackground: false,
+          pixelDensity: 2
+        },
+        dynacast: true
+      });
+      roomRef.current = room;
+      resumeCallAudio(room)
+        .then((canPlay) => setAudioPlaybackBlocked(!canPlay))
+        .catch(() => setAudioPlaybackBlocked(true));
+
       setStatus('Getting access token...');
       const params = new URLSearchParams({ roomCode, participantName, role: 'participant' });
       const response = await fetch(`/api/livekit-token?${params.toString()}`, {
@@ -105,14 +125,6 @@ export default function JoinCall() {
       if (!response.ok) throw new Error(result.error || 'Unable to get LiveKit token.');
 
       setStatus('Connecting...');
-      const room = new Room({
-        adaptiveStream: {
-          pauseVideoInBackground: false,
-          pixelDensity: 2
-        },
-        dynacast: true
-      });
-      roomRef.current = room;
 
       room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
         if (roomRef.current !== room) return;
@@ -129,6 +141,10 @@ export default function JoinCall() {
       room.on(RoomEvent.DataReceived, (payload, participant) => {
         if (roomRef.current !== room) return;
         handleRoomCommand(payload, participant);
+      });
+      room.on(RoomEvent.AudioPlaybackStatusChanged, (canPlay) => {
+        if (roomRef.current !== room) return;
+        setAudioPlaybackBlocked(!canPlay);
       });
 
       room.on(RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
@@ -172,10 +188,14 @@ export default function JoinCall() {
       await room.connect(result.url, result.token);
       localIdentityRef.current = result.identity || room.localParticipant?.identity || '';
       setConnected(true);
+      setAudioPlaybackBlocked(!room.canPlaybackAudio);
       setStatus('Connected. Waiting for presenter output if nothing is visible yet.');
       attachExistingTracks(room);
       updateParticipants(room);
     } catch (error) {
+      safeDisconnectRoom(room);
+      if (roomRef.current === room) roomRef.current = null;
+      setConnected(false);
       setStatus(getErrorMessage(error, 'Could not join the call.'));
     }
   };
@@ -183,6 +203,19 @@ export default function JoinCall() {
   const leaveRoom = () => {
     safeDisconnectRoom(roomRef.current);
     roomRef.current = null;
+  };
+
+  const enableCallAudio = async () => {
+    const room = roomRef.current;
+    if (!room) return;
+    try {
+      await resumeCallAudio(room);
+      setAudioPlaybackBlocked(false);
+      setStatus('Call audio is on.');
+    } catch (error) {
+      setAudioPlaybackBlocked(true);
+      setStatus('Your browser blocked call audio. Tap Enable sound again.');
+    }
   };
 
   const resetCallState = (nextStatus) => {
@@ -194,6 +227,7 @@ export default function JoinCall() {
     setMicOn(false);
     setScreenOn(false);
     setHasHostScreen(false);
+    setAudioPlaybackBlocked(false);
     activeVideoSidRef.current = null;
     activeCameraSidRef.current = null;
     publishedCameraTrackRef.current = null;
@@ -228,22 +262,25 @@ export default function JoinCall() {
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          autoGainControl: true,
-          echoCancellation: true,
-          noiseSuppression: true
-        }
+        audio: CALL_AUDIO_CAPTURE_OPTIONS
       });
-      const audioTrack = stream.getAudioTracks()[0];
+      const audioTrack = prepareCallAudioTrack(stream.getAudioTracks()[0]);
       localMicStreamRef.current = stream;
       publishedMicTrackRef.current = audioTrack;
       await room.localParticipant.publishTrack(audioTrack, {
         name: 'participant-mic',
-        source: Track.Source.Microphone
+        source: Track.Source.Microphone,
+        ...CALL_AUDIO_PUBLISH_OPTIONS
       });
+      await resumeCallAudio(room).catch(() => {});
+      setAudioPlaybackBlocked(!room.canPlaybackAudio);
       setMicOn(true);
       setStatus('Microphone is on.');
     } catch (error) {
+      localMicStreamRef.current?.getTracks().forEach((track) => track.stop());
+      localMicStreamRef.current = null;
+      publishedMicTrackRef.current = null;
+      setMicOn(false);
       setStatus(getErrorMessage(error, 'Microphone permission was not granted.'));
     }
   };
@@ -528,11 +565,12 @@ export default function JoinCall() {
   };
 
   const attachTrack = (track, participant) => {
-    if (!mediaRef.current) return;
+    if (track.kind !== 'audio' && !mediaRef.current) return;
     const isScreen = track.kind === 'video' && (track.name?.includes('screen') || track.source === Track.Source.ScreenShare);
     const isCamera = track.kind === 'video' && !isScreen;
     const targetRef = track.kind === 'audio' ? audioRef : isCamera ? cameraRef : mediaRef;
     if (!targetRef.current) return;
+    if (targetRef.current.querySelector(`[data-track-sid="${track.sid}"]`)) return;
 
     const element = track.attach();
     element.autoplay = true;
@@ -549,13 +587,8 @@ export default function JoinCall() {
     if (track.kind === 'audio') {
       element.controls = false;
       element.muted = false;
+      element.volume = 1;
       element.style.display = 'none';
-    }
-
-    const alreadyAttached = Array.from(targetRef.current.querySelectorAll('[data-track-sid]')).some((child) => child.dataset?.trackSid === track.sid);
-    if (alreadyAttached) {
-      detachTrackElements(track).forEach((attachedElement) => attachedElement.remove());
-      return;
     }
 
     element.dataset.trackSid = track.sid;
@@ -575,7 +608,12 @@ export default function JoinCall() {
 
     if (track.kind === 'audio') {
       targetRef.current.appendChild(element);
-      element.play?.().catch(() => setStatus('Tap Mic or Join again if audio is blocked by the browser.'));
+      element.play?.()
+        .then(() => setAudioPlaybackBlocked(false))
+        .catch(() => {
+          setAudioPlaybackBlocked(true);
+          setStatus('Connected. Enable sound to hear the call.');
+        });
       return;
     }
 
@@ -752,6 +790,11 @@ export default function JoinCall() {
         )}
 
         <p data-call-status="true" style={statusStyle}>{status}</p>
+        {connected && audioPlaybackBlocked && (
+          <button onClick={enableCallAudio} style={{ ...primaryButtonStyle, marginBottom: '10px', width: '100%' }}>
+            <Volume2 size={17} /> Enable sound
+          </button>
+        )}
         <div ref={audioRef} aria-hidden="true" style={audioSinkStyle} />
         <canvas ref={whiteboardCanvasRef} aria-hidden="true" style={hiddenCanvasStyle} />
 

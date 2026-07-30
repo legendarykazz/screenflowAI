@@ -3,6 +3,14 @@ const path = require('path');
 const fs = require('fs');
 const db = require('./database');
 
+function getEventCoordinate(event, axis, outputSize) {
+  const value = Number(event?.[axis]);
+  if (!Number.isFinite(value)) return outputSize / 2;
+  return event.coordinate_space === 'normalized'
+    ? Math.max(0, Math.min(outputSize, value * outputSize))
+    : value;
+}
+
 async function renderAndExport(projectId, exportPath, format, quality, isPro, onProgress) {
   const project = db.getProject(projectId);
   if (!project) throw new Error('Project not found');
@@ -13,7 +21,9 @@ async function renderAndExport(projectId, exportPath, format, quality, isPro, on
   const duration = project.duration || 10;
   const fps = 30;
   
-  const screenVideoPath = project.video_path;
+  const screenVideoPath = project.raw_video_path && fs.existsSync(project.raw_video_path)
+    ? project.raw_video_path
+    : project.video_path;
   if (!fs.existsSync(screenVideoPath)) {
     throw new Error('Recorded screen video file not found');
   }
@@ -56,8 +66,8 @@ async function renderAndExport(projectId, exportPath, format, quality, isPro, on
       const e = cursorEvents[i];
       const nextTime = cursorEvents[i + 1] ? cursorEvents[i + 1].timestamp : duration;
       
-      const condX = `if(between(t,${e.timestamp.toFixed(2)},${nextTime.toFixed(2)}),${Math.round(e.x)},`;
-      const condY = `if(between(t,${e.timestamp.toFixed(2)},${nextTime.toFixed(2)}),${Math.round(e.y)},`;
+      const condX = `if(between(t,${e.timestamp.toFixed(2)},${nextTime.toFixed(2)}),${Math.round(getEventCoordinate(e, 'x', 1920))},`;
+      const condY = `if(between(t,${e.timestamp.toFixed(2)},${nextTime.toFixed(2)}),${Math.round(getEventCoordinate(e, 'y', 1080))},`;
       
       cursorXExpr += condX;
       cursorYExpr += condY;
@@ -83,13 +93,15 @@ async function renderAndExport(projectId, exportPath, format, quality, isPro, on
     const step = Math.ceil(cursorEvents.length / maxKeyframes) || 1;
     const filteredEvents = cursorEvents.filter((_, idx) => idx % step === 0);
     
-    let currentX = filteredEvents[0] ? filteredEvents[0].x : 960;
-    let currentY = filteredEvents[0] ? filteredEvents[0].y : 540;
+    let currentX = filteredEvents[0] ? getEventCoordinate(filteredEvents[0], 'x', 1920) : 960;
+    let currentY = filteredEvents[0] ? getEventCoordinate(filteredEvents[0], 'y', 1080) : 540;
     const smoothingFactor = 0.5;
     
     const smoothedEvents = filteredEvents.map(e => {
-      currentX = currentX + (e.x - currentX) * smoothingFactor;
-      currentY = currentY + (e.y - currentY) * smoothingFactor;
+      const eventX = getEventCoordinate(e, 'x', 1920);
+      const eventY = getEventCoordinate(e, 'y', 1080);
+      currentX = currentX + (eventX - currentX) * smoothingFactor;
+      currentY = currentY + (eventY - currentY) * smoothingFactor;
       return {
         timestamp: e.timestamp,
         x: currentX,
@@ -147,8 +159,8 @@ async function renderAndExport(projectId, exportPath, format, quality, isPro, on
 
       for (let i = 0; i < clicks.length; i++) {
         const tc = clicks[i].timestamp;
-        const cx = Math.round(clicks[i].x);
-        const cy = Math.round(clicks[i].y);
+        const cx = Math.round(getEventCoordinate(clicks[i], 'x', 1920));
+        const cy = Math.round(getEventCoordinate(clicks[i], 'y', 1080));
 
         const zoomInExpr = `(1.0+(${max_z}-1.0)*(t-${tc})/${in_dur})`;
         const zoomOutExpr = `(1.0+(${max_z}-1.0)*(${tc + tot_dur}-t)/${out_dur})`;
