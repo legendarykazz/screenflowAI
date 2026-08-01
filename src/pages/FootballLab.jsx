@@ -215,7 +215,7 @@ export default function FootballLab() {
   const [showTacticalLayers, setShowTacticalLayers] = useState(true);
   const [showEventMarkers, setShowEventMarkers] = useState(true);
 
-  const [inspectorTab, setInspectorTab] = useState('analysis');
+  const [inspectorTab, setInspectorTab] = useState('tactics');
   const [selectedEventId, setSelectedEventId] = useState(null);
   const [eventPoint, setEventPoint] = useState(null);
   const [eventFilterTeam, setEventFilterTeam] = useState('all');
@@ -426,6 +426,7 @@ export default function FootballLab() {
     setZoomLevel(1);
     setShowFormations(false);
     setShowPitchGuide(false);
+    setInspectorTab('events');
     setStatus('Footage loaded');
     event.target.value = '';
   };
@@ -1627,6 +1628,7 @@ export default function FootballLab() {
                 className={`football-segment ${sourceMode === 'video' ? 'active' : ''}`}
                 onClick={() => {
                   setSourceMode('video');
+                  setInspectorTab(videoUrl ? 'events' : 'analysis');
                   if (videoUrl) setShowFormations(false);
                 }}
               >
@@ -1636,6 +1638,7 @@ export default function FootballLab() {
                 className={`football-segment ${sourceMode === 'board' ? 'active' : ''}`}
                 onClick={() => {
                   setSourceMode('board');
+                  setInspectorTab('tactics');
                   setShowFormations(true);
                 }}
               >
@@ -1837,9 +1840,11 @@ export default function FootballLab() {
           <div className="football-tabs">
             {inspectorTabs.map(([tabId, label, Icon]) => (
               <button
+                aria-label={`${label} inspector`}
                 className={`football-tab ${inspectorTab === tabId ? 'active' : ''}`}
                 key={tabId}
                 onClick={() => setInspectorTab(tabId)}
+                title={label}
               >
                 <Icon size={15} />
                 {label}

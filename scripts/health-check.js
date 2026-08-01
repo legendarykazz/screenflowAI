@@ -254,6 +254,29 @@ function checkMobileLayout() {
   assertIncludes(styles, '.exports-table thead', 'Mobile exports hide the desktop table header');
 }
 
+function checkFootballWorkbench() {
+  const football = read('src/pages/FootballLab.jsx');
+  const styles = read('src/pages/FootballLab.css');
+
+  assertIncludes(football, "useState('tactics')", 'Football Lab opens with useful tactics controls');
+  assertIncludes(football, "setInspectorTab('events')", 'Uploaded footage opens the event workflow');
+  assertIncludes(football, 'aria-label={`${label} inspector`}', 'Football inspector tabs stay accessible');
+  assertIncludes(styles, "'tools stage'", 'Football workbench keeps the pitch beside a compact tool rail');
+  assertIncludes(styles, 'grid-template-columns: 52px minmax(0, 1fr)', 'Football tool rail has a stable desktop width');
+  assertIncludes(styles, 'grid-area: tools', 'Football tools occupy their own workbench region');
+  assertIncludes(styles, 'max-height: calc(100vh - 178px)', 'Football inspector stays usable within the desktop viewport');
+  assertMatches(
+    styles,
+    /@media \(max-width: 760px\)[\s\S]*?\.football-review\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/,
+    'Football workbench collapses to one column on phones'
+  );
+  assertMatches(
+    styles,
+    /@media \(max-width: 760px\)[\s\S]*?\.football-tool-strip\s*\{[\s\S]*?flex-direction:\s*row/,
+    'Football tools become a horizontal phone toolbar'
+  );
+}
+
 function runBuild() {
   if (process.argv.includes('--skip-build')) {
     pass('Production Vite build skipped by --skip-build');
@@ -295,6 +318,7 @@ function main() {
   checkRecordingPipeline();
   checkPlatformShells();
   checkMobileLayout();
+  checkFootballWorkbench();
   runBuild();
 
   passes.forEach((message) => console.log(`OK  ${message}`));
