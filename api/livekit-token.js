@@ -5,13 +5,19 @@ module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
 
   if (req.method === 'OPTIONS') {
     res.status(204).end();
     return;
   }
 
-  if (req.method === 'GET' && req.query?.debug === '1') {
+  if (req.query?.debug === '1') {
+    if (!isDebugAuthorized(req)) {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
     return handleDebug(req, res);
   }
 
@@ -29,8 +35,6 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  if (req.query?.debug === '1') return handleDebug(req, res);
-
   let body = req.body || {};
   if (typeof body === 'string') {
     try {
@@ -46,6 +50,10 @@ module.exports = async function handler(req, res) {
     participantName: body.participantName || query.participantName
   };
   const role = String(body.role || query.role || 'participant').toLowerCase();
+  if (!['presenter', 'participant'].includes(role)) {
+    res.status(400).json({ error: 'Invalid participant role.' });
+    return;
+  }
   const canPublish = role === 'presenter' || role === 'participant';
   const room = String(roomCode || '').trim().toUpperCase();
   const name = String(participantName || 'Guest').trim().slice(0, 48);
@@ -58,8 +66,9 @@ module.exports = async function handler(req, res) {
   const identity = `${name || 'Guest'}-${Math.random().toString(36).slice(2, 8)}`.replace(/[^\w.-]/g, '-');
   const token = new AccessToken(apiKey, apiSecret, {
     identity,
+    metadata: JSON.stringify({ role }),
     name: name || identity,
-    ttl: '2h'
+    ttl: '6h'
   });
 
   token.addGrant({
@@ -76,6 +85,13 @@ module.exports = async function handler(req, res) {
     identity
   });
 };
+
+function isDebugAuthorized(req) {
+  const expected = cleanEnvValue(process.env.LIVEKIT_DEBUG_TOKEN, 'LIVEKIT_DEBUG_TOKEN');
+  const supplied = String(req.headers?.['x-debug-token'] || req.query?.debugToken || '').trim();
+  if (!expected || !supplied || expected.length !== supplied.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(supplied));
+}
 
 function handleDebug(req, res) {
   const livekitUrl = cleanEnvValue(process.env.LIVEKIT_URL, 'LIVEKIT_URL');

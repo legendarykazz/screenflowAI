@@ -4,8 +4,7 @@ import {
   RoomEvent,
   ScreenSharePresets,
   Track,
-  VideoPresets,
-  VideoQuality
+  VideoPresets
 } from 'livekit-client';
 import {
   CALL_AUDIO_CAPTURE_OPTIONS,
@@ -14,6 +13,7 @@ import {
   resumeCallAudio
 } from '../lib/callAudio';
 import WatchTogetherPlayer from '../components/WatchTogetherPlayer';
+import { createCallRoomOptions } from '../lib/callRoom';
 import { createWatchSession, parseWatchSource } from '../lib/watchTogether';
 import {
   Bot,
@@ -165,7 +165,29 @@ export default function LiveCall() {
   useEffect(() => {
     loadSources();
     return () => {
-      stopRoom();
+      if (callCaptionRecorderRef.current?.state && callCaptionRecorderRef.current.state !== 'inactive') {
+        stopCallCaptionRecording();
+      }
+      if (meetingRecorderRef.current?.state && meetingRecorderRef.current.state !== 'inactive') {
+        stopMeetingRecording();
+      }
+      if (animationRef.current) cancelAnimationFrame(animationRef.current);
+      animationRef.current = null;
+      [streamRef.current, outputStreamRef.current, audioStreamRef.current, cameraStreamRef.current]
+        .forEach((stream) => stream?.getTracks?.().forEach((track) => track.stop()));
+      streamRef.current = null;
+      outputStreamRef.current = null;
+      audioStreamRef.current = null;
+      cameraStreamRef.current = null;
+      if (cameraPreviewRef.current) cameraPreviewRef.current.srcObject = null;
+      if (outputVideoRef.current) outputVideoRef.current.srcObject = null;
+      const room = liveKitRoomRef.current;
+      liveKitRoomRef.current = null;
+      try {
+        room?.disconnect();
+      } catch (error) {
+        console.warn('Could not disconnect the room during page cleanup:', error);
+      }
     };
   }, []);
 
@@ -316,15 +338,16 @@ export default function LiveCall() {
   };
 
   const stopRoom = () => {
-    if (captionRecording) {
+    if (callCaptionRecorderRef.current?.state && callCaptionRecorderRef.current.state !== 'inactive') {
       stopCallCaptionRecording();
     }
-    if (meetingRecording) {
+    if (meetingRecorderRef.current?.state && meetingRecorderRef.current.state !== 'inactive') {
       stopMeetingRecording();
     }
     if (animationRef.current) cancelAnimationFrame(animationRef.current);
     animationRef.current = null;
     streamRef.current?.getTracks().forEach((track) => track.stop());
+    outputStreamRef.current?.getTracks?.().forEach((track) => track.stop());
     audioStreamRef.current?.getTracks().forEach((track) => track.stop());
     cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
@@ -544,13 +567,7 @@ export default function LiveCall() {
         return null;
       }
 
-      room = new Room({
-        adaptiveStream: {
-          pauseVideoInBackground: false,
-          pixelDensity: 2
-        },
-        dynacast: true
-      });
+      room = new Room(createCallRoomOptions());
       resumeCallAudio(room)
         .then((canPlay) => setAudioPlaybackBlocked(!canPlay))
         .catch(() => setAudioPlaybackBlocked(true));
@@ -582,9 +599,6 @@ export default function LiveCall() {
         updateRemoteParticipants(room);
       });
       room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
-        if (track.kind === Track.Kind.Video) {
-          publication?.setVideoQuality?.(VideoQuality.HIGH);
-        }
         attachRemoteTrack(track, participant);
         updateRemoteParticipants(room);
       });
@@ -977,7 +991,14 @@ export default function LiveCall() {
       identity: participant.identity,
       name: participant.name || participant.identity
     }));
-    setRemoteParticipants(participants);
+    setRemoteParticipants((current) => (
+      current.length === participants.length
+        && current.every((participant, index) => (
+          participant.identity === participants[index].identity && participant.name === participants[index].name
+        ))
+        ? current
+        : participants
+    ));
     remoteList.forEach((participant) => ensureRemoteParticipantTile(participant, 'camera'));
     remoteMediaRef.current?.querySelectorAll('[data-participant-id]').forEach((tile) => {
       if (!participants.some((participant) => participant.identity === tile.dataset.participantId)) {

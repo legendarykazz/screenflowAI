@@ -39,8 +39,10 @@ function checkRequiredFiles() {
     'src/pages/JoinCall.jsx',
     'src/components/WatchTogetherPlayer.jsx',
     'src/lib/callAudio.js',
+    'src/lib/callRoom.js',
     'src/lib/watchTogether.js',
     'src/lib/pwa.js',
+    'scripts/call-load-check.js',
     'public/manifest.webmanifest',
     'public/sw.js',
     'extension/manifest.json',
@@ -58,6 +60,8 @@ function checkRequiredFiles() {
 function checkRouting() {
   const main = read('src/main.jsx');
   assertIncludes(main, "window.location.pathname.startsWith('/join/')", 'Join links render the mobile JoinCall page');
+  assertIncludes(main, "lazy(() => import('./pages/JoinCall'))", 'Join page loads without downloading every workspace');
+  assertIncludes(main, '<Suspense fallback={<AppLoading />}>', 'Lazy workspaces have a stable loading state');
   assertIncludes(main, "case 'recording':", 'Recording page is routed');
   assertIncludes(main, "case 'projects':", 'Projects page is routed');
   assertIncludes(main, "case 'aitools':", 'AI Tools page is routed');
@@ -71,11 +75,16 @@ function checkLiveKitTokenRoles() {
   assertIncludes(token, 'canSubscribe: true', 'LiveKit tokens can subscribe to remote tracks');
   assertIncludes(token, 'canPublishData: canPublish', 'LiveKit data publishing follows media publishing role');
   assertMatches(token, /identity\s*=\s*`\$\{name \|\| 'Guest'\}-\$\{Math\.random\(\)/, 'LiveKit identities are unique per connection');
+  assertIncludes(token, "metadata: JSON.stringify({ role })", 'LiveKit tokens carry participant roles');
+  assertIncludes(token, "ttl: '6h'", 'LiveKit tokens support long classes and watch sessions');
+  assertIncludes(token, "res.setHeader('Cache-Control', 'no-store')", 'LiveKit token responses cannot be cached');
+  assertIncludes(token, 'isDebugAuthorized(req)', 'LiveKit environment diagnostics require authorization');
 }
 
 function checkJoinCallMedia() {
   const join = read('src/pages/JoinCall.jsx');
   const callAudio = read('src/lib/callAudio.js');
+  const callRoom = read('src/lib/callRoom.js');
   assertIncludes(join, "role: 'participant'", 'Join page requests participant role');
   assertIncludes(callAudio, 'echoCancellation: true', 'Join page can request call-optimized microphone audio');
   assertIncludes(callAudio, 'sampleRate: { ideal: 48000 }', 'Conference microphones request 48 kHz voice capture');
@@ -83,7 +92,9 @@ function checkJoinCallMedia() {
   assertIncludes(callAudio, 'red: true', 'Conference voice publishing enables packet redundancy');
   assertIncludes(join, "name: 'participant-mic'", 'Join page publishes participant microphone track');
   assertIncludes(join, "name: 'participant-camera'", 'Join page publishes participant camera track');
-  assertIncludes(join, 'VideoQuality.HIGH', 'Join page requests high-quality remote video');
+  assertIncludes(join, 'createCallRoomOptions()', 'Join page uses adaptive room media settings');
+  assertIncludes(callRoom, 'pauseVideoInBackground: true', 'Hidden call video pauses to protect CPU and bandwidth');
+  assertIncludes(callRoom, 'pixelDensity: 1', 'Participant grids avoid unnecessary high-density video layers');
   assertIncludes(join, 'maxBitrate: 5_000_000', 'Join page publishes adaptive high-quality screen video');
   assertIncludes(join, 'const audioRef = useRef(null)', 'Join page has a separate remote audio sink');
   assertIncludes(join, "track.kind === 'audio' ? audioRef", 'Join page routes remote audio away from screen/camera containers');
@@ -100,6 +111,9 @@ function checkJoinCallMedia() {
   assertIncludes(join, "supportsBrowserScreenShare = () => !previewUnsupportedMobileShare && typeof navigator.mediaDevices?.getDisplayMedia === 'function'", 'Join page detects browser screen-capture support');
   assertIncludes(join, 'data-screen-share-notice="true"', 'Join page explains unavailable mobile screen capture inline');
   assertIncludes(join, "isMobileBrowser\n        ? { video: true, audio: false }", 'Join page uses broadly compatible capture constraints on supported mobile browsers');
+  assertIncludes(join, 'joinPendingRef.current', 'Join page prevents overlapping room connection attempts');
+  assertIncludes(join, 'room?.disconnect()', 'Join page disconnects LiveKit during page cleanup');
+  assertIncludes(join, 'whiteboardAnimationRef.current = null', 'Join page releases its whiteboard animation loop');
 }
 
 function checkPresenterLiveCall() {
@@ -107,7 +121,7 @@ function checkPresenterLiveCall() {
   assertIncludes(live, "'screenflow-enhanced-output'", 'Presenter publishes enhanced screen output');
   assertIncludes(live, "'screenflow-raw-output'", 'Presenter can switch to a raw screen output');
   assertIncludes(live, 'const LIVE_OUTPUT_WIDTH = 1920', 'Presenter renders the enhanced output at 1080p');
-  assertIncludes(live, 'VideoQuality.HIGH', 'Presenter requests high-quality participant video');
+  assertIncludes(live, 'createCallRoomOptions()', 'Presenter uses adaptive room media settings');
   assertIncludes(live, "name: 'presenter-mic'", 'Presenter publishes microphone track');
   assertIncludes(live, "name: 'presenter-camera'", 'Presenter publishes camera track');
   assertIncludes(live, 'RoomEvent.TrackSubscribed', 'Presenter subscribes to remote participant tracks');
@@ -117,6 +131,8 @@ function checkPresenterLiveCall() {
   assertIncludes(live, 'audioSink.querySelector(`[data-track-sid="${track.sid}"]`)', 'Presenter attaches each remote microphone once');
   assertIncludes(live, 'data-face-count={Math.max(1, remoteParticipants.length + 1)}', 'Presenter exposes participant count to responsive camera layout');
   assertIncludes(live, '[data-face-grid="true"][data-face-count="1"]', 'Mobile presenter gives a solo caller a large stage');
+  assertIncludes(live, 'outputStreamRef.current?.getTracks?.().forEach((track) => track.stop())', 'Presenter releases the enhanced output stream');
+  assertIncludes(live, "console.warn('Could not disconnect the room during page cleanup:'", 'Presenter disconnects LiveKit during page cleanup');
 }
 
 function checkWatchTogether() {
@@ -206,7 +222,8 @@ function checkPlatformShells() {
   assertIncludes(pwa, "navigator.serviceWorker.register('/sw.js'", 'Production web app registers the service worker');
   assertIncludes(pwa, "updateViaCache: 'none'", 'Production service worker bypasses stale update caches');
   assertIncludes(pwa, "addEventListener('controllerchange'", 'Production app reloads when a new service worker takes control');
-  assertIncludes(serviceWorker, "screenflow-shell-v2", 'PWA shell cache version is current');
+  assertIncludes(serviceWorker, "screenflow-shell-v3", 'PWA shell cache version is current');
+  assertIncludes(serviceWorker, 'MAX_RUNTIME_ENTRIES = 80', 'PWA runtime cache cannot grow without limit');
   assertIncludes(serviceWorker, "caches.match('/offline.html')", 'PWA provides an offline navigation fallback');
   if (extensionManifest.manifest_version === 3) pass('Chrome companion uses Manifest V3');
   else fail('Chrome companion must use Manifest V3');

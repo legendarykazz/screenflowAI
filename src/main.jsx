@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { lazy, Suspense, useEffect, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';
 
@@ -6,19 +6,20 @@ import './index.css';
 import TitleBar from './components/TitleBar';
 import Sidebar from './components/Sidebar';
 import InstallPrompt from './components/InstallPrompt';
-import Dashboard from './pages/Dashboard';
-import Recording from './pages/Recording';
-import Projects from './pages/Projects';
-import Exports from './pages/Exports';
-import SettingsPage from './pages/Settings';
-import Editor from './pages/Editor';
-import BrandKit from './pages/BrandKit';
-import AITools from './pages/AITools';
-import Widget from './pages/Widget';
-import FootballLab from './pages/FootballLab';
-import LiveCall from './pages/LiveCall';
-import JoinCall from './pages/JoinCall';
 import { registerScreenFlowServiceWorker } from './lib/pwa';
+
+const AITools = lazy(() => import('./pages/AITools'));
+const BrandKit = lazy(() => import('./pages/BrandKit'));
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const Editor = lazy(() => import('./pages/Editor'));
+const Exports = lazy(() => import('./pages/Exports'));
+const FootballLab = lazy(() => import('./pages/FootballLab'));
+const JoinCall = lazy(() => import('./pages/JoinCall'));
+const LiveCall = lazy(() => import('./pages/LiveCall'));
+const Projects = lazy(() => import('./pages/Projects'));
+const Recording = lazy(() => import('./pages/Recording'));
+const SettingsPage = lazy(() => import('./pages/Settings'));
+const Widget = lazy(() => import('./pages/Widget'));
 
 const APP_PAGES = new Set([
   'dashboard',
@@ -35,6 +36,24 @@ const APP_PAGES = new Set([
 function getInitialPage() {
   const requestedPage = new URLSearchParams(window.location.search).get('page');
   return APP_PAGES.has(requestedPage) ? requestedPage : 'dashboard';
+}
+
+function AppLoading() {
+  return (
+    <div style={{
+      alignItems: 'center',
+      background: '#F4F7FB',
+      color: '#172033',
+      display: 'flex',
+      fontFamily: 'Inter, system-ui, sans-serif',
+      fontSize: '14px',
+      fontWeight: 800,
+      justifyContent: 'center',
+      minHeight: '100vh'
+    }}>
+      Loading ScreenFlow AI...
+    </div>
+  );
 }
 
 class AppErrorBoundary extends React.Component {
@@ -195,11 +214,11 @@ if (!window.electron) {
     setLiveDisplaySource: async () => ({ success: true }),
     createLiveKitToken: async (roomName, participantName) => {
       try {
-        const params = new URLSearchParams({ roomCode: roomName, participantName, role: 'presenter' });
-        const response = await fetch(`/api/livekit-token?${params.toString()}`, {
+        const response = await fetch('/api/livekit-token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ roomCode: roomName, participantName })
+          body: JSON.stringify({ roomCode: roomName, participantName, role: 'presenter' }),
+          signal: typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(10_000) : undefined
         });
         const result = await response.json();
         if (!response.ok) {
@@ -378,13 +397,15 @@ const isJoinPage = window.location.pathname.startsWith('/join/');
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    {isJoinPage ? (
-      <AppErrorBoundary title="Call page crashed"><JoinCall /></AppErrorBoundary>
-    ) : isWidget ? (
-      <Widget />
-    ) : (
-      <AppErrorBoundary title="ScreenFlow AI crashed"><App /></AppErrorBoundary>
-    )}
+    <Suspense fallback={<AppLoading />}>
+      {isJoinPage ? (
+        <AppErrorBoundary title="Call page crashed"><JoinCall /></AppErrorBoundary>
+      ) : isWidget ? (
+        <Widget />
+      ) : (
+        <AppErrorBoundary title="ScreenFlow AI crashed"><App /></AppErrorBoundary>
+      )}
+    </Suspense>
   </React.StrictMode>
 );
 

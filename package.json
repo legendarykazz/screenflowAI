@@ -21,6 +21,7 @@
     "vercel-build": "vite build",
     "health": "node scripts/health-check.js",
     "health:quick": "node scripts/health-check.js --skip-build",
+    "test:call-load": "node scripts/call-load-check.js",
     "start": "electron .",
     "dev:electron": "set SCREENFLOW_DEV_SERVER=1&& electron ."
   },

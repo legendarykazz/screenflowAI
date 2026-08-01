@@ -4,8 +4,7 @@ import {
   RoomEvent,
   ScreenSharePresets,
   Track,
-  VideoPresets,
-  VideoQuality
+  VideoPresets
 } from 'livekit-client';
 import { Camera, Expand, Mic, PhoneOff, Play, ScreenShare, SquarePen, Users, Video, Volume2 } from 'lucide-react';
 import {
@@ -15,6 +14,7 @@ import {
   resumeCallAudio
 } from '../lib/callAudio';
 import WatchTogetherPlayer from '../components/WatchTogetherPlayer';
+import { createCallRoomOptions } from '../lib/callRoom';
 import { normalizeWatchSession } from '../lib/watchTogether';
 
 export default function JoinCall() {
@@ -37,6 +37,8 @@ export default function JoinCall() {
   const localIdentityRef = useRef('');
   const activeVideoSidRef = useRef(null);
   const activeCameraSidRef = useRef(null);
+  const joinAttemptRef = useRef(0);
+  const joinPendingRef = useRef(false);
   const roomCode = useMemo(() => {
     const match = window.location.pathname.match(/\/join\/([^/]+)/i);
     return (match?.[1] || '').toUpperCase();
@@ -84,6 +86,7 @@ export default function JoinCall() {
   const [audioPlaybackBlocked, setAudioPlaybackBlocked] = useState(false);
   const [screenShareNotice, setScreenShareNotice] = useState('');
   const [watchSession, setWatchSession] = useState(previewWatchSession);
+  const [joining, setJoining] = useState(false);
 
   useEffect(() => {
     if (localCameraRef.current) {
@@ -118,37 +121,61 @@ export default function JoinCall() {
     };
   }, []);
 
+  useEffect(() => () => {
+    joinAttemptRef.current += 1;
+    joinPendingRef.current = false;
+    const room = roomRef.current;
+    roomRef.current = null;
+    try {
+      room?.disconnect();
+    } catch (error) {
+      console.warn('Could not disconnect the call during page cleanup:', error);
+    }
+
+    if (whiteboardAnimationRef.current) cancelAnimationFrame(whiteboardAnimationRef.current);
+    whiteboardAnimationRef.current = null;
+    publishedScreenTrackRef.current?.stop?.();
+    publishedScreenTrackRef.current = null;
+    [localCameraStreamRef.current, localMicStreamRef.current].forEach((stream) => {
+      stream?.getTracks?.().forEach((track) => track.stop());
+    });
+    localCameraStreamRef.current = null;
+    localMicStreamRef.current = null;
+    publishedCameraTrackRef.current = null;
+    publishedMicTrackRef.current = null;
+    if (localCameraRef.current) localCameraRef.current.srcObject = null;
+  }, []);
+
   const joinRoom = async () => {
+    if (joinPendingRef.current) return;
     let room = null;
+    let attemptId = 0;
     try {
       const participantName = name.trim();
       if (!participantName) {
         setStatus('Enter your name before joining.');
         return;
       }
+      attemptId = ++joinAttemptRef.current;
       if (roomRef.current) {
         safeDisconnectRoom(roomRef.current);
         roomRef.current = null;
       }
       resetCallState('Ready to reconnect');
-      room = new Room({
-        adaptiveStream: {
-          pauseVideoInBackground: false,
-          pixelDensity: 2
-        },
-        dynacast: true
-      });
+      joinPendingRef.current = true;
+      setJoining(true);
+      room = new Room(createCallRoomOptions());
       roomRef.current = room;
       resumeCallAudio(room)
         .then((canPlay) => setAudioPlaybackBlocked(!canPlay))
         .catch(() => setAudioPlaybackBlocked(true));
 
       setStatus('Getting access token...');
-      const params = new URLSearchParams({ roomCode, participantName, role: 'participant' });
-      const response = await fetch(`/api/livekit-token?${params.toString()}`, {
+      const response = await fetch('/api/livekit-token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomCode, participantName, role: 'participant' })
+        body: JSON.stringify({ roomCode, participantName, role: 'participant' }),
+        signal: typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(10_000) : undefined
       });
       const text = await response.text();
       let result = {};
@@ -158,15 +185,16 @@ export default function JoinCall() {
         throw new Error(`Token endpoint returned an invalid response (${response.status}).`);
       }
       if (!response.ok) throw new Error(result.error || 'Unable to get LiveKit token.');
+      if (joinAttemptRef.current !== attemptId || roomRef.current !== room) {
+        safeDisconnectRoom(room);
+        return;
+      }
 
       setStatus('Connecting...');
 
       room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
         if (roomRef.current !== room) return;
         try {
-          if (track.kind === Track.Kind.Video) {
-            publication?.setVideoQuality?.(VideoQuality.HIGH);
-          }
           attachTrack(track, participant);
           updateParticipants(room);
         } catch (error) {
@@ -221,6 +249,10 @@ export default function JoinCall() {
       });
 
       await room.connect(result.url, result.token);
+      if (joinAttemptRef.current !== attemptId || roomRef.current !== room) {
+        safeDisconnectRoom(room);
+        return;
+      }
       localIdentityRef.current = result.identity || room.localParticipant?.identity || '';
       setConnected(true);
       setAudioPlaybackBlocked(!room.canPlaybackAudio);
@@ -229,15 +261,26 @@ export default function JoinCall() {
       updateParticipants(room);
     } catch (error) {
       safeDisconnectRoom(room);
-      if (roomRef.current === room) roomRef.current = null;
-      setConnected(false);
-      setStatus(getErrorMessage(error, 'Could not join the call.'));
+      if (joinAttemptRef.current === attemptId) {
+        if (roomRef.current === room) roomRef.current = null;
+        setConnected(false);
+        setStatus(getErrorMessage(error, 'Could not join the call.'));
+      }
+    } finally {
+      if (joinAttemptRef.current === attemptId) {
+        joinPendingRef.current = false;
+        setJoining(false);
+      }
     }
   };
 
   const leaveRoom = () => {
+    joinAttemptRef.current += 1;
+    joinPendingRef.current = false;
+    setJoining(false);
     safeDisconnectRoom(roomRef.current);
     roomRef.current = null;
+    resetCallState('Disconnected');
   };
 
   const enableCallAudio = async () => {
@@ -254,6 +297,8 @@ export default function JoinCall() {
   };
 
   const resetCallState = (nextStatus) => {
+    joinPendingRef.current = false;
+    setJoining(false);
     setConnected(false);
     setStatus(nextStatus);
     setParticipants([]);
@@ -573,7 +618,12 @@ export default function JoinCall() {
   const updateParticipants = (room = roomRef.current) => {
     if (!room) return;
     const remoteParticipants = getRemoteParticipants(room);
-    setParticipants(remoteParticipants.map((participant) => participant.name || participant.identity));
+    const nextParticipants = remoteParticipants.map((participant) => participant.name || participant.identity);
+    setParticipants((current) => (
+      current.length === nextParticipants.length && current.every((name, index) => name === nextParticipants[index])
+        ? current
+        : nextParticipants
+    ));
     remoteParticipants.forEach((participant) => ensureParticipantTile(participant));
     setTrackPlaceholderVisible(cameraRef.current, remoteParticipants.length === 0);
   };
@@ -598,9 +648,6 @@ export default function JoinCall() {
     getRemoteParticipants(room).forEach((participant) => {
       participant.trackPublications.forEach((publication) => {
         if (publication.track) {
-          if (publication.track.kind === Track.Kind.Video) {
-            publication.setVideoQuality?.(VideoQuality.HIGH);
-          }
           attachTrack(publication.track, participant);
         }
       });
@@ -855,8 +902,8 @@ export default function JoinCall() {
               Your name
               <input value={name} onChange={(event) => setName(event.target.value)} required placeholder="Enter your name" style={inputStyle} />
             </label>
-            <button disabled={!roomCode || !name.trim()} onClick={joinRoom} style={primaryButtonStyle}>
-              <Play size={17} /> Join Call
+            <button disabled={joining || !roomCode || !name.trim()} onClick={joinRoom} style={primaryButtonStyle}>
+              <Play size={17} /> {joining ? 'Joining...' : 'Join Call'}
             </button>
           </section>
         )}
@@ -925,7 +972,7 @@ export default function JoinCall() {
                   <span style={faceLabelStyle}>{participant}</span>
                 </div>
               ))}
-              <span data-placeholder="true">Waiting for other cameras.</span>
+              {previewFaceCount === 0 && <span data-placeholder="true">Waiting for other cameras.</span>}
             </div>
           </section>
 
@@ -1209,7 +1256,7 @@ const cameraBoxStyle = {
   color: '#D4D4D4',
   display: 'grid',
   gap: '10px',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(132px, 1fr))',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
   justifyContent: 'stretch',
   minHeight: '132px',
   overflow: 'hidden',

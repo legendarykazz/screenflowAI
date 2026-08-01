@@ -702,11 +702,11 @@ ipcMain.handle('livekit:create-token', async (_, roomName, participantName) => {
       const endpoint = savedLiveKit.tokenEndpoint || 'https://screenflow-ai.vercel.app/api/livekit-token';
       const roomCode = String(roomName || '').trim().toUpperCase();
       const name = String(participantName || 'Presenter').trim();
-      const params = new URLSearchParams({ roomCode, participantName: name, role: 'presenter' });
-      const response = await fetch(`${endpoint}?${params.toString()}`, {
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomCode, participantName: name, role: 'presenter' })
+        body: JSON.stringify({ roomCode, participantName: name, role: 'presenter' }),
+        signal: typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(10_000) : undefined
       });
       const result = await response.json();
       if (!response.ok) {
@@ -727,8 +727,9 @@ ipcMain.handle('livekit:create-token', async (_, roomName, participantName) => {
     const identity = `${baseIdentity}-${Math.random().toString(36).slice(2, 8)}`;
     const at = new AccessToken(apiKey, apiSecret, {
       identity,
+      metadata: JSON.stringify({ role: 'presenter' }),
       name: participantName || identity,
-      ttl: '2h'
+      ttl: '6h'
     });
     at.addGrant({
       room: roomName,
