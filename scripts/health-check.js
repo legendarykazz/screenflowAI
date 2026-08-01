@@ -92,6 +92,9 @@ function checkJoinCallMedia() {
   assertIncludes(join, 'RoomEvent.AudioPlaybackStatusChanged', 'Join page detects browser audio playback blocking');
   assertIncludes(join, 'resumeCallAudio(room)', 'Join page can explicitly resume call audio');
   assertIncludes(join, 'targetRef.current.querySelector(`[data-track-sid="${track.sid}"]`)', 'Join page does not detach duplicate remote audio tracks');
+  assertIncludes(join, 'data-face-count={Math.max(1, participants.length + 1)}', 'Join page exposes participant count to responsive camera layout');
+  assertIncludes(join, '.camera-box[data-face-count="1"]', 'Mobile join page gives a solo caller a large stage');
+  assertIncludes(join, '.camera-box[data-face-count="2"]', 'Mobile join page stacks two callers at full width');
 }
 
 function checkPresenterLiveCall() {
@@ -107,6 +110,8 @@ function checkPresenterLiveCall() {
   assertIncludes(live, 'updateRemoteParticipants(room)', 'Presenter updates participant count/list');
   assertIncludes(live, 'RoomEvent.AudioPlaybackStatusChanged', 'Presenter detects browser audio playback blocking');
   assertIncludes(live, 'audioSink.querySelector(`[data-track-sid="${track.sid}"]`)', 'Presenter attaches each remote microphone once');
+  assertIncludes(live, 'data-face-count={Math.max(1, remoteParticipants.length + 1)}', 'Presenter exposes participant count to responsive camera layout');
+  assertIncludes(live, '[data-face-grid="true"][data-face-count="1"]', 'Mobile presenter gives a solo caller a large stage');
 }
 
 function checkElectronBridge() {

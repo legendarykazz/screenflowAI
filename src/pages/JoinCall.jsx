@@ -38,15 +38,24 @@ export default function JoinCall() {
     const match = window.location.pathname.match(/\/join\/([^/]+)/i);
     return (match?.[1] || '').toUpperCase();
   }, []);
+  const previewFaceCount = useMemo(() => {
+    if (!import.meta.env.DEV) return 0;
+    const requested = Number(new URLSearchParams(window.location.search).get('previewFaces'));
+    return Number.isFinite(requested) ? Math.max(0, Math.min(8, Math.floor(requested))) : 0;
+  }, []);
+  const previewParticipantNames = useMemo(
+    () => ['Maya', 'Jordan', 'Sam', 'Taylor', 'Chris', 'Avery', 'Morgan'].slice(0, Math.max(0, previewFaceCount - 1)),
+    [previewFaceCount]
+  );
 
-  const [name, setName] = useState('');
-  const [status, setStatus] = useState('Ready to join');
-  const [connected, setConnected] = useState(false);
+  const [name, setName] = useState(previewFaceCount ? 'Alex' : '');
+  const [status, setStatus] = useState(previewFaceCount ? 'Mobile call layout preview' : 'Ready to join');
+  const [connected, setConnected] = useState(previewFaceCount > 0);
   const [cameraOn, setCameraOn] = useState(false);
   const [micOn, setMicOn] = useState(false);
   const [screenOn, setScreenOn] = useState(false);
   const [hasHostScreen, setHasHostScreen] = useState(false);
-  const [participants, setParticipants] = useState([]);
+  const [participants, setParticipants] = useState(previewParticipantNames);
   const [fatalError, setFatalError] = useState('');
   const [audioPlaybackBlocked, setAudioPlaybackBlocked] = useState(false);
 
@@ -824,12 +833,23 @@ export default function JoinCall() {
               <span style={viewerTitleStyle}><Camera size={18} /> People</span>
               <span style={peopleCountStyle}>{participants.length + 1}</span>
             </div>
-            <div className="camera-box" ref={cameraRef} style={cameraBoxStyle}>
-              <div data-local-face="true" style={localFaceTileStyle}>
+            <div
+              className="camera-box"
+              data-face-count={Math.max(1, participants.length + 1)}
+              ref={cameraRef}
+              style={cameraBoxStyle}
+            >
+              <div data-face-tile="true" data-local-face="true" style={localFaceTileStyle}>
                 <video ref={localCameraRef} autoPlay muted playsInline style={{ ...localCameraStyle, display: cameraOn ? 'block' : 'none' }} />
                 {!cameraOn && <div style={faceOffStyle}>Your camera is off</div>}
                 <span style={faceLabelStyle}>{name || 'You'} (You)</span>
               </div>
+              {previewParticipantNames.map((participant) => (
+                <div data-face-tile="true" data-participant-id={`preview-${participant}`} key={participant} style={localFaceTileStyle}>
+                  <div style={faceOffStyle}>{participant.slice(0, 1)}</div>
+                  <span style={faceLabelStyle}>{participant}</span>
+                </div>
+              ))}
               <span data-placeholder="true">Waiting for other cameras.</span>
             </div>
           </section>
@@ -1251,15 +1271,72 @@ const responsiveStyles = `
       transform: none !important;
     }
 
+    [data-people-section="true"] {
+      margin-left: -6px;
+      margin-right: -6px;
+    }
+
     .camera-box {
+      align-content: start !important;
+      gap: 8px !important;
       grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-      min-height: 110px !important;
+      min-height: 0 !important;
+      overflow: visible !important;
+      padding: 8px !important;
+    }
+
+    .camera-box > [data-face-tile="true"] {
+      min-height: 0 !important;
+      width: 100% !important;
+    }
+
+    .camera-box[data-face-count="1"] {
+      grid-template-columns: minmax(0, 1fr) !important;
+    }
+
+    .camera-box[data-face-count="1"] > [data-face-tile="true"] {
+      aspect-ratio: 3 / 4 !important;
+      max-height: 58dvh !important;
+      min-height: min(360px, 52dvh) !important;
+    }
+
+    .camera-box > [data-placeholder="true"] {
+      display: none !important;
+    }
+
+    .camera-box[data-face-count="2"] {
+      grid-template-columns: minmax(0, 1fr) !important;
+    }
+
+    .camera-box[data-face-count="2"] > [data-face-tile="true"] {
+      aspect-ratio: 16 / 9 !important;
+    }
+
+    .camera-box:not([data-face-count="1"]):not([data-face-count="2"]) > [data-face-tile="true"] {
+      aspect-ratio: 3 / 4 !important;
+    }
+
+    [data-call-content="true"][data-has-presentation="true"] .camera-box {
+      grid-auto-columns: minmax(160px, 68vw) !important;
+      grid-auto-flow: column !important;
+      grid-template-columns: none !important;
       overflow-x: auto !important;
+      overflow-y: hidden !important;
+    }
+
+    [data-call-content="true"][data-has-presentation="true"] .camera-box > [data-face-tile="true"] {
+      aspect-ratio: 16 / 9 !important;
+      max-height: none !important;
+      min-height: 118px !important;
     }
 
     .camera-box video {
       object-fit: cover;
       transform: none !important;
+    }
+
+    [data-participants-summary="true"] {
+      display: none !important;
     }
 
     input {

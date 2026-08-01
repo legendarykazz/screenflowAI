@@ -1490,7 +1490,11 @@ export default function LiveCall() {
                 <span style={tileLabelStyle}>Host Share - {sourceName}</span>
               </div>
             )}
-            <div data-face-grid="true" style={faceGridStyle(isLive, shareExpanded)}>
+            <div
+              data-face-count={Math.max(1, remoteParticipants.length + 1)}
+              data-face-grid="true"
+              style={faceGridStyle(isLive, shareExpanded)}
+            >
               <div data-local-face-tile="true" style={localPresenterTileStyle}>
                 {cameraOn ? (
                   <video ref={cameraPreviewRef} autoPlay muted playsInline style={stageVideoStyle} />
@@ -2503,6 +2507,38 @@ const liveCallResponsiveStyles = `
     [data-participant-id] {
       aspect-ratio: 16 / 9 !important;
       min-height: 96px !important;
+    }
+
+    [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"] {
+      align-content: start !important;
+      gap: 8px !important;
+      grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+      justify-content: stretch !important;
+      width: 100% !important;
+    }
+
+    [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"][data-face-count="1"],
+    [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"][data-face-count="2"] {
+      grid-template-columns: minmax(0, 1fr) !important;
+    }
+
+    [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"][data-face-count="1"] [data-local-face-tile="true"] {
+      aspect-ratio: 3 / 4 !important;
+      max-height: 58dvh !important;
+      min-height: min(360px, 52dvh) !important;
+      width: 100% !important;
+    }
+
+    [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"][data-face-count="2"] [data-local-face-tile="true"],
+    [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"][data-face-count="2"] [data-tile-kind="camera"] {
+      aspect-ratio: 16 / 9 !important;
+      min-height: 0 !important;
+    }
+
+    [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"]:not([data-face-count="1"]):not([data-face-count="2"]) [data-local-face-tile="true"],
+    [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"]:not([data-face-count="1"]):not([data-face-count="2"]) [data-tile-kind="camera"] {
+      aspect-ratio: 3 / 4 !important;
+      min-height: 0 !important;
     }
 
     [data-participant-admin="true"] {
