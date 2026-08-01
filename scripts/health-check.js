@@ -275,22 +275,23 @@ function checkFootballWorkbench() {
   const football = read('src/pages/FootballLab.jsx');
   const styles = read('src/pages/FootballLab.css');
 
-  assertIncludes(football, "useState('tactics')", 'Football Lab opens with useful tactics controls');
-  assertIncludes(football, "setInspectorTab('events')", 'Uploaded footage opens the event workflow');
-  assertIncludes(football, 'aria-label={`${label} inspector`}', 'Football inspector tabs stay accessible');
-  assertIncludes(styles, "'tools stage'", 'Football workbench keeps the pitch beside a compact tool rail');
-  assertIncludes(styles, 'grid-template-columns: 52px minmax(0, 1fr)', 'Football tool rail has a stable desktop width');
-  assertIncludes(styles, 'grid-area: tools', 'Football tools occupy their own workbench region');
-  assertIncludes(styles, 'max-height: calc(100vh - 178px)', 'Football inspector stays usable within the desktop viewport');
+  assertIncludes(football, 'Football Reaction Studio', 'Football Lab is focused on post-match reaction recording');
+  assertIncludes(football, "captureStream(30)", 'Football reactions capture a clean canvas at a stable frame rate');
+  assertIncludes(football, 'drawCompositeFrame', 'Football output composites footage, drawings, and creator camera');
+  assertIncludes(football, 'videoBitsPerSecond: quality.bitRate', 'Football recording uses an explicit high-quality bitrate');
+  assertIncludes(football, 'Face camera', 'Football creators can include or hide their camera');
+  assertIncludes(football, 'Movement arrow', 'Football creators can draw player movement arrows');
+  assertIncludes(styles, 'grid-template-columns: minmax(0, 1fr) 298px', 'Football reaction stage remains the dominant desktop surface');
+  assertIncludes(styles, 'aspect-ratio: 16 / 9', 'Football stage and output keep a stable video frame');
   assertMatches(
     styles,
-    /@media \(max-width: 760px\)[\s\S]*?\.football-review\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/,
-    'Football workbench collapses to one column on phones'
+    /@media \(max-width: 760px\)[\s\S]*?\.reaction-control-rail\s*\{[\s\S]*?display:\s*block/,
+    'Football creator controls stack cleanly on phones'
   );
   assertMatches(
     styles,
-    /@media \(max-width: 760px\)[\s\S]*?\.football-tool-strip\s*\{[\s\S]*?flex-direction:\s*row/,
-    'Football tools become a horizontal phone toolbar'
+    /@media \(max-width: 760px\)[\s\S]*?\.reaction-toolbar\s*\{[\s\S]*?overflow-x:\s*auto/,
+    'Football drawing tools stay reachable in a horizontal phone toolbar'
   );
 }
 

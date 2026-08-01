@@ -1,811 +1,569 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  Activity,
   ArrowRight,
-  BarChart3,
   Camera,
   Check,
-  ClipboardCopy,
-  Clock3,
+  Circle,
   Download,
   Eraser,
-  Eye,
-  EyeOff,
-  FileText,
-  Flag,
-  Footprints,
-  Layers3,
-  ListPlus,
-  Map,
+  Expand,
+  Film,
+  Gauge,
   Maximize2,
   Mic,
-  Minimize2,
   Minus,
-  MonitorUp,
   MousePointer2,
-  MoveRight,
   Pause,
   Pencil,
   Play,
   Plus,
-  RefreshCw,
-  Route,
-  Shield,
+  Redo2,
+  RotateCcw,
   Square,
-  Target,
   Trash2,
   Undo2,
   Upload,
-  Users,
   Video,
   Volume2
 } from 'lucide-react';
 import './FootballLab.css';
 
-const STORAGE_KEY = 'screenflow-football-lab-v2';
+const STAGE_WIDTH = 1000;
+const STAGE_HEIGHT = 562.5;
 
-const formations = {
-  '4-3-3': [
-    ['GK', 8, 50], ['LB', 22, 18], ['LCB', 21, 40], ['RCB', 21, 60], ['RB', 22, 82],
-    ['LCM', 38, 32], ['DM', 35, 50], ['RCM', 38, 68], ['LW', 58, 22], ['ST', 65, 50], ['RW', 58, 78]
-  ],
-  '4-2-3-1': [
-    ['GK', 8, 50], ['LB', 22, 18], ['LCB', 21, 40], ['RCB', 21, 60], ['RB', 22, 82],
-    ['LDM', 35, 42], ['RDM', 35, 58], ['LW', 52, 24], ['AM', 55, 50], ['RW', 52, 76], ['ST', 68, 50]
-  ],
-  '3-5-2': [
-    ['GK', 8, 50], ['LCB', 21, 32], ['CB', 20, 50], ['RCB', 21, 68],
-    ['LWB', 42, 14], ['LCM', 40, 36], ['DM', 36, 50], ['RCM', 40, 64], ['RWB', 42, 86],
-    ['LS', 64, 42], ['RS', 64, 58]
-  ],
-  '4-4-2': [
-    ['GK', 8, 50], ['LB', 22, 18], ['LCB', 21, 40], ['RCB', 21, 60], ['RB', 22, 82],
-    ['LM', 43, 22], ['LCM', 39, 42], ['RCM', 39, 58], ['RM', 43, 78], ['LS', 63, 42], ['RS', 63, 58]
-  ]
+const TOOLS = {
+  select: { label: 'Select', icon: MousePointer2 },
+  pen: { label: 'Free draw', icon: Pencil },
+  arrow: { label: 'Movement arrow', icon: ArrowRight },
+  line: { label: 'Straight line', icon: Minus },
+  circle: { label: 'Circle area', icon: Circle }
 };
 
-const toolConfig = {
-  select: { label: 'Select', icon: MousePointer2, color: '#334155' },
-  pen: { label: 'Pen', icon: Pencil, color: '#00a878' },
-  pass: { label: 'Pass', icon: ArrowRight, color: '#00a878' },
-  run: { label: 'Run', icon: Route, color: '#2563eb' },
-  move: { label: 'Move', icon: MoveRight, color: '#f59e0b' },
-  defend: { label: 'Defend', icon: Shield, color: '#ef4444' },
-  press: { label: 'Press', icon: Target, color: '#dc2626' },
-  var: { label: 'VAR line', icon: Minus, color: '#facc15' }
+const COLORS = ['#ffffff', '#111827', '#ff426f', '#00d4ff', '#ffb800', '#00c48c'];
+
+const CAMERA_SIZES = {
+  small: 0.18,
+  medium: 0.24,
+  large: 0.31
 };
 
-const eventTypes = {
-  goal: { label: 'Goal', icon: Target, color: '#059669', outcomes: ['Goal'] },
-  shot: { label: 'Shot', icon: Activity, color: '#7c3aed', outcomes: ['On target', 'Off target', 'Blocked'] },
-  pass: { label: 'Pass', icon: ArrowRight, color: '#2563eb', outcomes: ['Complete', 'Incomplete', 'Key pass'] },
-  recovery: { label: 'Recovery', icon: Shield, color: '#0891b2', outcomes: ['Won', 'Lost'] },
-  foul: { label: 'Foul', icon: Flag, color: '#d97706', outcomes: ['Committed', 'Won'] },
-  save: { label: 'Save', icon: Check, color: '#0f766e', outcomes: ['Saved', 'Parried', 'Claimed'] },
-  substitution: { label: 'Sub', icon: Users, color: '#64748b', outcomes: ['Completed'] }
+const OUTPUT_QUALITY = {
+  '1080p': { width: 1920, height: 1080, bitRate: 12_000_000 },
+  '720p': { width: 1280, height: 720, bitRate: 7_000_000 }
 };
 
-const reactionPresets = {
-  coach: { label: 'Coach breakdown', webcamSize: 0.22, mic: true, systemAudio: true },
-  creator: { label: 'Creator reaction', webcamSize: 0.28, mic: true, systemAudio: true },
-  voiceover: { label: 'Voiceover only', webcamSize: 0, mic: true, systemAudio: true }
-};
-
-const defaultMatch = {
-  title: 'New match analysis',
-  competition: 'Friendly',
-  date: new Date().toISOString().slice(0, 10),
-  period: 'First half',
-  homeName: 'Home',
-  awayName: 'Away',
-  homeScore: 0,
-  awayScore: 0
-};
-
-function buildTeam(teamKey, formationName, existingPlayers = []) {
-  const isHome = teamKey === 'home';
-  return formations[formationName].map(([role, x, y], index) => {
-    const existing = existingPlayers[index];
-    return {
-      id: `${teamKey}-${index + 1}`,
-      number: existing?.number || index + 1,
-      name: existing?.name || `Player ${index + 1}`,
-      role,
-      team: teamKey,
-      base: {
-        x: isHome ? x : 100 - x,
-        y: isHome ? y : 100 - y
-      },
-      target: {
-        x: isHome ? x : 100 - x,
-        y: isHome ? y : 100 - y
-      }
-    };
-  });
-}
-
-function createDefaultPlayers() {
-  return [
-    ...buildTeam('home', '4-3-3'),
-    ...buildTeam('away', '4-2-3-1')
-  ];
-}
-
-function loadStoredSession() {
-  try {
-    const stored = window.localStorage.getItem(STORAGE_KEY);
-    if (!stored) return {};
-    const parsed = JSON.parse(stored);
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function formatTime(seconds) {
-  const safe = Number.isFinite(Number(seconds)) ? Math.max(0, Number(seconds)) : 0;
-  const mins = Math.floor(safe / 60);
-  const secs = Math.floor(safe % 60);
-  return `${mins}:${secs.toString().padStart(2, '0')}`;
-}
+const CAMERA_POSITIONS = [
+  ['top-left', 'TL'],
+  ['top-right', 'TR'],
+  ['bottom-left', 'BL'],
+  ['bottom-right', 'BR']
+];
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
+function formatTime(seconds, showHours = false) {
+  const safeSeconds = Number.isFinite(Number(seconds)) ? Math.max(0, Math.floor(Number(seconds))) : 0;
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
+  const secs = safeSeconds % 60;
+  if (showHours || hours > 0) {
+    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  }
+  return `${minutes}:${secs.toString().padStart(2, '0')}`;
+}
+
 function safeFileName(value) {
-  return (value || 'football-analysis')
+  return String(value || 'football-reaction')
+    .replace(/\.[^/.]+$/, '')
     .trim()
     .replace(/[^a-z0-9-_]+/gi, '-')
     .replace(/^-+|-+$/g, '')
-    .toLowerCase() || 'football-analysis';
+    .toLowerCase() || 'football-reaction';
 }
 
-function teamStats(events, team) {
-  const teamEvents = events.filter((event) => event.team === team);
-  const shots = teamEvents.filter((event) => event.type === 'shot' || event.type === 'goal');
-  const passes = teamEvents.filter((event) => event.type === 'pass');
-  const completedPasses = passes.filter((event) => event.outcome === 'Complete' || event.outcome === 'Key pass');
-  return {
-    events: teamEvents.length,
-    shots: shots.length,
-    onTarget: shots.filter((event) => event.type === 'goal' || event.outcome === 'On target').length,
-    goals: teamEvents.filter((event) => event.type === 'goal').length,
-    passes: passes.length,
-    passCompletion: passes.length ? Math.round((completedPasses.length / passes.length) * 100) : 0,
-    recoveries: teamEvents.filter((event) => event.type === 'recovery' && event.outcome === 'Won').length,
-    fouls: teamEvents.filter((event) => event.type === 'foul' && event.outcome === 'Committed').length,
-    saves: teamEvents.filter((event) => event.type === 'save').length
-  };
+function getRecordingMimeType() {
+  const candidates = [
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8,opus',
+    'video/webm',
+    'video/mp4'
+  ];
+  return candidates.find((type) => window.MediaRecorder?.isTypeSupported?.(type)) || '';
+}
+
+function roundedRectPath(context, x, y, width, height, radius) {
+  const safeRadius = Math.min(radius, width / 2, height / 2);
+  context.beginPath();
+  context.moveTo(x + safeRadius, y);
+  context.arcTo(x + width, y, x + width, y + height, safeRadius);
+  context.arcTo(x + width, y + height, x, y + height, safeRadius);
+  context.arcTo(x, y + height, x, y, safeRadius);
+  context.arcTo(x, y, x + width, y, safeRadius);
+  context.closePath();
+}
+
+function drawMediaCover(context, media, x, y, width, height) {
+  const mediaWidth = media.videoWidth || width;
+  const mediaHeight = media.videoHeight || height;
+  const scale = Math.max(width / mediaWidth, height / mediaHeight);
+  const sourceWidth = width / scale;
+  const sourceHeight = height / scale;
+  const sourceX = (mediaWidth - sourceWidth) / 2;
+  const sourceY = (mediaHeight - sourceHeight) / 2;
+  context.drawImage(media, sourceX, sourceY, sourceWidth, sourceHeight, x, y, width, height);
+}
+
+function SettingToggle({ checked, disabled, icon: Icon, label, onChange }) {
+  return (
+    <label className={`reaction-setting-toggle ${disabled ? 'disabled' : ''}`}>
+      <span className="reaction-setting-label"><Icon size={16} />{label}</span>
+      <input
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+        type="checkbox"
+      />
+      <span aria-hidden="true" className="reaction-toggle-track"><span /></span>
+    </label>
+  );
 }
 
 export default function FootballLab() {
-  const [initialSession] = useState(loadStoredSession);
-  const [match, setMatch] = useState({ ...defaultMatch, ...(initialSession.match || {}) });
-  const [homeFormation, setHomeFormation] = useState(initialSession.homeFormation || '4-3-3');
-  const [awayFormation, setAwayFormation] = useState(initialSession.awayFormation || '4-2-3-1');
-  const [players, setPlayers] = useState(
-    Array.isArray(initialSession.players) && initialSession.players.length === 22
-      ? initialSession.players
-      : createDefaultPlayers()
-  );
-  const [events, setEvents] = useState(Array.isArray(initialSession.events) ? initialSession.events : []);
-  const [actions, setActions] = useState(Array.isArray(initialSession.actions) ? initialSession.actions : []);
-  const [slowSegments, setSlowSegments] = useState(Array.isArray(initialSession.slowSegments) ? initialSession.slowSegments : []);
-
-  const [sourceMode, setSourceMode] = useState('board');
   const [videoUrl, setVideoUrl] = useState('');
-  const [videoName, setVideoName] = useState('No footage loaded');
+  const [videoName, setVideoName] = useState('No clip loaded');
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [zoomLevel, setZoomLevel] = useState(1);
-  const [zoomAnchor, setZoomAnchor] = useState({ x: 50, y: 50 });
+  const [fitMode, setFitMode] = useState('contain');
 
   const [activeTool, setActiveTool] = useState('select');
-  const [draftStart, setDraftStart] = useState(null);
-  const [draftPath, setDraftPath] = useState([]);
-  const [selectedActionId, setSelectedActionId] = useState(null);
-  const [selectedPlayerId, setSelectedPlayerId] = useState(null);
-  const [draggingPlayerId, setDraggingPlayerId] = useState(null);
-  const [simulationPhase, setSimulationPhase] = useState('base');
-  const [showFormations, setShowFormations] = useState(true);
-  const [showPitchGuide, setShowPitchGuide] = useState(false);
-  const [showTacticalLayers, setShowTacticalLayers] = useState(true);
-  const [showEventMarkers, setShowEventMarkers] = useState(true);
+  const [activeColor, setActiveColor] = useState('#ff426f');
+  const [strokeWidth, setStrokeWidth] = useState(6);
+  const [annotations, setAnnotations] = useState([]);
+  const [selectedAnnotationId, setSelectedAnnotationId] = useState(null);
+  const [draftAnnotation, setDraftAnnotation] = useState(null);
 
-  const [inspectorTab, setInspectorTab] = useState('tactics');
-  const [selectedEventId, setSelectedEventId] = useState(null);
-  const [eventPoint, setEventPoint] = useState(null);
-  const [eventFilterTeam, setEventFilterTeam] = useState('all');
-  const [eventFilterType, setEventFilterType] = useState('all');
-  const [eventDraft, setEventDraft] = useState({
-    type: 'shot',
-    team: 'home',
-    playerId: '',
-    outcome: 'On target',
-    minute: 1,
-    note: ''
-  });
-
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const [status, setStatus] = useState('Analysis ready');
-  const [lastSavedAt, setLastSavedAt] = useState(null);
-
-  const [reactionPresetId, setReactionPresetId] = useState('coach');
-  const [webcamEnabled, setWebcamEnabled] = useState(false);
+  const [cameraEnabled, setCameraEnabled] = useState(false);
+  const [cameraPosition, setCameraPosition] = useState('bottom-right');
+  const [cameraSize, setCameraSize] = useState('medium');
   const [micEnabled, setMicEnabled] = useState(true);
-  const [systemAudioEnabled, setSystemAudioEnabled] = useState(true);
-  const [isReactionRecording, setIsReactionRecording] = useState(false);
+  const [clipAudioEnabled, setClipAudioEnabled] = useState(true);
+  const [recordingQuality, setRecordingQuality] = useState('1080p');
+
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [recordingStatus, setRecordingStatus] = useState('Ready to record');
   const [recordedReactionUrl, setRecordedReactionUrl] = useState('');
   const [savedRecordingPath, setSavedRecordingPath] = useState('');
-  const [recordingStatus, setRecordingStatus] = useState('Ready');
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
-  const labRef = useRef(null);
-  const videoRef = useRef(null);
   const fileInputRef = useRef(null);
-  const webcamPreviewRef = useRef(null);
+  const videoRef = useRef(null);
+  const cameraVideoRef = useRef(null);
+  const cameraStreamRef = useRef(null);
+  const stageShellRef = useRef(null);
+  const recordCanvasRef = useRef(null);
   const mediaRecorderRef = useRef(null);
-  const recordedChunksRef = useRef([]);
-  const captureStreamsRef = useRef([]);
-  const cameraPreviewStreamRef = useRef(null);
-  const audioMixRef = useRef(null);
+  const recordingChunksRef = useRef([]);
+  const recordingResourcesRef = useRef(null);
+  const drawingRef = useRef(false);
+  const draftRef = useRef(null);
+  const animationFrameRef = useRef(0);
+  const recordingTimerRef = useRef(0);
+  const videoObjectUrlRef = useRef('');
+  const recordedObjectUrlRef = useRef('');
+  const annotationsRef = useRef(annotations);
+  const settingsRef = useRef({});
 
-  const selectedAction = useMemo(
-    () => actions.find((action) => action.id === selectedActionId) || null,
-    [actions, selectedActionId]
-  );
-
-  const selectedPlayer = useMemo(
-    () => players.find((player) => player.id === selectedPlayerId) || null,
-    [players, selectedPlayerId]
-  );
-
-  const selectedEvent = useMemo(
-    () => events.find((event) => event.id === selectedEventId) || null,
-    [events, selectedEventId]
-  );
-
-  const filteredEvents = useMemo(
-    () => events
-      .filter((event) => eventFilterTeam === 'all' || event.team === eventFilterTeam)
-      .filter((event) => eventFilterType === 'all' || event.type === eventFilterType)
-      .sort((a, b) => a.time - b.time),
-    [eventFilterTeam, eventFilterType, events]
-  );
-
-  const homeStats = useMemo(() => teamStats(events, 'home'), [events]);
-  const awayStats = useMemo(() => teamStats(events, 'away'), [events]);
-  const reactionPreset = reactionPresets[reactionPresetId];
-  const timelineDuration = useMemo(() => {
-    const latestAction = actions.reduce((max, action) => Math.max(max, action.time + (action.duration || 0)), 0);
-    const latestEvent = events.reduce((max, event) => Math.max(max, event.time || 0), 0);
-    return Math.max(duration || 0, latestAction, latestEvent, videoUrl ? 1 : 90 * 60);
-  }, [actions, duration, events, videoUrl]);
-
-  const insights = useMemo(() => {
-    if (!events.length) return ['No event data available.'];
-    const next = [];
-    if (homeStats.shots !== awayStats.shots) {
-      const leadingTeam = homeStats.shots > awayStats.shots ? match.homeName : match.awayName;
-      next.push(`${leadingTeam} leads the shot count ${Math.max(homeStats.shots, awayStats.shots)} to ${Math.min(homeStats.shots, awayStats.shots)}.`);
-    } else {
-      next.push(`Shot volume is level at ${homeStats.shots} each.`);
-    }
-    if (homeStats.passes || awayStats.passes) {
-      const betterTeam = homeStats.passCompletion >= awayStats.passCompletion ? match.homeName : match.awayName;
-      const betterRate = Math.max(homeStats.passCompletion, awayStats.passCompletion);
-      next.push(`${betterTeam} has the stronger logged pass completion at ${betterRate}%.`);
-    }
-    if (homeStats.recoveries !== awayStats.recoveries) {
-      const team = homeStats.recoveries > awayStats.recoveries ? match.homeName : match.awayName;
-      next.push(`${team} has recorded more ball recoveries.`);
-    }
-    next.push(`${events.length} events are tagged across ${new Set(events.map((event) => event.playerId).filter(Boolean)).size} players.`);
-    return next.slice(0, 4);
-  }, [awayStats, events, homeStats, match.awayName, match.homeName]);
+  annotationsRef.current = annotations;
+  draftRef.current = draftAnnotation;
+  settingsRef.current = {
+    cameraEnabled,
+    cameraPosition,
+    cameraSize,
+    fitMode,
+    zoomLevel
+  };
 
   useEffect(() => {
-    const saveTimer = window.setTimeout(() => {
-      try {
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
-          match,
-          homeFormation,
-          awayFormation,
-          players,
-          events,
-          actions,
-          slowSegments
-        }));
-        setLastSavedAt(Date.now());
-      } catch {
-        setStatus('Local save unavailable');
-      }
-    }, 350);
-
-    return () => window.clearTimeout(saveTimer);
-  }, [actions, awayFormation, events, homeFormation, match, players, slowSegments]);
-
-  useEffect(() => {
-    return () => {
-      captureStreamsRef.current.forEach((stream) => stream.getTracks().forEach((track) => track.stop()));
-      cameraPreviewStreamRef.current?.getTracks().forEach((track) => track.stop());
-      audioMixRef.current?.context?.close?.();
-    };
+    const handleFullscreenChange = () => setIsFullscreen(document.fullscreenElement === stageShellRef.current);
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
   }, []);
 
   useEffect(() => {
-    return () => {
-      if (videoUrl?.startsWith('blob:')) URL.revokeObjectURL(videoUrl);
-    };
-  }, [videoUrl]);
-
-  useEffect(() => {
-    return () => {
-      if (recordedReactionUrl?.startsWith('blob:')) URL.revokeObjectURL(recordedReactionUrl);
-    };
-  }, [recordedReactionUrl]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const syncWebcamPreview = async () => {
-      if (!webcamEnabled || reactionPreset.webcamSize <= 0 || !navigator.mediaDevices?.getUserMedia) {
-        cameraPreviewStreamRef.current?.getTracks().forEach((track) => track.stop());
-        cameraPreviewStreamRef.current = null;
-        if (webcamPreviewRef.current) webcamPreviewRef.current.srcObject = null;
-        return;
-      }
-
-      if (cameraPreviewStreamRef.current) {
-        if (webcamPreviewRef.current) webcamPreviewRef.current.srcObject = cameraPreviewStreamRef.current;
-        return;
-      }
-
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-            frameRate: { ideal: 30, max: 60 }
-          },
-          audio: false
-        });
-        if (cancelled) {
-          stream.getTracks().forEach((track) => track.stop());
-          return;
-        }
-        cameraPreviewStreamRef.current = stream;
-        if (webcamPreviewRef.current) webcamPreviewRef.current.srcObject = stream;
-      } catch (error) {
-        setWebcamEnabled(false);
-        setRecordingStatus(`Camera unavailable: ${error.message}`);
-      }
-    };
-
-    syncWebcamPreview();
-    return () => {
-      cancelled = true;
-    };
-  }, [reactionPreset.webcamSize, webcamEnabled]);
-
-  useEffect(() => {
     const handleKeyDown = (event) => {
-      const target = event.target;
-      const isEditing = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
-      if (!isEditing && (event.key === 'Delete' || event.key === 'Backspace') && selectedActionId) {
+      const tagName = event.target?.tagName?.toLowerCase();
+      if (tagName === 'input' || tagName === 'select' || tagName === 'textarea') return;
+      if ((event.key === 'Delete' || event.key === 'Backspace') && selectedAnnotationId) {
         event.preventDefault();
-        deleteSelectedAction();
+        setAnnotations((items) => items.filter((item) => item.id !== selectedAnnotationId));
+        setSelectedAnnotationId(null);
       }
-      if (event.key === 'Escape' && isFullscreen) {
-        setIsFullscreen(false);
+      if (event.key.toLowerCase() === 'k' && videoUrl) {
+        event.preventDefault();
+        togglePlayback();
       }
     };
-
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isFullscreen, selectedActionId]);
+  });
 
-  const updateMatch = (fields) => {
-    setMatch((previous) => ({ ...previous, ...fields }));
-  };
+  useEffect(() => () => {
+    if (mediaRecorderRef.current?.state && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+    window.cancelAnimationFrame(animationFrameRef.current);
+    window.clearInterval(recordingTimerRef.current);
+    cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+    recordingResourcesRef.current?.streams?.forEach((stream) => stream.getTracks().forEach((track) => track.stop()));
+    recordingResourcesRef.current?.audioContext?.close?.();
+    if (videoObjectUrlRef.current) URL.revokeObjectURL(videoObjectUrlRef.current);
+    if (recordedObjectUrlRef.current) URL.revokeObjectURL(recordedObjectUrlRef.current);
+  }, []);
 
   const handleUpload = (event) => {
     const file = event.target.files?.[0];
+    event.target.value = '';
     if (!file) return;
-    if (videoUrl?.startsWith('blob:')) URL.revokeObjectURL(videoUrl);
+    if (!file.type.startsWith('video/')) {
+      setRecordingStatus('Choose a video file to continue');
+      return;
+    }
 
+    if (videoObjectUrlRef.current) URL.revokeObjectURL(videoObjectUrlRef.current);
     const nextUrl = URL.createObjectURL(file);
+    videoObjectUrlRef.current = nextUrl;
     setVideoUrl(nextUrl);
     setVideoName(file.name);
-    setSourceMode('video');
-    setIsPlaying(false);
-    setCurrentTime(0);
     setDuration(0);
+    setCurrentTime(0);
+    setIsPlaying(false);
     setZoomLevel(1);
-    setShowFormations(false);
-    setShowPitchGuide(false);
-    setInspectorTab('events');
-    setStatus('Footage loaded');
-    event.target.value = '';
+    setAnnotations([]);
+    setSelectedAnnotationId(null);
+    setRecordingStatus('Clip ready');
+    setSavedRecordingPath('');
   };
 
-  const togglePlay = async () => {
+  const togglePlayback = async () => {
     const video = videoRef.current;
     if (!video || !videoUrl) return;
-    if (video.paused) {
-      await video.play();
+    if (video.paused || video.ended) {
+      try {
+        await video.play();
+      } catch (error) {
+        setRecordingStatus(`Playback could not start: ${error.message}`);
+      }
     } else {
       video.pause();
     }
   };
 
-  const seekTo = (time) => {
-    const nextTime = clamp(Number(time) || 0, 0, timelineDuration);
-    if (videoRef.current) videoRef.current.currentTime = Math.min(nextTime, duration || nextTime);
+  const seekTo = (value) => {
+    const nextTime = clamp(Number(value) || 0, 0, duration || 0);
+    if (videoRef.current) videoRef.current.currentTime = nextTime;
     setCurrentTime(nextTime);
   };
 
-  const setVideoSpeed = (speed) => {
-    setPlaybackSpeed(speed);
-    if (videoRef.current) videoRef.current.playbackRate = speed;
-    setStatus(`Playback ${speed}x`);
+  const skipBy = (seconds) => seekTo(currentTime + seconds);
+
+  const changePlaybackSpeed = (speed) => {
+    const nextSpeed = Number(speed) || 1;
+    setPlaybackSpeed(nextSpeed);
+    if (videoRef.current) videoRef.current.playbackRate = nextSpeed;
   };
 
-  const handleTimeUpdate = (event) => {
-    const time = event.currentTarget.currentTime;
-    setCurrentTime(time);
-    const segment = slowSegments.find((item) => time >= item.start && time <= item.end);
-    event.currentTarget.playbackRate = segment ? segment.speed : playbackSpeed;
+  const syncVideoDuration = (video) => {
+    const nativeDuration = Number(video?.duration);
+    let resolvedDuration = Number.isFinite(nativeDuration) && nativeDuration > 0 ? nativeDuration : 0;
+    if (!resolvedDuration && video?.seekable?.length) {
+      const seekableEnd = Number(video.seekable.end(video.seekable.length - 1));
+      if (Number.isFinite(seekableEnd) && seekableEnd > 0) resolvedDuration = seekableEnd;
+    }
+    if (resolvedDuration) setDuration(resolvedDuration);
   };
 
-  const addSpeedSegment = () => {
-    const start = Math.max(0, Number((currentTime - 1).toFixed(2)));
-    const segment = {
-      id: `speed-${Date.now()}`,
-      start,
-      end: Number((start + 3).toFixed(2)),
-      speed: playbackSpeed === 1 ? 0.5 : playbackSpeed
-    };
-    setSlowSegments((previous) => [...previous, segment]);
-    setStatus(`${segment.speed}x segment added at ${formatTime(start)}`);
-  };
-
-  const getPointFromEvent = (event) => {
+  const getStagePoint = (event) => {
     const rect = event.currentTarget.getBoundingClientRect();
     return {
-      x: clamp(((event.clientX - rect.left) / rect.width) * 100, 0, 100),
-      y: clamp(((event.clientY - rect.top) / rect.height) * 100, 0, 100)
+      x: clamp((event.clientX - rect.left) / rect.width, 0, 1),
+      y: clamp((event.clientY - rect.top) / rect.height, 0, 1)
     };
   };
 
-  const handleBoardPointerDown = (event) => {
-    const point = getPointFromEvent(event);
-    setZoomAnchor(point);
-    if (draggingPlayerId) return;
-
-    if (activeTool === 'event') {
-      setEventPoint(point);
-      setInspectorTab('events');
-      setSelectedEventId(null);
-      setStatus('Event position set');
+  const handleStagePointerDown = (event) => {
+    if (!videoUrl || activeTool === 'select' || event.button !== 0) {
+      if (activeTool === 'select') setSelectedAnnotationId(null);
       return;
     }
-
-    if (activeTool === 'select') {
-      setSelectedActionId(null);
-      return;
-    }
-
-    setDraftStart(point);
-    if (activeTool === 'pen') {
-      event.currentTarget.setPointerCapture?.(event.pointerId);
-      setDraftPath([point]);
-    }
-  };
-
-  const handleBoardPointerMove = (event) => {
-    if (activeTool === 'pen' && draftStart) {
-      const point = getPointFromEvent(event);
-      setDraftPath((previous) => {
-        const last = previous[previous.length - 1];
-        if (last && Math.abs(last.x - point.x) < 0.35 && Math.abs(last.y - point.y) < 0.35) return previous;
-        return [...previous, point];
-      });
-      return;
-    }
-
-    if (!draggingPlayerId) return;
-    const point = getPointFromEvent(event);
-    setPlayers((previous) => previous.map((player) => (
-      player.id === draggingPlayerId ? { ...player, target: point } : player
-    )));
-  };
-
-  const handleBoardPointerUp = (event) => {
-    if (draggingPlayerId) {
-      setDraggingPlayerId(null);
-      setSimulationPhase('target');
-      setStatus('Player movement updated');
-      return;
-    }
-
-    if (!draftStart || activeTool === 'select' || activeTool === 'event') return;
-    const rawEnd = getPointFromEvent(event);
-    const end = activeTool === 'var' ? { x: draftStart.x, y: rawEnd.y } : rawEnd;
-    const points = activeTool === 'pen' ? [...draftPath, end] : undefined;
-    const config = toolConfig[activeTool] || toolConfig.pen;
-    const action = {
-      id: `${activeTool}-${Date.now()}`,
-      type: activeTool,
-      label: config.label,
-      start: draftStart,
-      end,
-      points,
-      time: Number(currentTime.toFixed(2)),
-      duration: activeTool === 'press' ? 2 : 3,
-      color: config.color,
-      strokeWidth: activeTool === 'pen' ? 6 : (activeTool === 'run' || activeTool === 'defend' ? 4 : 5)
-    };
-
-    setActions((previous) => [...previous, action]);
-    setSelectedActionId(action.id);
-    setDraftStart(null);
-    setDraftPath([]);
-    setStatus(`${config.label} added at ${formatTime(action.time)}`);
-  };
-
-  const handlePlayerPointerDown = (event, playerId) => {
-    event.stopPropagation();
-    if (activeTool !== 'select') return;
-    setDraggingPlayerId(playerId);
-    setSelectedPlayerId(playerId);
-    setSelectedActionId(null);
-    setInspectorTab('tactics');
+    event.preventDefault();
     event.currentTarget.setPointerCapture?.(event.pointerId);
-  };
-
-  const updateSelectedPlayer = (fields) => {
-    if (!selectedPlayerId) return;
-    setPlayers((previous) => previous.map((player) => (
-      player.id === selectedPlayerId ? { ...player, ...fields } : player
-    )));
-  };
-
-  const updateSelectedAction = (fields) => {
-    if (!selectedActionId) return;
-    setActions((previous) => previous.map((action) => (
-      action.id === selectedActionId ? { ...action, ...fields } : action
-    )));
-  };
-
-  const deleteSelectedAction = () => {
-    if (!selectedActionId) return;
-    setActions((previous) => previous.filter((action) => action.id !== selectedActionId));
-    setSelectedActionId(null);
-    setStatus('Layer deleted');
-  };
-
-  const undoLastAction = () => {
-    setActions((previous) => previous.slice(0, -1));
-    setSelectedActionId(null);
-    setStatus('Last layer removed');
-  };
-
-  const applyFormation = (team, formationName) => {
-    if (team === 'home') setHomeFormation(formationName);
-    if (team === 'away') setAwayFormation(formationName);
-    setPlayers((previous) => {
-      const existingTeam = previous.filter((player) => player.team === team);
-      return [
-        ...previous.filter((player) => player.team !== team),
-        ...buildTeam(team, formationName, existingTeam)
-      ];
-    });
-    setSelectedPlayerId(null);
-    setStatus(`${team === 'home' ? match.homeName : match.awayName} set to ${formationName}`);
-  };
-
-  const resetPlayerShape = () => {
-    setPlayers((previous) => previous.map((player) => ({ ...player, target: { ...player.base } })));
-    setSimulationPhase('base');
-    setStatus('Player movement reset');
-  };
-
-  const chooseEventType = (type) => {
-    setEventDraft((previous) => ({
-      ...previous,
-      type,
-      outcome: eventTypes[type].outcomes[0],
-      minute: videoUrl ? Math.floor(currentTime / 60) + 1 : previous.minute
-    }));
-    setInspectorTab('events');
-  };
-
-  const activateEventTool = () => {
-    setActiveTool('event');
-    setInspectorTab('events');
-    setEventDraft((previous) => ({
-      ...previous,
-      minute: videoUrl ? Math.floor(currentTime / 60) + 1 : previous.minute
-    }));
-    setStatus('Event tagging active');
-  };
-
-  const addMatchEvent = () => {
-    const config = eventTypes[eventDraft.type];
-    const eventTime = videoUrl
-      ? currentTime
-      : Math.max(0, (Math.max(1, Number(eventDraft.minute) || 1) - 1) * 60);
-    const player = players.find((item) => item.id === eventDraft.playerId);
-    const nextEvent = {
-      id: `event-${Date.now()}`,
-      type: eventDraft.type,
-      team: eventDraft.team,
-      playerId: eventDraft.playerId,
-      playerName: player?.name || '',
-      outcome: eventDraft.outcome,
-      minute: Math.max(1, Number(eventDraft.minute) || Math.floor(eventTime / 60) + 1),
-      time: Number(eventTime.toFixed(2)),
-      note: eventDraft.note.trim(),
-      point: eventPoint || zoomAnchor || { x: 50, y: 50 }
+    if (isPlaying) videoRef.current?.pause();
+    const point = getStagePoint(event);
+    const nextDraft = {
+      id: `drawing-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      type: activeTool,
+      color: activeColor,
+      width: strokeWidth,
+      start: point,
+      end: point,
+      points: activeTool === 'pen' ? [point] : undefined
     };
-
-    setEvents((previous) => [...previous, nextEvent]);
-    if (nextEvent.type === 'goal') {
-      const scoreKey = nextEvent.team === 'home' ? 'homeScore' : 'awayScore';
-      updateMatch({ [scoreKey]: Math.max(0, Number(match[scoreKey]) || 0) + 1 });
-    }
-    setSelectedEventId(nextEvent.id);
-    setEventPoint(null);
-    setEventDraft((previous) => ({ ...previous, playerId: '', note: '' }));
-    setStatus(`${config.label} logged for ${nextEvent.team === 'home' ? match.homeName : match.awayName}`);
+    drawingRef.current = true;
+    draftRef.current = nextDraft;
+    setDraftAnnotation(nextDraft);
   };
 
-  const deleteSelectedEvent = () => {
-    if (!selectedEvent) return;
-    setEvents((previous) => previous.filter((event) => event.id !== selectedEvent.id));
-    if (selectedEvent.type === 'goal') {
-      const scoreKey = selectedEvent.team === 'home' ? 'homeScore' : 'awayScore';
-      updateMatch({ [scoreKey]: Math.max(0, (Number(match[scoreKey]) || 0) - 1) });
-    }
-    setSelectedEventId(null);
-    setStatus('Event deleted');
+  const handleStagePointerMove = (event) => {
+    if (!drawingRef.current || !draftRef.current) return;
+    const point = getStagePoint(event);
+    const nextDraft = {
+      ...draftRef.current,
+      end: point,
+      points: draftRef.current.type === 'pen'
+        ? [...(draftRef.current.points || []), point]
+        : draftRef.current.points
+    };
+    draftRef.current = nextDraft;
+    setDraftAnnotation(nextDraft);
   };
 
-  const openEvent = (event) => {
-    setSelectedEventId(event.id);
-    setInspectorTab('events');
-    setEventPoint(null);
-    seekTo(event.time);
+  const handleStagePointerUp = (event) => {
+    if (!drawingRef.current || !draftRef.current) return;
+    const point = getStagePoint(event);
+    const finished = {
+      ...draftRef.current,
+      end: point,
+      points: draftRef.current.type === 'pen'
+        ? [...(draftRef.current.points || []), point]
+        : draftRef.current.points
+    };
+    const distance = Math.hypot(finished.end.x - finished.start.x, finished.end.y - finished.start.y);
+    const enoughPenPoints = finished.type === 'pen' && finished.points?.length > 2;
+    if (distance > 0.008 || enoughPenPoints) {
+      setAnnotations((items) => [...items, finished]);
+      setSelectedAnnotationId(finished.id);
+    }
+    drawingRef.current = false;
+    draftRef.current = null;
+    setDraftAnnotation(null);
+  };
+
+  const undoAnnotation = () => {
+    setAnnotations((items) => items.slice(0, -1));
+    setSelectedAnnotationId(null);
+  };
+
+  const clearAnnotations = () => {
+    setAnnotations([]);
+    setSelectedAnnotationId(null);
+    setDraftAnnotation(null);
+  };
+
+  const toggleCamera = async () => {
+    if (isRecording) return;
+    if (cameraEnabled) {
+      cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current = null;
+      if (cameraVideoRef.current) cameraVideoRef.current.srcObject = null;
+      setCameraEnabled(false);
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setRecordingStatus('Camera access is unavailable in this browser');
+      return;
+    }
+
+    try {
+      setRecordingStatus('Requesting camera access');
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: 'user',
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30 }
+        },
+        audio: false
+      });
+      cameraStreamRef.current = stream;
+      if (cameraVideoRef.current) {
+        cameraVideoRef.current.srcObject = stream;
+        await cameraVideoRef.current.play().catch(() => {});
+      }
+      setCameraEnabled(true);
+      setRecordingStatus('Camera ready');
+    } catch (error) {
+      setCameraEnabled(false);
+      setRecordingStatus(`Camera could not start: ${error.message}`);
+    }
   };
 
   const toggleFullscreen = async () => {
-    const next = !isFullscreen;
-    setIsFullscreen(next);
-    if (next) {
-      try {
-        await labRef.current?.requestFullscreen?.();
-      } catch {
-        // The fixed full-window layout remains available when native fullscreen is blocked.
-      }
-    } else if (document.fullscreenElement && document.exitFullscreen) {
-      try {
-        await document.exitFullscreen();
-      } catch {
-        // The local layout state still exits fullscreen.
-      }
-    }
-  };
-
-  const createReportText = () => {
-    const lines = [
-      match.title,
-      `${match.competition} | ${match.date}`,
-      `${match.homeName} ${match.homeScore} - ${match.awayScore} ${match.awayName}`,
-      '',
-      'MATCH DATA',
-      `Shots: ${homeStats.shots} - ${awayStats.shots}`,
-      `Shots on target: ${homeStats.onTarget} - ${awayStats.onTarget}`,
-      `Pass completion: ${homeStats.passCompletion}% - ${awayStats.passCompletion}%`,
-      `Recoveries: ${homeStats.recoveries} - ${awayStats.recoveries}`,
-      `Fouls: ${homeStats.fouls} - ${awayStats.fouls}`,
-      '',
-      'KEY READ',
-      ...insights.map((insight) => `- ${insight}`),
-      '',
-      'EVENTS',
-      ...[...events]
-        .sort((a, b) => a.time - b.time)
-        .map((event) => `${event.minute}' ${event.team === 'home' ? match.homeName : match.awayName} - ${eventTypes[event.type]?.label || event.type} (${event.outcome})${event.playerName ? ` - ${event.playerName}` : ''}${event.note ? `: ${event.note}` : ''}`)
-    ];
-    return lines.join('\n');
-  };
-
-  const exportAnalysis = () => {
-    const payload = {
-      exportedAt: new Date().toISOString(),
-      match,
-      formations: { home: homeFormation, away: awayFormation },
-      stats: { home: homeStats, away: awayStats },
-      insights,
-      players,
-      events,
-      tacticalLayers: actions,
-      speedSegments: slowSegments
-    };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${safeFileName(match.title)}.json`;
-    link.click();
-    URL.revokeObjectURL(url);
-    setStatus('Analysis exported');
-  };
-
-  const copyReport = async () => {
-    const report = createReportText();
     try {
-      await navigator.clipboard.writeText(report);
-    } catch {
-      const textArea = document.createElement('textarea');
-      textArea.value = report;
-      document.body.appendChild(textArea);
-      textArea.select();
-      document.execCommand('copy');
-      textArea.remove();
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else {
+        await stageShellRef.current?.requestFullscreen?.();
+      }
+    } catch (error) {
+      setRecordingStatus(`Fullscreen could not start: ${error.message}`);
     }
-    setStatus('Match report copied');
   };
 
-  const resetAnalysis = () => {
-    if (!window.confirm('Start a new football analysis? This clears the current saved session.')) return;
-    if (videoUrl?.startsWith('blob:')) URL.revokeObjectURL(videoUrl);
-    setMatch({ ...defaultMatch, date: new Date().toISOString().slice(0, 10) });
-    setHomeFormation('4-3-3');
-    setAwayFormation('4-2-3-1');
-    setPlayers(createDefaultPlayers());
-    setEvents([]);
-    setActions([]);
-    setSlowSegments([]);
-    setVideoUrl('');
-    setVideoName('No footage loaded');
-    setCurrentTime(0);
-    setDuration(0);
-    setSourceMode('board');
-    setSelectedActionId(null);
-    setSelectedEventId(null);
-    setSelectedPlayerId(null);
-    window.localStorage.removeItem(STORAGE_KEY);
-    setStatus('New analysis ready');
+  const drawAnnotationToCanvas = (context, annotation, canvasWidth, canvasHeight) => {
+    if (!annotation) return;
+    const start = { x: annotation.start.x * canvasWidth, y: annotation.start.y * canvasHeight };
+    const end = { x: annotation.end.x * canvasWidth, y: annotation.end.y * canvasHeight };
+    const lineWidth = Math.max(3, annotation.width * (canvasWidth / STAGE_WIDTH));
+    context.save();
+    context.strokeStyle = annotation.color;
+    context.fillStyle = annotation.color;
+    context.lineWidth = lineWidth;
+    context.lineCap = 'round';
+    context.lineJoin = 'round';
+    context.shadowColor = 'rgba(0, 0, 0, 0.42)';
+    context.shadowBlur = lineWidth * 0.8;
+
+    if (annotation.type === 'pen') {
+      const points = annotation.points || [];
+      if (points.length > 1) {
+        context.beginPath();
+        context.moveTo(points[0].x * canvasWidth, points[0].y * canvasHeight);
+        points.slice(1).forEach((point) => context.lineTo(point.x * canvasWidth, point.y * canvasHeight));
+        context.stroke();
+      }
+    } else if (annotation.type === 'circle') {
+      const centerX = (start.x + end.x) / 2;
+      const centerY = (start.y + end.y) / 2;
+      context.beginPath();
+      context.ellipse(centerX, centerY, Math.abs(end.x - start.x) / 2, Math.abs(end.y - start.y) / 2, 0, 0, Math.PI * 2);
+      context.stroke();
+    } else {
+      context.beginPath();
+      context.moveTo(start.x, start.y);
+      context.lineTo(end.x, end.y);
+      context.stroke();
+
+      if (annotation.type === 'arrow') {
+        const angle = Math.atan2(end.y - start.y, end.x - start.x);
+        const headLength = Math.max(18, lineWidth * 4);
+        context.beginPath();
+        context.moveTo(end.x, end.y);
+        context.lineTo(end.x - headLength * Math.cos(angle - Math.PI / 6), end.y - headLength * Math.sin(angle - Math.PI / 6));
+        context.lineTo(end.x - headLength * Math.cos(angle + Math.PI / 6), end.y - headLength * Math.sin(angle + Math.PI / 6));
+        context.closePath();
+        context.fill();
+      }
+    }
+    context.restore();
   };
 
-  const getSupportedMimeType = () => {
-    const types = [
-      'video/webm;codecs=vp9,opus',
-      'video/webm;codecs=vp8,opus',
-      'video/webm'
-    ];
-    return types.find((type) => window.MediaRecorder?.isTypeSupported?.(type)) || '';
+  const drawCompositeFrame = () => {
+    const canvas = recordCanvasRef.current;
+    const video = videoRef.current;
+    if (!canvas || !video) return;
+    const context = canvas.getContext('2d', { alpha: false });
+    const width = canvas.width;
+    const height = canvas.height;
+    const settings = settingsRef.current;
+
+    context.save();
+    context.fillStyle = '#080b12';
+    context.fillRect(0, 0, width, height);
+
+    if (video.readyState >= 2 && video.videoWidth && video.videoHeight) {
+      const baseScale = settings.fitMode === 'cover'
+        ? Math.max(width / video.videoWidth, height / video.videoHeight)
+        : Math.min(width / video.videoWidth, height / video.videoHeight);
+      const scale = baseScale * settings.zoomLevel;
+      const drawWidth = video.videoWidth * scale;
+      const drawHeight = video.videoHeight * scale;
+      context.drawImage(video, (width - drawWidth) / 2, (height - drawHeight) / 2, drawWidth, drawHeight);
+    }
+
+    annotationsRef.current.forEach((annotation) => drawAnnotationToCanvas(context, annotation, width, height));
+    if (draftRef.current) drawAnnotationToCanvas(context, draftRef.current, width, height);
+
+    const cameraVideo = cameraVideoRef.current;
+    if (settings.cameraEnabled && cameraVideo?.readyState >= 2) {
+      const cameraWidth = Math.round(width * CAMERA_SIZES[settings.cameraSize]);
+      const cameraHeight = Math.round(cameraWidth * (9 / 16));
+      const margin = Math.round(width * 0.018);
+      const cameraX = settings.cameraPosition.endsWith('right') ? width - cameraWidth - margin : margin;
+      const cameraY = settings.cameraPosition.startsWith('bottom') ? height - cameraHeight - margin : margin;
+      const radius = Math.round(width * 0.008);
+      context.save();
+      roundedRectPath(context, cameraX, cameraY, cameraWidth, cameraHeight, radius);
+      context.clip();
+      drawMediaCover(context, cameraVideo, cameraX, cameraY, cameraWidth, cameraHeight);
+      context.restore();
+      context.save();
+      roundedRectPath(context, cameraX, cameraY, cameraWidth, cameraHeight, radius);
+      context.strokeStyle = '#ffffff';
+      context.lineWidth = Math.max(3, width * 0.0025);
+      context.shadowColor = 'rgba(0, 0, 0, 0.55)';
+      context.shadowBlur = width * 0.012;
+      context.stroke();
+      context.restore();
+    }
+    context.restore();
   };
 
-  const buildMixedAudioTrack = async (displayStream, micStream) => {
-    const sources = [
-      ...(displayStream?.getAudioTracks().length ? [{ stream: displayStream, gain: 0.82 }] : []),
-      ...(micStream?.getAudioTracks().length ? [{ stream: micStream, gain: 1 }] : [])
-    ];
-    if (!sources.length) return [];
-    if (sources.length === 1) return sources[0].stream.getAudioTracks();
+  const buildMixedAudio = async () => {
+    const streams = [];
+    const sources = [];
+    let clipAudioCaptured = false;
 
+    if (clipAudioEnabled) {
+      try {
+        const captureStream = videoRef.current?.captureStream?.() || videoRef.current?.mozCaptureStream?.();
+        if (captureStream?.getAudioTracks().length) {
+          streams.push(captureStream);
+          sources.push({ stream: captureStream, gain: 0.88 });
+          clipAudioCaptured = true;
+        }
+      } catch {
+        clipAudioCaptured = false;
+      }
+    }
+
+    if (micEnabled) {
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error('Microphone access is unavailable');
+      const micStream = await navigator.mediaDevices.getUserMedia({
+        video: false,
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+          sampleRate: 48000
+        }
+      });
+      streams.push(micStream);
+      sources.push({ stream: micStream, gain: 1 });
+    }
+
+    if (!sources.length) return { audioTracks: [], audioContext: null, streams, clipAudioCaptured };
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContextClass) return sources.flatMap((source) => source.stream.getAudioTracks());
+    if (!AudioContextClass) {
+      return {
+        audioTracks: sources.flatMap((source) => source.stream.getAudioTracks()),
+        audioContext: null,
+        streams,
+        clipAudioCaptured
+      };
+    }
 
-    const context = new AudioContextClass();
-    await context.resume();
-    const destination = context.createMediaStreamDestination();
-    const compressor = context.createDynamicsCompressor();
+    const audioContext = new AudioContextClass({ sampleRate: 48000 });
+    await audioContext.resume();
+    const destination = audioContext.createMediaStreamDestination();
+    const compressor = audioContext.createDynamicsCompressor();
     compressor.threshold.value = -18;
     compressor.knee.value = 18;
     compressor.ratio.value = 4;
@@ -813,1096 +571,516 @@ export default function FootballLab() {
     compressor.release.value = 0.2;
     compressor.connect(destination);
 
-    const nodes = sources.map(({ stream, gain }) => {
-      const sourceNode = context.createMediaStreamSource(stream);
-      const gainNode = context.createGain();
+    sources.forEach(({ stream, gain }) => {
+      const sourceNode = audioContext.createMediaStreamSource(stream);
+      const gainNode = audioContext.createGain();
       gainNode.gain.value = gain;
       sourceNode.connect(gainNode);
       gainNode.connect(compressor);
-      return { sourceNode, gainNode };
     });
 
-    audioMixRef.current = { context, destination, compressor, nodes };
-    return destination.stream.getAudioTracks();
+    return {
+      audioTracks: destination.stream.getAudioTracks(),
+      audioContext,
+      streams,
+      clipAudioCaptured
+    };
+  };
+
+  const cleanupRecordingResources = async () => {
+    window.cancelAnimationFrame(animationFrameRef.current);
+    window.clearInterval(recordingTimerRef.current);
+    const resources = recordingResourcesRef.current;
+    resources?.streams?.forEach((stream) => stream.getTracks().forEach((track) => track.stop()));
+    resources?.canvasStream?.getTracks().forEach((track) => track.stop());
+    await resources?.audioContext?.close?.().catch?.(() => {});
+    recordingResourcesRef.current = null;
   };
 
   const startReactionRecording = async () => {
-    if (!navigator.mediaDevices?.getDisplayMedia || !window.MediaRecorder) {
-      setRecordingStatus('Screen capture is unavailable.');
+    if (!videoUrl) {
+      setRecordingStatus('Upload a match clip first');
+      return;
+    }
+    if (!window.MediaRecorder || !recordCanvasRef.current?.captureStream) {
+      setRecordingStatus('Clean video recording is unavailable in this browser');
       return;
     }
 
     try {
-      setRecordingStatus('Waiting for a screen source');
-      const displayStream = await navigator.mediaDevices.getDisplayMedia({
-        video: {
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-          frameRate: { ideal: 60, max: 60 }
-        },
-        audio: systemAudioEnabled
-      });
-      const streams = [displayStream];
-      let micStream = null;
-
-      if (micEnabled) {
-        micStream = await navigator.mediaDevices.getUserMedia({
-          video: false,
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-            channelCount: 1
-          }
-        });
-        streams.push(micStream);
+      setRecordingStatus('Preparing reaction');
+      setSavedRecordingPath('');
+      if (recordedObjectUrlRef.current) {
+        URL.revokeObjectURL(recordedObjectUrlRef.current);
+        recordedObjectUrlRef.current = '';
       }
+      setRecordedReactionUrl('');
 
-      const audioTracks = await buildMixedAudioTrack(displayStream, micStream);
+      const quality = OUTPUT_QUALITY[recordingQuality];
+      const canvas = recordCanvasRef.current;
+      canvas.width = quality.width;
+      canvas.height = quality.height;
+      drawCompositeFrame();
+      const canvasStream = canvas.captureStream(30);
+      const audio = await buildMixedAudio();
       const recordingStream = new MediaStream([
-        ...displayStream.getVideoTracks(),
-        ...audioTracks
+        ...canvasStream.getVideoTracks(),
+        ...audio.audioTracks
       ]);
-      const mimeType = getSupportedMimeType();
+      const mimeType = getRecordingMimeType();
       const recorder = new MediaRecorder(recordingStream, {
         ...(mimeType ? { mimeType } : {}),
-        videoBitsPerSecond: 12_000_000,
+        videoBitsPerSecond: quality.bitRate,
         audioBitsPerSecond: 192_000
       });
 
-      captureStreamsRef.current = streams;
+      recordingResourcesRef.current = {
+        audioContext: audio.audioContext,
+        canvasStream,
+        recordingStream,
+        streams: audio.streams
+      };
+      recordingChunksRef.current = [];
       mediaRecorderRef.current = recorder;
-      recordedChunksRef.current = [];
-      setSavedRecordingPath('');
 
       recorder.ondataavailable = (event) => {
-        if (event.data?.size) recordedChunksRef.current.push(event.data);
+        if (event.data?.size) recordingChunksRef.current.push(event.data);
+      };
+
+      recorder.onerror = async (event) => {
+        setIsRecording(false);
+        setRecordingStatus(`Recording error: ${event.error?.message || 'Unknown error'}`);
+        await cleanupRecordingResources();
       };
 
       recorder.onstop = async () => {
-        const blob = new Blob(recordedChunksRef.current, { type: mimeType || 'video/webm' });
+        const finalType = recorder.mimeType || mimeType || 'video/webm';
+        const blob = new Blob(recordingChunksRef.current, { type: finalType });
         const nextUrl = URL.createObjectURL(blob);
+        recordedObjectUrlRef.current = nextUrl;
         setRecordedReactionUrl(nextUrl);
+        setRecordingStatus('Reaction ready');
 
-        const isElectron = navigator.userAgent.toLowerCase().includes('electron');
+        const isElectron = /Electron/i.test(navigator.userAgent);
         if (isElectron && window.electron?.saveRecordedFile) {
+          setRecordingStatus('Saving reaction');
           const result = await window.electron.saveRecordedFile(
             await blob.arrayBuffer(),
-            `${safeFileName(match.title)}-reaction`
+            `${safeFileName(videoName)}-reaction`
           );
           if (result?.success) {
-            setSavedRecordingPath(result.filePath);
-            setRecordingStatus('Recording saved locally');
+            setSavedRecordingPath(result.filePath || result.rawFilePath || 'Saved locally');
+            setRecordingStatus('Reaction saved locally');
           } else {
             setRecordingStatus(`Preview ready. Save failed: ${result?.error || 'Unknown error'}`);
           }
-        } else {
-          setRecordingStatus('Recording ready');
         }
-
-        captureStreamsRef.current.forEach((stream) => stream.getTracks().forEach((track) => track.stop()));
-        captureStreamsRef.current = [];
-        await audioMixRef.current?.context?.close?.();
-        audioMixRef.current = null;
+        await cleanupRecordingResources();
       };
 
-      recorder.onerror = (event) => {
-        setRecordingStatus(`Recording error: ${event.error?.message || 'Unknown error'}`);
+      const drawLoop = () => {
+        drawCompositeFrame();
+        animationFrameRef.current = window.requestAnimationFrame(drawLoop);
       };
-
+      drawLoop();
       recorder.start(1000);
-      setIsReactionRecording(true);
-      setRecordingStatus('Recording');
-      displayStream.getVideoTracks()[0]?.addEventListener('ended', stopReactionRecording, { once: true });
+      setRecordingSeconds(0);
+      setIsRecording(true);
+      setRecordingStatus(audio.clipAudioCaptured || !clipAudioEnabled
+        ? 'Recording reaction'
+        : 'Recording reaction without clip audio');
+      const startedAt = Date.now();
+      recordingTimerRef.current = window.setInterval(() => {
+        setRecordingSeconds(Math.floor((Date.now() - startedAt) / 1000));
+      }, 250);
     } catch (error) {
-      setRecordingStatus(`Could not record: ${error.message}`);
-      captureStreamsRef.current.forEach((stream) => stream.getTracks().forEach((track) => track.stop()));
-      captureStreamsRef.current = [];
-      await audioMixRef.current?.context?.close?.();
-      audioMixRef.current = null;
+      setIsRecording(false);
+      setRecordingStatus(`Could not start: ${error.message}`);
+      await cleanupRecordingResources();
     }
   };
 
   const stopReactionRecording = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-    }
-    setIsReactionRecording(false);
-    setRecordingStatus('Finalizing recording');
+    if (!mediaRecorderRef.current || mediaRecorderRef.current.state === 'inactive') return;
+    videoRef.current?.pause();
+    drawCompositeFrame();
+    setIsRecording(false);
+    setRecordingStatus('Finalizing reaction');
+    window.clearInterval(recordingTimerRef.current);
+    mediaRecorderRef.current.stop();
   };
 
   const downloadRecording = () => {
     if (!recordedReactionUrl) return;
     const link = document.createElement('a');
+    const type = mediaRecorderRef.current?.mimeType || 'video/webm';
     link.href = recordedReactionUrl;
-    link.download = `${safeFileName(match.title)}-reaction.webm`;
+    link.download = `${safeFileName(videoName)}-reaction.${type.includes('mp4') ? 'mp4' : 'webm'}`;
     link.click();
   };
 
-  const renderAction = (action) => {
-    const config = { ...(toolConfig[action.type] || toolConfig.move), color: action.color || toolConfig[action.type]?.color };
-    const isSelected = selectedActionId === action.id;
-    const dx = action.end.x - action.start.x;
-    const dy = action.end.y - action.start.y;
-    const length = Math.max(1, Math.sqrt((dx * dx) + (dy * dy)));
-    const isPoint = action.type === 'press' || length < 3;
-    const isDashed = action.type === 'defend';
-    const strokeWidth = action.strokeWidth || 5;
-    const markerId = `football-arrow-${action.id}`;
-    const points = action.points?.length ? action.points : [action.start, action.end];
-    const pointString = points.map((point) => `${point.x},${point.y}`).join(' ');
-
-    const selectAction = (event) => {
-      event.stopPropagation();
+  const renderAnnotation = (annotation, isDraft = false) => {
+    if (!annotation) return null;
+    const selected = !isDraft && selectedAnnotationId === annotation.id;
+    const startX = annotation.start.x * STAGE_WIDTH;
+    const startY = annotation.start.y * STAGE_HEIGHT;
+    const endX = annotation.end.x * STAGE_WIDTH;
+    const endY = annotation.end.y * STAGE_HEIGHT;
+    const markerId = `reaction-arrow-${annotation.id}`;
+    const commonProps = {
+      fill: 'none',
+      stroke: annotation.color,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+      strokeWidth: annotation.width,
+      vectorEffect: 'non-scaling-stroke'
+    };
+    const selectAnnotation = (event) => {
       if (activeTool !== 'select') return;
-      setSelectedActionId(action.id);
-      setSelectedPlayerId(null);
-      setInspectorTab('tactics');
+      event.stopPropagation();
+      setSelectedAnnotationId(annotation.id);
     };
 
+    let visibleShape;
+    let hitShape;
+    if (annotation.type === 'pen') {
+      const points = (annotation.points || []).map((point) => `${point.x * STAGE_WIDTH},${point.y * STAGE_HEIGHT}`).join(' ');
+      visibleShape = <polyline {...commonProps} points={points} />;
+      hitShape = <polyline fill="none" onPointerDown={selectAnnotation} points={points} stroke="transparent" strokeWidth="22" />;
+    } else if (annotation.type === 'circle') {
+      const cx = (startX + endX) / 2;
+      const cy = (startY + endY) / 2;
+      const rx = Math.abs(endX - startX) / 2;
+      const ry = Math.abs(endY - startY) / 2;
+      visibleShape = <ellipse {...commonProps} cx={cx} cy={cy} rx={rx} ry={ry} />;
+      hitShape = <ellipse cx={cx} cy={cy} fill="none" onPointerDown={selectAnnotation} rx={rx} ry={ry} stroke="transparent" strokeWidth="22" />;
+    } else {
+      visibleShape = (
+        <line
+          {...commonProps}
+          markerEnd={annotation.type === 'arrow' ? `url(#${markerId})` : undefined}
+          x1={startX}
+          x2={endX}
+          y1={startY}
+          y2={endY}
+        />
+      );
+      hitShape = <line onPointerDown={selectAnnotation} stroke="transparent" strokeWidth="22" x1={startX} x2={endX} y1={startY} y2={endY} />;
+    }
+
     return (
-      <svg
-        key={action.id}
-        viewBox="0 0 100 100"
-        preserveAspectRatio="none"
-        style={{
-          height: '100%',
-          inset: 0,
-          overflow: 'visible',
-          pointerEvents: activeTool === 'select' ? 'auto' : 'none',
-          position: 'absolute',
-          width: '100%',
-          zIndex: isSelected ? 7 : 5
-        }}
-      >
+      <g className={selected ? 'selected' : ''} key={annotation.id}>
         <defs>
-          <marker id={markerId} markerHeight="6" markerWidth="8" orient="auto" refX="7" refY="3">
-            <path d="M0,0 L8,3 L0,6 Z" fill={config.color} />
+          <marker id={markerId} markerHeight="9" markerWidth="11" orient="auto" refX="9" refY="4.5">
+            <path d="M0,0 L11,4.5 L0,9 Z" fill={annotation.color} />
           </marker>
         </defs>
-        {isPoint ? (
-          <circle
-            cx={action.start.x}
-            cy={action.start.y}
-            fill={`${config.color}33`}
-            onPointerDown={selectAction}
-            pointerEvents={activeTool === 'select' ? 'all' : 'none'}
-            r={isSelected ? 3.2 : 2.6}
-            stroke={config.color}
-            strokeWidth={isSelected ? 0.9 : 0.65}
-          />
-        ) : (
-          <>
-            <polyline
-              fill="none"
-              onPointerDown={selectAction}
-              pointerEvents={activeTool === 'select' ? 'stroke' : 'none'}
-              points={pointString}
-              stroke="transparent"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="14"
-              vectorEffect="non-scaling-stroke"
-            />
-            {isSelected && (
-              <polyline
-                fill="none"
-                points={pointString}
-                stroke="#ffffff"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={(strokeWidth / 2) + 2}
-                opacity="0.55"
-                vectorEffect="non-scaling-stroke"
-              />
-            )}
-            <polyline
-              fill="none"
-              markerEnd={action.type === 'pen' || action.type === 'var' ? undefined : `url(#${markerId})`}
-              onPointerDown={selectAction}
-              pointerEvents={activeTool === 'select' ? 'stroke' : 'none'}
-              points={pointString}
-              stroke={config.color}
-              strokeDasharray={isDashed ? '2 2' : undefined}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={strokeWidth / 2}
-              vectorEffect="non-scaling-stroke"
-            />
-          </>
-        )}
-      </svg>
+        {selected && React.cloneElement(visibleShape, {
+          markerEnd: undefined,
+          opacity: 0.8,
+          stroke: annotation.color === '#ffffff' ? '#111827' : '#ffffff',
+          strokeDasharray: '5 7',
+          strokeWidth: annotation.width + 5
+        })}
+        {visibleShape}
+        {!isDraft && activeTool === 'select' && hitShape}
+      </g>
     );
   };
 
-  const renderDraftPath = () => {
-    if (!draftPath.length) return null;
-    const config = toolConfig[activeTool] || toolConfig.pen;
-    return (
-      <svg
-        viewBox="0 0 100 100"
-        preserveAspectRatio="none"
-        style={{ height: '100%', inset: 0, pointerEvents: 'none', position: 'absolute', width: '100%', zIndex: 12 }}
-      >
-        <polyline
-          fill="none"
-          points={draftPath.map((point) => `${point.x},${point.y}`).join(' ')}
-          stroke={config.color}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth="3"
-          vectorEffect="non-scaling-stroke"
-        />
-      </svg>
-    );
-  };
-
-  const renderPlayer = (player) => {
-    const current = simulationPhase === 'target' ? player.target : player.base;
-    const dx = player.target.x - player.base.x;
-    const dy = player.target.y - player.base.y;
-    const hasMovement = Math.abs(dx) > 1 || Math.abs(dy) > 1;
-    const length = Math.max(1, Math.sqrt((dx * dx) + (dy * dy)));
-    const angle = Math.atan2(dy, dx) * (180 / Math.PI);
-    const color = player.team === 'home' ? '#2563eb' : '#ef4444';
-
-    return (
-      <React.Fragment key={player.id}>
-        {hasMovement && (
-          <span
-            className="football-movement-line"
-            style={{
-              background: `${color}aa`,
-              left: `${player.base.x}%`,
-              top: `${player.base.y}%`,
-              transform: `rotate(${angle}deg)`,
-              width: `${length}%`
-            }}
-          />
-        )}
-        <button
-          className={`football-player ${player.team} ${selectedPlayerId === player.id ? 'selected' : ''}`}
-          onPointerDown={(event) => handlePlayerPointerDown(event, player.id)}
-          style={{
-            cursor: activeTool === 'select' ? 'grab' : 'default',
-            left: `${current.x}%`,
-            pointerEvents: activeTool === 'select' ? 'auto' : 'none',
-            top: `${current.y}%`,
-            transition: draggingPlayerId === player.id ? 'none' : undefined
-          }}
-          title={`${player.name}, ${player.role}`}
-        >
-          <span>{player.number}</span>
-          <span>{player.role}</span>
-        </button>
-      </React.Fragment>
-    );
-  };
-
-  const stageEvents = sourceMode === 'board'
-    ? filteredEvents
-    : filteredEvents.filter((event) => selectedEventId === event.id || Math.abs(event.time - currentTime) <= 5);
-
-  const renderEventMarker = (event) => {
-    const config = eventTypes[event.type] || eventTypes.shot;
-    const Icon = config.icon;
-    return (
-      <button
-        className={`football-event-marker ${selectedEventId === event.id ? 'selected' : ''}`}
-        key={event.id}
-        onPointerDown={(pointerEvent) => {
-          pointerEvent.stopPropagation();
-          openEvent(event);
-        }}
-        style={{
-          color: config.color,
-          left: `${event.point?.x ?? 50}%`,
-          top: `${event.point?.y ?? 50}%`
-        }}
-        title={`${config.label}, ${event.minute}'`}
-      >
-        <Icon size={12} strokeWidth={3} />
-      </button>
-    );
-  };
-
-  const renderAnalysisTab = () => {
-    const rows = [
-      ['Shots', homeStats.shots, awayStats.shots],
-      ['On target', homeStats.onTarget, awayStats.onTarget],
-      ['Pass completion', homeStats.passCompletion, awayStats.passCompletion, '%'],
-      ['Recoveries', homeStats.recoveries, awayStats.recoveries],
-      ['Fouls', homeStats.fouls, awayStats.fouls]
-    ];
-
-    return (
-      <>
-        <section className="football-panel-section">
-          <div className="football-panel-heading">
-            <h2><BarChart3 size={15} /> Match comparison</h2>
-            <span>{events.length} events</span>
-          </div>
-          <div className="football-stat-list">
-            {rows.map(([label, homeValue, awayValue, suffix = '']) => {
-              const total = Number(homeValue) + Number(awayValue);
-              const homeWidth = total ? (Number(homeValue) / total) * 100 : 0;
-              const awayWidth = total ? (Number(awayValue) / total) * 100 : 0;
-              return (
-                <div className="football-stat-row" key={label}>
-                  <strong>{homeValue}{suffix}</strong>
-                  <div>
-                    <div className="football-stat-copy">{label}</div>
-                    <div className="football-stat-bars">
-                      <div className="football-stat-bar"><div className="football-stat-fill" style={{ width: `${homeWidth}%` }} /></div>
-                      <div className="football-stat-bar"><div className="football-stat-fill" style={{ width: `${awayWidth}%` }} /></div>
-                    </div>
-                  </div>
-                  <strong>{awayValue}{suffix}</strong>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-
-        <section className="football-panel-section">
-          <div className="football-panel-heading">
-            <h2><Activity size={15} /> Match read</h2>
-          </div>
-          <div className="football-insight-list">
-            {insights.map((insight) => (
-              <div className="football-insight" key={insight}>
-                <Check size={14} />
-                <span>{insight}</span>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="football-panel-section">
-          <div className="football-panel-heading">
-            <h2><FileText size={15} /> Match details</h2>
-          </div>
-          <div className="football-field-grid">
-            <label className="football-field">
-              Analysis title
-              <input value={match.title} onChange={(event) => updateMatch({ title: event.target.value })} />
-            </label>
-            <label className="football-field">
-              Competition
-              <input value={match.competition} onChange={(event) => updateMatch({ competition: event.target.value })} />
-            </label>
-            <label className="football-field">
-              Match date
-              <input type="date" value={match.date} onChange={(event) => updateMatch({ date: event.target.value })} />
-            </label>
-            <label className="football-field">
-              Period
-              <select value={match.period} onChange={(event) => updateMatch({ period: event.target.value })}>
-                <option>Pre-match</option>
-                <option>First half</option>
-                <option>Half-time</option>
-                <option>Second half</option>
-                <option>Extra time</option>
-                <option>Full-time</option>
-              </select>
-            </label>
-          </div>
-          <div className="football-inline-actions">
-            <button className="football-button" onClick={copyReport}><ClipboardCopy size={14} /> Copy report</button>
-            <button className="football-button danger" onClick={resetAnalysis}><RefreshCw size={14} /> New</button>
-          </div>
-        </section>
-      </>
-    );
-  };
-
-  const renderEventsTab = () => {
-    const availablePlayers = players.filter((player) => player.team === eventDraft.team);
-    return (
-      <>
-        <section className="football-panel-section">
-          <div className="football-panel-heading">
-            <h2><ListPlus size={15} /> Tag event</h2>
-            <span>{eventPoint ? `${Math.round(eventPoint.x)}, ${Math.round(eventPoint.y)}` : formatTime(currentTime)}</span>
-          </div>
-          <div className="football-event-types">
-            {Object.entries(eventTypes).map(([type, config]) => {
-              const Icon = config.icon;
-              return (
-                <button
-                  className={`football-event-chip ${eventDraft.type === type ? 'active' : ''}`}
-                  key={type}
-                  onClick={() => chooseEventType(type)}
-                >
-                  <Icon size={15} />
-                  {config.label}
-                </button>
-              );
-            })}
-          </div>
-          <div className="football-formation-phase">
-            <button
-              className={`football-segment ${eventDraft.team === 'home' ? 'active' : ''}`}
-              onClick={() => setEventDraft((previous) => ({ ...previous, team: 'home', playerId: '' }))}
-            >
-              {match.homeName}
-            </button>
-            <button
-              className={`football-segment ${eventDraft.team === 'away' ? 'active' : ''}`}
-              onClick={() => setEventDraft((previous) => ({ ...previous, team: 'away', playerId: '' }))}
-            >
-              {match.awayName}
-            </button>
-          </div>
-          <div className="football-field-grid" style={{ marginTop: 9 }}>
-            <label className="football-field">
-              Player
-              <select value={eventDraft.playerId} onChange={(event) => setEventDraft((previous) => ({ ...previous, playerId: event.target.value }))}>
-                <option value="">Unassigned</option>
-                {availablePlayers.map((player) => (
-                  <option key={player.id} value={player.id}>{player.number}. {player.name} ({player.role})</option>
-                ))}
-              </select>
-            </label>
-            <label className="football-field">
-              Outcome
-              <select value={eventDraft.outcome} onChange={(event) => setEventDraft((previous) => ({ ...previous, outcome: event.target.value }))}>
-                {eventTypes[eventDraft.type].outcomes.map((outcome) => <option key={outcome}>{outcome}</option>)}
-              </select>
-            </label>
-            <label className="football-field">
-              Minute
-              <input
-                min="1"
-                onChange={(event) => setEventDraft((previous) => ({ ...previous, minute: event.target.value }))}
-                type="number"
-                value={eventDraft.minute}
-              />
-            </label>
-            <label className="football-field">
-              Position
-              <input
-                readOnly
-                value={eventPoint ? `${Math.round(eventPoint.x)}%, ${Math.round(eventPoint.y)}%` : 'Center'}
-              />
-            </label>
-          </div>
-          <label className="football-field" style={{ marginTop: 8 }}>
-            Note
-            <textarea value={eventDraft.note} onChange={(event) => setEventDraft((previous) => ({ ...previous, note: event.target.value }))} />
-          </label>
-          <div className="football-inline-actions">
-            <button className="football-button primary" onClick={addMatchEvent}><Plus size={14} /> Add event</button>
-            <button className="football-button" onClick={activateEventTool}><Map size={14} /> Set position</button>
-          </div>
-        </section>
-
-        <section className="football-panel-section">
-          <div className="football-panel-heading">
-            <h2><Clock3 size={15} /> Event log</h2>
-            <span>{filteredEvents.length}</span>
-          </div>
-          <div className="football-filter-row">
-            <select aria-label="Filter events by team" value={eventFilterTeam} onChange={(event) => setEventFilterTeam(event.target.value)}>
-              <option value="all">Both teams</option>
-              <option value="home">{match.homeName}</option>
-              <option value="away">{match.awayName}</option>
-            </select>
-            <select aria-label="Filter events by type" value={eventFilterType} onChange={(event) => setEventFilterType(event.target.value)}>
-              <option value="all">All events</option>
-              {Object.entries(eventTypes).map(([type, config]) => <option key={type} value={type}>{config.label}</option>)}
-            </select>
-          </div>
-          <div className="football-event-list">
-            {!filteredEvents.length && <div className="football-empty-state">No events in this view.</div>}
-            {filteredEvents.map((event) => {
-              const config = eventTypes[event.type] || eventTypes.shot;
-              const Icon = config.icon;
-              return (
-                <button
-                  className={`football-event-row ${selectedEventId === event.id ? 'selected' : ''}`}
-                  key={event.id}
-                  onClick={() => openEvent(event)}
-                  style={{ borderLeftColor: event.team === 'home' ? '#2563eb' : '#ef4444' }}
-                >
-                  <span className="football-event-title">
-                    <Icon color={config.color} size={13} />
-                    <strong>{event.playerName || (event.team === 'home' ? match.homeName : match.awayName)} - {config.label}</strong>
-                  </span>
-                  <span className="football-event-minute">{event.minute}'</span>
-                  <span className="football-event-meta">{event.outcome} | {formatTime(event.time)}</span>
-                  {event.note && <span className="football-event-note">{event.note}</span>}
-                </button>
-              );
-            })}
-          </div>
-          {selectedEvent && (
-            <button className="football-button danger" onClick={deleteSelectedEvent} style={{ marginTop: 10, width: '100%' }}>
-              <Trash2 size={14} /> Delete selected event
-            </button>
-          )}
-        </section>
-      </>
-    );
-  };
-
-  const renderTacticsTab = () => (
-    <>
-      <section className="football-panel-section">
-        <div className="football-panel-heading">
-          <h2><Layers3 size={15} /> Visible layers</h2>
-        </div>
-        <div className="football-setting-list">
-          <SettingToggle checked={showTacticalLayers} label="Tactical drawings" onChange={setShowTacticalLayers} />
-          <SettingToggle checked={showFormations} label="Formation players" onChange={setShowFormations} />
-          <SettingToggle checked={showEventMarkers} label="Event markers" onChange={setShowEventMarkers} />
-          <SettingToggle checked={showPitchGuide} label="Pitch guide on footage" onChange={setShowPitchGuide} />
-        </div>
-      </section>
-
-      <section className="football-panel-section">
-        <div className="football-panel-heading">
-          <h2><Users size={15} /> Team shape</h2>
-        </div>
-        <div className="football-formation-switch">
-          <FormationPicker label={match.homeName} value={homeFormation} onChange={(value) => applyFormation('home', value)} />
-          <FormationPicker label={match.awayName} value={awayFormation} onChange={(value) => applyFormation('away', value)} />
-        </div>
-        <div className="football-formation-phase">
-          <button className={`football-segment ${simulationPhase === 'base' ? 'active' : ''}`} onClick={() => setSimulationPhase('base')}>Base shape</button>
-          <button className={`football-segment ${simulationPhase === 'target' ? 'active' : ''}`} onClick={() => setSimulationPhase('target')}>Movement</button>
-        </div>
-        <div className="football-inline-actions">
-          <button className="football-button" onClick={resetPlayerShape}><RefreshCw size={14} /> Reset movement</button>
-        </div>
-        <div className="football-roster-summary">
-          <span>{match.homeName}: {homeFormation}</span>
-          <span>{match.awayName}: {awayFormation}</span>
-        </div>
-      </section>
-
-      <section className="football-panel-section">
-        <div className="football-panel-heading">
-          <h2><Footprints size={15} /> Player inspector</h2>
-          <span>{selectedPlayer ? `#${selectedPlayer.number}` : 'None'}</span>
-        </div>
-        {selectedPlayer ? (
-          <div className="football-field-grid">
-            <label className="football-field">
-              Name
-              <input value={selectedPlayer.name} onChange={(event) => updateSelectedPlayer({ name: event.target.value })} />
-            </label>
-            <label className="football-field">
-              Number
-              <input min="1" max="99" type="number" value={selectedPlayer.number} onChange={(event) => updateSelectedPlayer({ number: Number(event.target.value) || 1 })} />
-            </label>
-            <label className="football-field">
-              Role
-              <input value={selectedPlayer.role} onChange={(event) => updateSelectedPlayer({ role: event.target.value.toUpperCase().slice(0, 7) })} />
-            </label>
-            <label className="football-field">
-              Team
-              <input readOnly value={selectedPlayer.team === 'home' ? match.homeName : match.awayName} />
-            </label>
-          </div>
-        ) : (
-          <div className="football-empty-state">No player selected.</div>
-        )}
-      </section>
-
-      <section className="football-panel-section">
-        <div className="football-panel-heading">
-          <h2><Route size={15} /> Tactical layers</h2>
-          <span>{actions.length}</span>
-        </div>
-        <div className="football-event-list">
-          {!actions.length && <div className="football-empty-state">No tactical layers.</div>}
-          {actions.map((action, index) => (
-            <button
-              className={`football-event-row ${selectedActionId === action.id ? 'selected' : ''}`}
-              key={action.id}
-              onClick={() => {
-                setSelectedActionId(action.id);
-                setSelectedPlayerId(null);
-                seekTo(action.time);
-              }}
-              style={{ borderLeftColor: action.color || toolConfig[action.type]?.color }}
-            >
-              <span className="football-event-title"><strong>{index + 1}. {action.label}</strong></span>
-              <span className="football-event-minute">{formatTime(action.time)}</span>
-              <span className="football-event-meta">{toolConfig[action.type]?.label || action.type} | {action.duration || 3}s</span>
-            </button>
-          ))}
-        </div>
-      </section>
-
-      {selectedAction && (
-        <section className="football-panel-section">
-          <div className="football-panel-heading">
-            <h2><Pencil size={15} /> Layer inspector</h2>
-          </div>
-          <label className="football-field">
-            Label
-            <input value={selectedAction.label} onChange={(event) => updateSelectedAction({ label: event.target.value })} />
-          </label>
-          <div className="football-field-grid" style={{ marginTop: 8 }}>
-            <label className="football-field">
-              Start
-              <input min="0" step="0.1" type="number" value={selectedAction.time} onChange={(event) => updateSelectedAction({ time: Number(event.target.value) || 0 })} />
-            </label>
-            <label className="football-field">
-              Duration
-              <input min="0.3" step="0.1" type="number" value={selectedAction.duration || 3} onChange={(event) => updateSelectedAction({ duration: Number(event.target.value) || 0.3 })} />
-            </label>
-          </div>
-          <div className="football-color-row" style={{ marginTop: 8 }}>
-            <label className="football-field">
-              Color
-              <input type="color" value={selectedAction.color || '#00a878'} onChange={(event) => updateSelectedAction({ color: event.target.value })} />
-            </label>
-            <label className="football-field">
-              Width
-              <input min="2" max="12" type="number" value={selectedAction.strokeWidth || 5} onChange={(event) => updateSelectedAction({ strokeWidth: Number(event.target.value) || 2 })} />
-            </label>
-          </div>
-          <button className="football-button danger" onClick={deleteSelectedAction} style={{ marginTop: 10, width: '100%' }}>
-            <Trash2 size={14} /> Delete layer
-          </button>
-        </section>
-      )}
-    </>
-  );
-
-  const renderCaptureTab = () => (
-    <>
-      <section className="football-panel-section">
-        <div className="football-panel-heading">
-          <h2><MonitorUp size={15} /> Reaction capture</h2>
-          <span>{isReactionRecording ? 'Live' : 'Ready'}</span>
-        </div>
-        <label className="football-field">
-          Preset
-          <select
-            disabled={isReactionRecording}
-            value={reactionPresetId}
-            onChange={(event) => {
-              const preset = reactionPresets[event.target.value];
-              setReactionPresetId(event.target.value);
-              setWebcamEnabled(preset.webcamSize > 0);
-              setMicEnabled(preset.mic);
-              setSystemAudioEnabled(preset.systemAudio);
-            }}
-          >
-            {Object.entries(reactionPresets).map(([id, preset]) => <option key={id} value={id}>{preset.label}</option>)}
-          </select>
-        </label>
-        <div className="football-setting-list" style={{ marginTop: 9 }}>
-          <SettingToggle checked={webcamEnabled} icon={Camera} label="Camera overlay" onChange={setWebcamEnabled} />
-          <SettingToggle checked={micEnabled} icon={Mic} label="Microphone" onChange={setMicEnabled} />
-          <SettingToggle checked={systemAudioEnabled} icon={Volume2} label="Screen audio" onChange={setSystemAudioEnabled} />
-        </div>
-        <button
-          className={`football-button ${isReactionRecording ? 'recording' : 'primary'}`}
-          onClick={isReactionRecording ? stopReactionRecording : startReactionRecording}
-          style={{ marginTop: 10, width: '100%' }}
-        >
-          {isReactionRecording ? <Square size={14} /> : <Video size={14} />}
-          {isReactionRecording ? 'Stop recording' : 'Record analysis'}
-        </button>
-        <div className="football-capture-status">{recordingStatus}</div>
-        {savedRecordingPath && <div className="football-capture-status" style={{ wordBreak: 'break-all' }}>{savedRecordingPath}</div>}
-      </section>
-
-      {recordedReactionUrl && (
-        <section className="football-panel-section">
-          <div className="football-panel-heading">
-            <h2><Play size={15} /> Latest recording</h2>
-          </div>
-          <video className="football-recording-preview" controls src={recordedReactionUrl} />
-          <button className="football-button" onClick={downloadRecording} style={{ marginTop: 9, width: '100%' }}>
-            <Download size={14} /> Download WebM
-          </button>
-        </section>
-      )}
-
-      <section className="football-panel-section">
-        <div className="football-panel-heading">
-          <h2><Clock3 size={15} /> Speed segments</h2>
-          <span>{slowSegments.length}</span>
-        </div>
-        <button className="football-button" disabled={!videoUrl} onClick={addSpeedSegment} style={{ width: '100%' }}>
-          <Plus size={14} /> Add at playhead
-        </button>
-        <div className="football-event-list" style={{ marginTop: 9 }}>
-          {slowSegments.map((segment) => (
-            <div className="football-event-row" key={segment.id} style={{ borderLeftColor: '#172033', cursor: 'default' }}>
-              <span className="football-event-title"><strong>{segment.speed}x playback</strong></span>
-              <button className="football-plain-button" onClick={() => setSlowSegments((previous) => previous.filter((item) => item.id !== segment.id))}>
-                <Trash2 size={12} />
-              </button>
-              <span className="football-event-meta">{formatTime(segment.start)} - {formatTime(segment.end)}</span>
-            </div>
-          ))}
-        </div>
-      </section>
-    </>
-  );
-
-  const inspectorTabs = [
-    ['analysis', 'Analysis', BarChart3],
-    ['events', 'Events', ListPlus],
-    ['tactics', 'Tactics', Layers3],
-    ['capture', 'Capture', Video]
-  ];
+  const hasRecording = Boolean(recordedReactionUrl);
+  const cameraWidth = `${CAMERA_SIZES[cameraSize] * 100}%`;
 
   return (
-    <div className={`football-lab ${isFullscreen ? 'is-fullscreen' : ''}`} ref={labRef}>
-      <input accept="video/*" onChange={handleUpload} ref={fileInputRef} style={{ display: 'none' }} type="file" />
+    <div className="football-lab reaction-studio responsive-page">
+      <input accept="video/*" onChange={handleUpload} ref={fileInputRef} type="file" />
+      <canvas aria-hidden="true" className="reaction-record-canvas" ref={recordCanvasRef} />
 
-      <header className="football-header">
-        <div className="football-header-copy">
-          <h1>Football Lab</h1>
-          <div className="football-header-meta">
-            {match.title} | {match.competition} | {lastSavedAt ? 'Saved locally' : 'Local session'}
-          </div>
+      <header className="reaction-header">
+        <div className="reaction-header-copy">
+          <span className="reaction-eyebrow">Football Lab</span>
+          <h1>Football Reaction Studio</h1>
+          <p>{videoUrl ? videoName : 'Create a post-match video breakdown'}</p>
         </div>
-        <div className="football-header-actions">
-          <button className="football-button" onClick={() => fileInputRef.current?.click()}>
-            <Upload size={15} /><span>Upload footage</span>
+        <div className="reaction-header-actions">
+          <button className="reaction-button" disabled={isRecording} onClick={() => fileInputRef.current?.click()}>
+            <Upload size={16} /><span>{videoUrl ? 'Replace clip' : 'Upload clip'}</span>
           </button>
-          <button className="football-button" onClick={toggleFullscreen}>
-            <Maximize2 size={15} /><span>Fullscreen</span>
+          <button className="reaction-button" onClick={toggleFullscreen}>
+            <Maximize2 size={16} /><span>Fullscreen</span>
           </button>
-          <button className="football-button primary" onClick={exportAnalysis}>
-            <Download size={15} /><span>Export analysis</span>
+          <button
+            className={`reaction-button primary ${isRecording ? 'recording' : ''}`}
+            disabled={!videoUrl}
+            onClick={isRecording ? stopReactionRecording : startReactionRecording}
+          >
+            {isRecording ? <Square size={15} fill="currentColor" /> : <span className="reaction-record-dot" />}
+            <span>{isRecording ? 'Stop reaction' : 'Record reaction'}</span>
           </button>
         </div>
       </header>
 
-      <section className="football-scoreboard">
-        <div className="football-score-team">
-          <span className="football-team-mark">H</span>
-          <label style={{ minWidth: 0, width: '100%' }}>
-            <input aria-label="Home team name" className="football-team-input" value={match.homeName} onChange={(event) => updateMatch({ homeName: event.target.value })} />
-            <span className="football-team-label">{homeFormation}</span>
-          </label>
-        </div>
-        <div className="football-score-center">
-          <input
-            aria-label={`${match.homeName} score`}
-            className="football-score-input"
-            min="0"
-            type="number"
-            value={match.homeScore}
-            onChange={(event) => updateMatch({ homeScore: Math.max(0, Number(event.target.value) || 0) })}
-          />
-          <span className="football-score-divider">-</span>
-          <input
-            aria-label={`${match.awayName} score`}
-            className="football-score-input"
-            min="0"
-            type="number"
-            value={match.awayScore}
-            onChange={(event) => updateMatch({ awayScore: Math.max(0, Number(event.target.value) || 0) })}
-          />
-        </div>
-        <div className="football-score-team away">
-          <span className="football-team-mark">A</span>
-          <label style={{ minWidth: 0, width: '100%' }}>
-            <input aria-label="Away team name" className="football-team-input" value={match.awayName} onChange={(event) => updateMatch({ awayName: event.target.value })} />
-            <span className="football-team-label">{awayFormation}</span>
-          </label>
-        </div>
-        <div className="football-match-clock">
-          <Clock3 size={18} />
-          <strong>{match.period}</strong>
-          <span>{formatTime(currentTime)} | {events.length} tagged events</span>
-        </div>
-      </section>
-
-      <div className="football-workspace">
-        <main className="football-review">
-          <div className="football-review-bar">
-            <div className="football-view-switch">
-              <button
-                className={`football-segment ${sourceMode === 'video' ? 'active' : ''}`}
-                onClick={() => {
-                  setSourceMode('video');
-                  setInspectorTab(videoUrl ? 'events' : 'analysis');
-                  if (videoUrl) setShowFormations(false);
-                }}
-              >
-                <Video size={13} /> Footage
-              </button>
-              <button
-                className={`football-segment ${sourceMode === 'board' ? 'active' : ''}`}
-                onClick={() => {
-                  setSourceMode('board');
-                  setInspectorTab('tactics');
-                  setShowFormations(true);
-                }}
-              >
-                <Map size={13} /> Tactics board
-              </button>
-            </div>
-            <div className="football-stage-meta">
-              <Video size={13} />
-              <span>{sourceMode === 'video' ? videoName : `${match.homeName} vs ${match.awayName}`}</span>
-            </div>
-            <div className="football-layer-actions">
-              <button className="football-icon-button" onClick={() => setShowTacticalLayers((value) => !value)} title={showTacticalLayers ? 'Hide tactical layers' : 'Show tactical layers'}>
-                {showTacticalLayers ? <Eye size={15} /> : <EyeOff size={15} />}
-              </button>
-              <button className="football-icon-button" onClick={toggleFullscreen} title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
-                {isFullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
-              </button>
-            </div>
-          </div>
-
-          <div className="football-tool-strip">
-            <div className="football-tool-scroll">
-              {Object.entries(toolConfig).map(([toolId, tool]) => {
+      <div className="reaction-workspace">
+        <main className="reaction-stage-shell" ref={stageShellRef}>
+          <div className="reaction-toolbar">
+            <div className="reaction-tool-group" aria-label="Drawing tools">
+              {Object.entries(TOOLS).map(([toolId, tool]) => {
                 const Icon = tool.icon;
                 return (
                   <button
-                    className={`football-tool ${activeTool === toolId ? 'active' : ''}`}
+                    aria-label={tool.label}
+                    className={`reaction-icon-button ${activeTool === toolId ? 'active' : ''}`}
+                    disabled={!videoUrl}
                     key={toolId}
                     onClick={() => {
                       setActiveTool(toolId);
-                      setDraftStart(null);
-                      setDraftPath([]);
+                      setDraftAnnotation(null);
                     }}
                     title={tool.label}
                   >
-                    <Icon size={14} />
-                    <span>{tool.label}</span>
+                    <Icon size={18} />
                   </button>
                 );
               })}
-              <span className="football-tool-divider" />
-              <button className={`football-tool event-tool ${activeTool === 'event' ? 'active' : ''}`} onClick={activateEventTool} title="Tag match event">
-                <ListPlus size={14} /><span>Tag event</span>
-              </button>
             </div>
-            <div className="football-tool-actions">
-              <button className="football-icon-button" disabled={!actions.length} onClick={undoLastAction} title="Undo last layer"><Undo2 size={15} /></button>
+
+            <span className="reaction-toolbar-divider" />
+
+            <div className="reaction-color-group" aria-label="Drawing colors">
+              {COLORS.map((color) => (
+                <button
+                  aria-label={`Use ${color} drawing color`}
+                  className={`reaction-color-swatch ${activeColor === color ? 'active' : ''}`}
+                  key={color}
+                  onClick={() => setActiveColor(color)}
+                  style={{ '--swatch-color': color }}
+                  title={color}
+                />
+              ))}
+            </div>
+
+            <label className="reaction-width-control" title="Drawing width">
+              <span>Width</span>
+              <input max="12" min="3" onChange={(event) => setStrokeWidth(Number(event.target.value))} type="range" value={strokeWidth} />
+            </label>
+
+            <div className="reaction-toolbar-actions">
+              <button className="reaction-icon-button" disabled={!annotations.length} onClick={undoAnnotation} title="Undo last drawing"><Undo2 size={17} /></button>
               <button
-                className="football-icon-button"
-                disabled={!actions.length}
+                className="reaction-icon-button"
+                disabled={!selectedAnnotationId}
                 onClick={() => {
-                  setActions([]);
-                  setSelectedActionId(null);
-                  setStatus('Tactical layers cleared');
+                  setAnnotations((items) => items.filter((item) => item.id !== selectedAnnotationId));
+                  setSelectedAnnotationId(null);
                 }}
-                title="Clear tactical layers"
+                title="Delete selected drawing"
               >
-                <Eraser size={15} />
+                <Eraser size={17} />
               </button>
+              <button className="reaction-icon-button" disabled={!annotations.length} onClick={clearAnnotations} title="Clear all drawings"><Trash2 size={17} /></button>
+              <button className="reaction-icon-button fullscreen-control" onClick={toggleFullscreen} title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}><Expand size={17} /></button>
             </div>
           </div>
 
           <div
-            className={`football-stage ${activeTool !== 'select' ? 'is-drawing' : ''}`}
-            onPointerCancel={handleBoardPointerUp}
-            onPointerDown={handleBoardPointerDown}
-            onPointerMove={handleBoardPointerMove}
-            onPointerUp={handleBoardPointerUp}
+            className={`reaction-stage ${activeTool !== 'select' ? 'drawing' : ''}`}
+            onPointerCancel={handleStagePointerUp}
+            onPointerDown={handleStagePointerDown}
+            onPointerMove={handleStagePointerMove}
+            onPointerUp={handleStagePointerUp}
           >
-            {sourceMode === 'board' ? (
-              <div className="football-board">
-                <PitchLines />
-              </div>
-            ) : videoUrl ? (
+            {videoUrl ? (
               <video
-                className="football-match-video"
-                onLoadedMetadata={(event) => setDuration(event.currentTarget.duration || 0)}
+                className="reaction-match-video"
+                muted={!clipAudioEnabled}
+                onEnded={() => setIsPlaying(false)}
+                onDurationChange={(event) => syncVideoDuration(event.currentTarget)}
+                onLoadedMetadata={(event) => {
+                  syncVideoDuration(event.currentTarget);
+                  event.currentTarget.playbackRate = playbackSpeed;
+                }}
                 onPause={() => setIsPlaying(false)}
                 onPlay={() => setIsPlaying(true)}
-                onTimeUpdate={handleTimeUpdate}
+                onTimeUpdate={(event) => {
+                  setCurrentTime(event.currentTarget.currentTime || 0);
+                  syncVideoDuration(event.currentTarget);
+                }}
+                playsInline
                 ref={videoRef}
                 src={videoUrl}
-                style={{
-                  transform: `scale(${zoomLevel})`,
-                  transformOrigin: `${zoomAnchor.x}% ${zoomAnchor.y}%`,
-                  transition: 'transform 0.16s ease'
-                }}
+                style={{ objectFit: fitMode, transform: `scale(${zoomLevel})` }}
               />
             ) : (
-              <div className="football-stage-empty">
-                <Video size={34} />
-                <strong>No footage loaded</strong>
-                <button className="football-button" onClick={(event) => {
-                  event.stopPropagation();
-                  fileInputRef.current?.click();
-                }}>
-                  <Upload size={14} /> Upload footage
+              <div className="reaction-empty-state">
+                <span className="reaction-empty-icon"><Film size={34} /></span>
+                <strong>Upload your match clip</strong>
+                <p>MP4, WebM, MOV, or any browser-supported video</p>
+                <button className="reaction-button light" onClick={() => fileInputRef.current?.click()}>
+                  <Upload size={16} /> Choose footage
                 </button>
               </div>
             )}
 
-            {sourceMode === 'video' && showPitchGuide && <PitchLines />}
-            {showFormations && players.map(renderPlayer)}
-            {showTacticalLayers && actions.map(renderAction)}
-            {showTacticalLayers && renderDraftPath()}
-            {showEventMarkers && stageEvents.map(renderEventMarker)}
-            {eventPoint && <span className="football-event-point" style={{ left: `${eventPoint.x}%`, top: `${eventPoint.y}%` }} />}
+            <svg
+              aria-label="Video annotations"
+              className="reaction-annotation-layer"
+              preserveAspectRatio="none"
+              style={{ pointerEvents: activeTool === 'select' ? 'auto' : 'none' }}
+              viewBox={`0 0 ${STAGE_WIDTH} ${STAGE_HEIGHT}`}
+            >
+              {annotations.map((annotation) => renderAnnotation(annotation))}
+              {renderAnnotation(draftAnnotation, true)}
+            </svg>
 
-            {webcamEnabled && reactionPreset.webcamSize > 0 && (
-              <div className="football-camera-preview" style={{ width: `${reactionPreset.webcamSize * 100}%` }}>
-                <video autoPlay muted playsInline ref={webcamPreviewRef} />
+            {cameraEnabled && (
+              <div className={`reaction-camera-frame ${cameraPosition}`} style={{ width: cameraWidth }}>
+                <video autoPlay muted playsInline ref={cameraVideoRef} />
+                <span><Camera size={12} /> Creator</span>
               </div>
             )}
-            {isReactionRecording && (
-              <div className="football-live-badge">
-                <span className="football-live-dot" /> Recording
-              </div>
+
+            {isRecording && (
+              <div className="reaction-live-badge"><span /> REC {formatTime(recordingSeconds, true)}</div>
             )}
           </div>
 
-          <div className="football-transport">
-            <div className="football-transport-group">
-              <button className="football-icon-button" disabled={!videoUrl || sourceMode !== 'video'} onClick={togglePlay} title={isPlaying ? 'Pause' : 'Play'}>
-                {isPlaying ? <Pause size={16} /> : <Play size={16} />}
+          <div className="reaction-transport">
+            <div className="reaction-playback-buttons">
+              <button className="reaction-icon-button" disabled={!videoUrl} onClick={() => skipBy(-5)} title="Back 5 seconds"><RotateCcw size={17} /></button>
+              <button className="reaction-play-button" disabled={!videoUrl} onClick={togglePlayback} title={isPlaying ? 'Pause' : 'Play'}>
+                {isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" />}
               </button>
-              <span className="football-timecode">{formatTime(currentTime)} / {formatTime(duration)}</span>
+              <button className="reaction-icon-button" disabled={!videoUrl} onClick={() => skipBy(5)} title="Forward 5 seconds"><Redo2 size={17} /></button>
             </div>
-            <div className="football-transport-group">
-              {[0.5, 1, 1.5, 2].map((speed) => (
-                <button
-                  className={`football-segment football-speed ${playbackSpeed === speed ? 'active' : ''}`}
-                  disabled={!videoUrl}
-                  key={speed}
-                  onClick={() => setVideoSpeed(speed)}
-                >
-                  {speed}x
-                </button>
-              ))}
-              <span className="football-tool-divider" />
-              <button className="football-icon-button" disabled={!videoUrl} onClick={() => setZoomLevel((value) => clamp(Number((value - 0.25).toFixed(2)), 1, 3))} title="Zoom out"><Minus size={15} /></button>
-              <span className="football-timecode">{zoomLevel.toFixed(2)}x</span>
-              <button className="football-icon-button" disabled={!videoUrl} onClick={() => setZoomLevel((value) => clamp(Number((value + 0.25).toFixed(2)), 1, 3))} title="Zoom in"><Plus size={15} /></button>
-            </div>
-          </div>
 
-          <div className="football-timeline">
+            <span className="reaction-timecode">{formatTime(currentTime)} / {formatTime(duration)}</span>
             <input
-              max={timelineDuration}
+              aria-label="Video timeline"
+              className="reaction-scrubber"
+              disabled={!videoUrl}
+              max={duration || 1}
               min="0"
               onChange={(event) => seekTo(event.target.value)}
               step="0.01"
               type="range"
-              value={clamp(currentTime, 0, timelineDuration)}
+              value={clamp(currentTime, 0, duration || 1)}
             />
-            <div className="football-timeline-ruler">
-              <span>{formatTime(currentTime)}</span>
-              <span>{videoUrl ? formatTime(duration) : '90:00'}</span>
-            </div>
-            <div className="football-timeline-track">
-              {actions.map((action) => (
-                <button
-                  className="football-timeline-item layer"
-                  key={action.id}
-                  onClick={() => {
-                    setSelectedActionId(action.id);
-                    setInspectorTab('tactics');
-                    seekTo(action.time);
-                  }}
-                  style={{
-                    background: action.color || toolConfig[action.type]?.color,
-                    left: `${(action.time / timelineDuration) * 100}%`,
-                    width: `${Math.max(0.8, ((action.duration || 3) / timelineDuration) * 100)}%`
-                  }}
-                  title={`${action.label} at ${formatTime(action.time)}`}
-                />
-              ))}
-              {events.map((event) => (
-                <button
-                  className="football-timeline-item event"
-                  key={event.id}
-                  onClick={() => openEvent(event)}
-                  style={{
-                    background: eventTypes[event.type]?.color || '#7c3aed',
-                    left: `${(event.time / timelineDuration) * 100}%`
-                  }}
-                  title={`${eventTypes[event.type]?.label || event.type} at ${event.minute}'`}
-                />
-              ))}
+
+            <select aria-label="Playback speed" className="reaction-select compact" disabled={!videoUrl} onChange={(event) => changePlaybackSpeed(event.target.value)} value={playbackSpeed}>
+              <option value="0.5">0.5x</option>
+              <option value="0.75">0.75x</option>
+              <option value="1">1x</option>
+              <option value="1.5">1.5x</option>
+              <option value="2">2x</option>
+            </select>
+
+            <div className="reaction-zoom-controls">
+              <button className="reaction-icon-button" disabled={!videoUrl || zoomLevel <= 1} onClick={() => setZoomLevel((value) => clamp(Number((value - 0.25).toFixed(2)), 1, 3))} title="Zoom out"><Minus size={16} /></button>
+              <span>{zoomLevel.toFixed(2)}x</span>
+              <button className="reaction-icon-button" disabled={!videoUrl || zoomLevel >= 3} onClick={() => setZoomLevel((value) => clamp(Number((value + 0.25).toFixed(2)), 1, 3))} title="Zoom in"><Plus size={16} /></button>
             </div>
           </div>
 
-          <div className="football-status-line">
-            <strong>{status}</strong>
-            <span>{actions.length} layers | {events.length} events | {lastSavedAt ? 'Autosaved' : 'Saving'}</span>
+          <div className="reaction-stage-status">
+            <span className={isRecording ? 'recording' : ''}>{recordingStatus}</span>
+            <span>{annotations.length} drawing{annotations.length === 1 ? '' : 's'}</span>
           </div>
         </main>
 
-        <aside className="football-inspector">
-          <div className="football-tabs">
-            {inspectorTabs.map(([tabId, label, Icon]) => (
-              <button
-                aria-label={`${label} inspector`}
-                className={`football-tab ${inspectorTab === tabId ? 'active' : ''}`}
-                key={tabId}
-                onClick={() => setInspectorTab(tabId)}
-                title={label}
-              >
-                <Icon size={15} />
-                {label}
+        <aside className="reaction-control-rail">
+          <section className="reaction-panel-section">
+            <div className="reaction-panel-heading">
+              <div><Camera size={17} /><h2>Creator</h2></div>
+              <span className={cameraEnabled ? 'ready' : ''}>{cameraEnabled ? 'Camera on' : 'Optional'}</span>
+            </div>
+            <div className="reaction-setting-list">
+              <SettingToggle checked={cameraEnabled} disabled={isRecording} icon={Video} label="Face camera" onChange={toggleCamera} />
+              <SettingToggle checked={micEnabled} disabled={isRecording} icon={Mic} label="Microphone" onChange={setMicEnabled} />
+              <SettingToggle checked={clipAudioEnabled} disabled={isRecording} icon={Volume2} label="Clip audio" onChange={setClipAudioEnabled} />
+            </div>
+
+            <div className={`reaction-camera-options ${cameraEnabled ? '' : 'disabled'}`}>
+              <div className="reaction-option-row">
+                <span>Face position</span>
+                <div className="reaction-position-control">
+                  {CAMERA_POSITIONS.map(([position, label]) => (
+                    <button
+                      aria-label={`Place camera ${position.replace('-', ' ')}`}
+                      className={cameraPosition === position ? 'active' : ''}
+                      disabled={!cameraEnabled || isRecording}
+                      key={position}
+                      onClick={() => setCameraPosition(position)}
+                      title={position.replace('-', ' ')}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="reaction-option-row">
+                <span>Face size</span>
+                <div className="reaction-segmented compact">
+                  {['small', 'medium', 'large'].map((size) => (
+                    <button className={cameraSize === size ? 'active' : ''} disabled={!cameraEnabled || isRecording} key={size} onClick={() => setCameraSize(size)}>
+                      {size[0].toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section className="reaction-panel-section">
+            <div className="reaction-panel-heading">
+              <div><Gauge size={17} /><h2>Output</h2></div>
+              <span>{recordingQuality}</span>
+            </div>
+            <label className="reaction-field">
+              <span>Recording quality</span>
+              <select className="reaction-select" disabled={isRecording} onChange={(event) => setRecordingQuality(event.target.value)} value={recordingQuality}>
+                <option value="1080p">1080p Full HD</option>
+                <option value="720p">720p performance</option>
+              </select>
+            </label>
+            <div className="reaction-option-row frame-fit-row">
+              <span>Clip fit</span>
+              <div className="reaction-segmented">
+                <button className={fitMode === 'contain' ? 'active' : ''} disabled={isRecording} onClick={() => setFitMode('contain')}>Fit</button>
+                <button className={fitMode === 'cover' ? 'active' : ''} disabled={isRecording} onClick={() => setFitMode('cover')}>Fill</button>
+              </div>
+            </div>
+          </section>
+
+          <section className="reaction-panel-section reaction-recording-panel">
+            <div className="reaction-panel-heading">
+              <div><span className={`reaction-status-light ${isRecording ? 'live' : hasRecording ? 'complete' : ''}`} /><h2>Recording</h2></div>
+              <span>{isRecording ? formatTime(recordingSeconds, true) : hasRecording ? 'Complete' : 'Ready'}</span>
+            </div>
+            <button
+              className={`reaction-record-button ${isRecording ? 'recording' : ''}`}
+              disabled={!videoUrl}
+              onClick={isRecording ? stopReactionRecording : startReactionRecording}
+            >
+              {isRecording ? <Square size={16} fill="currentColor" /> : <span />}
+              {isRecording ? 'Stop and save' : 'Start reaction'}
+            </button>
+            <p className="reaction-capture-status">{recordingStatus}</p>
+            {savedRecordingPath && <p className="reaction-saved-path" title={savedRecordingPath}><Check size={13} /> {savedRecordingPath}</p>}
+          </section>
+
+          {recordedReactionUrl && (
+            <section className="reaction-panel-section reaction-latest-output">
+              <div className="reaction-panel-heading">
+                <div><Play size={17} /><h2>Latest reaction</h2></div>
+              </div>
+              <video controls playsInline src={recordedReactionUrl} />
+              <button className="reaction-button download" onClick={downloadRecording}>
+                <Download size={16} /> Download video
               </button>
-            ))}
-          </div>
-          <div className="football-inspector-body">
-            {inspectorTab === 'analysis' && renderAnalysisTab()}
-            {inspectorTab === 'events' && renderEventsTab()}
-            {inspectorTab === 'tactics' && renderTacticsTab()}
-            {inspectorTab === 'capture' && renderCaptureTab()}
-          </div>
+            </section>
+          )}
         </aside>
       </div>
     </div>
-  );
-}
-
-function PitchLines() {
-  return (
-    <svg className="football-pitch-lines" viewBox="0 0 160 90" preserveAspectRatio="none" aria-hidden="true">
-      <rect x="6" y="6" width="148" height="78" fill="none" stroke="rgba(255,255,255,0.58)" strokeWidth="0.6" />
-      <line x1="80" y1="6" x2="80" y2="84" stroke="rgba(255,255,255,0.58)" strokeWidth="0.6" />
-      <ellipse cx="80" cy="45" rx="10" ry="10" fill="none" stroke="rgba(255,255,255,0.58)" strokeWidth="0.6" />
-      <circle cx="80" cy="45" r="0.8" fill="rgba(255,255,255,0.7)" />
-      <rect x="6" y="24" width="22" height="42" fill="none" stroke="rgba(255,255,255,0.58)" strokeWidth="0.6" />
-      <rect x="132" y="24" width="22" height="42" fill="none" stroke="rgba(255,255,255,0.58)" strokeWidth="0.6" />
-      <rect x="6" y="34" width="8" height="22" fill="none" stroke="rgba(255,255,255,0.58)" strokeWidth="0.6" />
-      <rect x="146" y="34" width="8" height="22" fill="none" stroke="rgba(255,255,255,0.58)" strokeWidth="0.6" />
-      <circle cx="21" cy="45" r="0.8" fill="rgba(255,255,255,0.7)" />
-      <circle cx="139" cy="45" r="0.8" fill="rgba(255,255,255,0.7)" />
-      <path d="M28 36 A10 10 0 0 1 28 54" fill="none" stroke="rgba(255,255,255,0.58)" strokeWidth="0.6" />
-      <path d="M132 36 A10 10 0 0 0 132 54" fill="none" stroke="rgba(255,255,255,0.58)" strokeWidth="0.6" />
-    </svg>
-  );
-}
-
-function FormationPicker({ label, value, onChange }) {
-  return (
-    <label className="football-field">
-      {label}
-      <select value={value} onChange={(event) => onChange(event.target.value)}>
-        {Object.keys(formations).map((formation) => (
-          <option key={formation} value={formation}>{formation}</option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
-function SettingToggle({ checked, icon: Icon, label, onChange }) {
-  return (
-    <label className="football-setting-row">
-      <span style={{ alignItems: 'center', display: 'flex', gap: 7 }}>
-        {Icon && <Icon size={14} />}
-        {label}
-      </span>
-      <input checked={checked} onChange={(event) => onChange(event.target.checked)} type="checkbox" />
-    </label>
   );
 }
