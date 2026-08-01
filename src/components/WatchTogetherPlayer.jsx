@@ -1,4 +1,5 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { ExternalLink, RefreshCw } from 'lucide-react';
 import { projectedWatchTime } from '../lib/watchTogether';
 
 const PLAYER_SYNC_INTERVAL = 4000;
@@ -17,12 +18,17 @@ export default function WatchTogetherPlayer({
   const playbackCallbackRef = useRef(onPlaybackChange);
   const errorCallbackRef = useRef(onPlayerError);
   const applyingSyncRef = useRef(false);
+  const [webReloadKey, setWebReloadKey] = useState(0);
 
   useEffect(() => {
     sessionRef.current = session;
     playbackCallbackRef.current = onPlaybackChange;
     errorCallbackRef.current = onPlayerError;
   }, [onPlaybackChange, onPlayerError, session]);
+
+  useEffect(() => {
+    setWebReloadKey(0);
+  }, [session?.sessionId]);
 
   useEffect(() => {
     if (session?.kind !== 'youtube') return undefined;
@@ -116,7 +122,11 @@ export default function WatchTogetherPlayer({
   if (!session) return null;
 
   return (
-    <div data-watch-kind={session.kind} data-watch-player="true" style={playerShellStyle}>
+    <div
+      data-watch-kind={session.kind}
+      data-watch-player="true"
+      style={session.kind === 'web' ? webPlayerShellStyle : playerShellStyle}
+    >
       {session.kind === 'youtube' && <div ref={youtubeHostRef} style={playerSurfaceStyle} />}
       {session.kind === 'video' && (
         <video
@@ -137,14 +147,43 @@ export default function WatchTogetherPlayer({
         />
       )}
       {session.kind === 'web' && (
-        <iframe
-          allow="autoplay; clipboard-read; clipboard-write; fullscreen; picture-in-picture"
-          referrerPolicy="strict-origin-when-cross-origin"
-          sandbox="allow-forms allow-modals allow-popups allow-presentation allow-same-origin allow-scripts"
-          src={session.url}
-          style={webFrameStyle}
-          title={`Shared page: ${session.label}`}
-        />
+        <div data-web-browser="true" style={webBrowserStyle}>
+          <div style={webToolbarStyle}>
+            <div style={webToolbarActionsStyle}>
+              <button
+                aria-label="Reload shared website"
+                onClick={() => setWebReloadKey((current) => current + 1)}
+                style={webToolButtonStyle}
+                title="Reload website"
+                type="button"
+              >
+                <RefreshCw size={16} />
+              </button>
+              <button
+                aria-label="Open shared website in new tab"
+                onClick={() => window.open(session.url, '_blank', 'noopener,noreferrer')}
+                style={webToolButtonStyle}
+                title="Open in new tab"
+                type="button"
+              >
+                <ExternalLink size={16} />
+              </button>
+            </div>
+            <span style={webAddressStyle}>{session.label}</span>
+          </div>
+          <iframe
+            allow="autoplay; clipboard-read; clipboard-write; fullscreen; picture-in-picture"
+            data-web-interactive="true"
+            key={`${session.sessionId}-${webReloadKey}`}
+            referrerPolicy="strict-origin-when-cross-origin"
+            sandbox="allow-forms allow-modals allow-popups allow-presentation allow-same-origin allow-scripts"
+            scrolling="yes"
+            src={session.url}
+            style={webFrameStyle}
+            tabIndex={0}
+            title={`Shared page: ${session.label}`}
+          />
+        </div>
       )}
     </div>
   );
@@ -217,6 +256,12 @@ const playerShellStyle = {
   width: '100%'
 };
 
+const webPlayerShellStyle = {
+  ...playerShellStyle,
+  aspectRatio: '4 / 3',
+  minHeight: 'min(440px, 56dvh)'
+};
+
 const playerSurfaceStyle = {
   height: '100%',
   width: '100%'
@@ -235,5 +280,58 @@ const webFrameStyle = {
   border: 0,
   display: 'block',
   height: '100%',
+  minHeight: 0,
+  overscrollBehavior: 'contain',
+  pointerEvents: 'auto',
+  touchAction: 'auto',
   width: '100%'
+};
+
+const webBrowserStyle = {
+  background: '#FFFFFF',
+  display: 'grid',
+  gridTemplateRows: '42px minmax(0, 1fr)',
+  height: '100%',
+  minHeight: 0,
+  width: '100%'
+};
+
+const webToolbarStyle = {
+  alignItems: 'center',
+  background: '#F8FAFC',
+  borderBottom: '1px solid #DDE4EE',
+  color: '#26344D',
+  display: 'flex',
+  gap: '8px',
+  justifyContent: 'flex-start',
+  padding: '5px 7px 5px 12px'
+};
+
+const webAddressStyle = {
+  fontSize: '12px',
+  fontWeight: 800,
+  maxWidth: '45%',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap'
+};
+
+const webToolbarActionsStyle = {
+  display: 'flex',
+  flexShrink: 0,
+  gap: '4px'
+};
+
+const webToolButtonStyle = {
+  alignItems: 'center',
+  background: '#FFFFFF',
+  border: '1px solid #DDE4EE',
+  borderRadius: '7px',
+  color: '#26344D',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  height: '30px',
+  justifyContent: 'center',
+  padding: 0,
+  width: '30px'
 };

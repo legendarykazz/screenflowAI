@@ -138,6 +138,12 @@ function checkWatchTogether() {
   assertIncludes(player, 'https://www.youtube.com/iframe_api', 'Watch Together uses the official YouTube iframe player API');
   assertIncludes(player, '<video', 'Watch Together supports direct browser-playable video links');
   assertIncludes(player, 'sandbox="allow-forms allow-modals allow-popups allow-presentation allow-same-origin allow-scripts"', 'Shared web pages run in a sandboxed iframe');
+  assertIncludes(player, 'data-web-interactive="true"', 'Shared websites expose an interactive browser surface');
+  assertIncludes(player, 'scrolling="yes"', 'Shared websites permit embedded page scrolling');
+  assertIncludes(player, 'tabIndex={0}', 'Shared websites accept keyboard focus and typing');
+  assertIncludes(player, 'setWebReloadKey((current) => current + 1)', 'Shared website toolbar can reload the embedded page');
+  assertIncludes(player, "window.open(session.url, '_blank', 'noopener,noreferrer')", 'Shared website toolbar can open the page in a full browser tab');
+  assertIncludes(player, "minHeight: 'min(440px, 56dvh)'", 'Shared websites receive a usable mobile presentation height');
   assertIncludes(player, 'PLAYER_DRIFT_TOLERANCE', 'Remote playback corrects meaningful timing drift');
   assertIncludes(watch, "kind: 'youtube'", 'Watch Together recognizes YouTube links');
   assertIncludes(watch, "kind: 'video'", 'Watch Together recognizes direct video links');
