@@ -28,9 +28,7 @@ export function parseWatchSource(rawValue) {
   }
 
   const hostname = url.hostname.toLowerCase().replace(/^www\./, '');
-  if (BLOCKED_STREAMING_HOSTS.some((host) => hostname === host || hostname.endsWith(`.${host}`))) {
-    throw new Error('This subscription service blocks embedded watch rooms. Use a YouTube or direct video link.');
-  }
+  const protectedContent = BLOCKED_STREAMING_HOSTS.some((host) => hostname === host || hostname.endsWith(`.${host}`));
 
   const videoId = getYouTubeVideoId(url);
   if (videoId) {
@@ -54,6 +52,7 @@ export function parseWatchSource(rawValue) {
   return {
     kind: 'web',
     label: hostname,
+    protectedContent,
     url: url.href
   };
 }
@@ -63,6 +62,7 @@ export function createWatchSession(source) {
     ...source,
     currentTime: 0,
     playing: false,
+    revision: 0,
     sessionId: createSessionId(),
     updatedAt: Date.now()
   };
@@ -77,11 +77,13 @@ export function normalizeWatchSession(value) {
     if (source.kind === 'youtube' && source.videoId !== value.videoId) return null;
 
     const currentTime = Number(value.currentTime);
+    const revision = Number(value.revision);
     const updatedAt = Number(value.updatedAt);
     return {
       ...source,
       currentTime: Number.isFinite(currentTime) ? clamp(currentTime, 0, 172800) : 0,
       playing: source.kind === 'web' ? false : Boolean(value.playing),
+      revision: Number.isFinite(revision) ? clamp(Math.floor(revision), 0, Number.MAX_SAFE_INTEGER) : 0,
       sessionId: String(value.sessionId || '').slice(0, 80) || createSessionId(),
       updatedAt: Number.isFinite(updatedAt) ? updatedAt : Date.now()
     };

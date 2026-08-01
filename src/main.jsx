@@ -212,6 +212,10 @@ if (!window.electron) {
       { id: 'window-1', name: 'Chrome Browser Window', thumbnail: '' }
     ],
     setLiveDisplaySource: async () => ({ success: true }),
+    openExternal: async (url) => {
+      window.open(url, '_blank', 'noopener,noreferrer');
+      return { success: true };
+    },
     createLiveKitToken: async (roomName, participantName) => {
       try {
         const response = await fetch('/api/livekit-token', {

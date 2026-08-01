@@ -6,7 +6,7 @@ import {
   Track,
   VideoPresets
 } from 'livekit-client';
-import { Camera, Expand, Mic, PhoneOff, Play, ScreenShare, SquarePen, Users, Video, Volume2 } from 'lucide-react';
+import { Camera, Expand, Eye, EyeOff, Mic, PhoneOff, Play, ScreenShare, SquarePen, Users, Video, Volume2 } from 'lucide-react';
 import {
   CALL_AUDIO_CAPTURE_OPTIONS,
   CALL_AUDIO_PUBLISH_OPTIONS,
@@ -15,6 +15,7 @@ import {
 } from '../lib/callAudio';
 import WatchTogetherPlayer from '../components/WatchTogetherPlayer';
 import { createCallRoomOptions } from '../lib/callRoom';
+import { getParticipantLayout } from '../lib/callLayout';
 import { normalizeWatchSession } from '../lib/watchTogether';
 
 export default function JoinCall() {
@@ -87,12 +88,13 @@ export default function JoinCall() {
   const [screenShareNotice, setScreenShareNotice] = useState('');
   const [watchSession, setWatchSession] = useState(previewWatchSession);
   const [joining, setJoining] = useState(false);
+  const [showSelfView, setShowSelfView] = useState(false);
 
   useEffect(() => {
     if (localCameraRef.current) {
       localCameraRef.current.srcObject = cameraOn ? localCameraStreamRef.current : null;
     }
-  }, [cameraOn]);
+  }, [cameraOn, showSelfView]);
 
   useEffect(() => {
     micOnRef.current = micOn;
@@ -586,7 +588,13 @@ export default function JoinCall() {
       if (command.type === 'watch-sync') {
         const nextWatchSession = normalizeWatchSession(command.watch);
         if (nextWatchSession) {
-          setWatchSession(nextWatchSession);
+          setWatchSession((current) => {
+            if (
+              current?.sessionId === nextWatchSession.sessionId
+              && Number(nextWatchSession.revision || 0) < Number(current.revision || 0)
+            ) return current;
+            return nextWatchSession;
+          });
           setStatus(`${nextWatchSession.label} is synced with the host.`);
         }
       }
@@ -953,19 +961,32 @@ export default function JoinCall() {
           <section data-people-section="true" style={viewerStyle}>
             <div style={viewerHeaderStyle}>
               <span style={viewerTitleStyle}><Camera size={18} /> People</span>
-              <span style={peopleCountStyle}>{participants.length + 1}</span>
+              <div style={peopleHeaderActionsStyle}>
+                <button
+                  aria-label={showSelfView ? 'Hide self view' : 'Show self view'}
+                  onClick={() => setShowSelfView((visible) => !visible)}
+                  style={viewerHeaderButtonStyle}
+                  title={showSelfView ? 'Hide self view' : 'Show self view'}
+                >
+                  {showSelfView ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+                <span style={peopleCountStyle}>{participants.length + 1}</span>
+              </div>
             </div>
             <div
               className="camera-box"
-              data-face-count={Math.max(1, participants.length + 1)}
+              data-face-count={participants.length}
+              data-face-layout={getParticipantLayout(participants.length)}
               ref={cameraRef}
               style={cameraBoxStyle}
             >
-              <div data-face-tile="true" data-local-face="true" style={localFaceTileStyle}>
-                <video ref={localCameraRef} autoPlay muted playsInline style={{ ...localCameraStyle, display: cameraOn ? 'block' : 'none' }} />
-                {!cameraOn && <div style={faceOffStyle}>Your camera is off</div>}
-                <span style={faceLabelStyle}>{name || 'You'} (You)</span>
-              </div>
+              {showSelfView && (
+                <div data-local-face="true" data-self-view="true" style={selfPreviewStyle}>
+                  <video ref={localCameraRef} autoPlay muted playsInline style={{ ...localCameraStyle, display: cameraOn ? 'block' : 'none' }} />
+                  {!cameraOn && <div style={faceOffStyle}>Camera off</div>}
+                  <span style={faceLabelStyle}>You</span>
+                </div>
+              )}
               {previewParticipantNames.map((participant) => (
                 <div data-face-tile="true" data-participant-id={`preview-${participant}`} key={participant} style={localFaceTileStyle}>
                   <div style={faceOffStyle}>{participant.slice(0, 1)}</div>
@@ -1203,6 +1224,12 @@ const viewerHeaderStyle = {
   padding: '12px'
 };
 
+const peopleHeaderActionsStyle = {
+  alignItems: 'center',
+  display: 'flex',
+  gap: '8px'
+};
+
 const viewerTitleStyle = {
   alignItems: 'center',
   display: 'inline-flex',
@@ -1256,11 +1283,13 @@ const cameraBoxStyle = {
   color: '#D4D4D4',
   display: 'grid',
   gap: '10px',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+  gridTemplateColumns: 'minmax(0, 1fr)',
   justifyContent: 'stretch',
-  minHeight: '132px',
-  overflow: 'hidden',
-  padding: '10px'
+  minHeight: '220px',
+  maxHeight: 'min(72dvh, 760px)',
+  overflow: 'auto',
+  padding: '12px',
+  position: 'relative'
 };
 
 const localCameraStyle = {
@@ -1279,6 +1308,17 @@ const localFaceTileStyle = {
   borderRadius: '8px',
   overflow: 'hidden',
   position: 'relative'
+};
+
+const selfPreviewStyle = {
+  ...localFaceTileStyle,
+  bottom: '18px',
+  boxShadow: '0 16px 38px rgba(0, 0, 0, 0.42)',
+  height: '126px',
+  position: 'absolute',
+  right: '18px',
+  width: '224px',
+  zIndex: 8
 };
 
 const faceOffStyle = {
@@ -1335,7 +1375,36 @@ const sectionTitleStyle = {
 
 const responsiveStyles = `
   [data-call-panel="true"][data-connected="true"] {
-    max-width: 1120px !important;
+    max-width: 1380px !important;
+  }
+
+  .camera-box > [data-face-tile="true"] {
+    aspect-ratio: 16 / 9 !important;
+    min-height: 0 !important;
+    scroll-snap-align: start;
+    width: 100% !important;
+  }
+
+  .camera-box[data-face-layout="solo"] {
+    grid-template-columns: minmax(0, min(960px, 100%)) !important;
+    justify-content: center !important;
+  }
+
+  .camera-box[data-face-layout="solo"] > [data-face-tile="true"] {
+    min-height: min(56dvh, 540px) !important;
+  }
+
+  .camera-box[data-face-layout="pair"],
+  .camera-box[data-face-layout="quad"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .camera-box[data-face-layout="compact"] {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  .camera-box[data-face-layout="dense"] {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
   }
 
   [data-call-content="true"][data-has-presentation="true"] {
@@ -1414,9 +1483,9 @@ const responsiveStyles = `
     .camera-box {
       align-content: start !important;
       gap: 8px !important;
-      grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
       min-height: 0 !important;
-      overflow: visible !important;
+      max-height: none !important;
+      overflow-y: visible !important;
       padding: 8px !important;
     }
 
@@ -1425,11 +1494,11 @@ const responsiveStyles = `
       width: 100% !important;
     }
 
-    .camera-box[data-face-count="1"] {
+    .camera-box[data-face-layout="solo"] {
       grid-template-columns: minmax(0, 1fr) !important;
     }
 
-    .camera-box[data-face-count="1"] > [data-face-tile="true"] {
+    .camera-box[data-face-layout="solo"] > [data-face-tile="true"] {
       aspect-ratio: 3 / 4 !important;
       max-height: 58dvh !important;
       min-height: min(360px, 52dvh) !important;
@@ -1439,30 +1508,57 @@ const responsiveStyles = `
       display: none !important;
     }
 
-    .camera-box[data-face-count="2"] {
+    .camera-box[data-face-layout="pair"] {
       grid-template-columns: minmax(0, 1fr) !important;
     }
 
-    .camera-box[data-face-count="2"] > [data-face-tile="true"] {
+    .camera-box[data-face-layout="pair"] > [data-face-tile="true"] {
       aspect-ratio: 16 / 9 !important;
     }
 
-    .camera-box:not([data-face-count="1"]):not([data-face-count="2"]) > [data-face-tile="true"] {
-      aspect-ratio: 3 / 4 !important;
+    .camera-box[data-face-layout="quad"] {
+      grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
     }
 
-    [data-call-content="true"][data-has-presentation="true"] .camera-box {
-      grid-auto-columns: minmax(160px, 68vw) !important;
+    .camera-box[data-face-layout="quad"] > [data-face-tile="true"] {
+      aspect-ratio: 4 / 3 !important;
+    }
+
+    .camera-box[data-face-layout="compact"],
+    .camera-box[data-face-layout="dense"] {
+      grid-auto-columns: min(74vw, 320px) !important;
       grid-auto-flow: column !important;
       grid-template-columns: none !important;
       overflow-x: auto !important;
       overflow-y: hidden !important;
+      scroll-snap-type: x mandatory;
+    }
+
+    .camera-box[data-face-layout="compact"] > [data-face-tile="true"],
+    .camera-box[data-face-layout="dense"] > [data-face-tile="true"] {
+      aspect-ratio: 4 / 3 !important;
+    }
+
+    [data-call-content="true"][data-has-presentation="true"] .camera-box {
+      grid-auto-columns: min(72vw, 320px) !important;
+      grid-auto-flow: column !important;
+      grid-template-columns: none !important;
+      overflow-x: auto !important;
+      overflow-y: hidden !important;
+      scroll-snap-type: x mandatory;
     }
 
     [data-call-content="true"][data-has-presentation="true"] .camera-box > [data-face-tile="true"] {
       aspect-ratio: 16 / 9 !important;
       max-height: none !important;
-      min-height: 118px !important;
+      min-height: 156px !important;
+    }
+
+    [data-self-view="true"] {
+      bottom: 12px !important;
+      height: 82px !important;
+      right: 12px !important;
+      width: 132px !important;
     }
 
     .camera-box video {

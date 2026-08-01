@@ -28,6 +28,11 @@ function assertMatches(source, pattern, message) {
   else fail(`${message} (missing pattern: ${pattern})`);
 }
 
+function assertNotIncludes(source, needle, message) {
+  if (!source.includes(needle)) pass(message);
+  else fail(`${message} (unexpected: ${needle})`);
+}
+
 function checkRequiredFiles() {
   [
     'src/main.jsx',
@@ -40,6 +45,7 @@ function checkRequiredFiles() {
     'src/pages/JoinCall.jsx',
     'src/components/WatchTogetherPlayer.jsx',
     'src/lib/callAudio.js',
+    'src/lib/callLayout.js',
     'src/lib/callRoom.js',
     'src/lib/watchTogether.js',
     'src/lib/pwa.js',
@@ -108,9 +114,12 @@ function checkJoinCallMedia() {
   assertIncludes(join, 'RoomEvent.AudioPlaybackStatusChanged', 'Join page detects browser audio playback blocking');
   assertIncludes(join, 'resumeCallAudio(room)', 'Join page can explicitly resume call audio');
   assertIncludes(join, 'targetRef.current.querySelector(`[data-track-sid="${track.sid}"]`)', 'Join page does not detach duplicate remote audio tracks');
-  assertIncludes(join, 'data-face-count={Math.max(1, participants.length + 1)}', 'Join page exposes participant count to responsive camera layout');
-  assertIncludes(join, '.camera-box[data-face-count="1"]', 'Mobile join page gives a solo caller a large stage');
-  assertIncludes(join, '.camera-box[data-face-count="2"]', 'Mobile join page stacks two callers at full width');
+  assertIncludes(join, 'data-face-count={participants.length}', 'Join page sizes the camera grid from remote participants only');
+  assertIncludes(join, 'data-face-layout={getParticipantLayout(participants.length)}', 'Join page selects an adaptive participant layout');
+  assertIncludes(join, '.camera-box[data-face-layout="solo"]', 'Mobile join page gives one remote caller a large stage');
+  assertIncludes(join, '.camera-box[data-face-layout="pair"]', 'Mobile join page stacks two remote callers at full width');
+  assertIncludes(join, 'data-self-view="true"', 'Join page offers an optional compact self preview');
+  assertNotIncludes(join, 'data-face-tile="true" data-local-face="true"', 'Join page excludes self-view from the main grid');
   assertIncludes(join, "supportsBrowserScreenShare = () => !previewUnsupportedMobileShare && typeof navigator.mediaDevices?.getDisplayMedia === 'function'", 'Join page detects browser screen-capture support');
   assertIncludes(join, 'data-screen-share-notice="true"', 'Join page explains unavailable mobile screen capture inline');
   assertIncludes(join, "isMobileBrowser\n        ? { video: true, audio: false }", 'Join page uses broadly compatible capture constraints on supported mobile browsers');
@@ -127,14 +136,21 @@ function checkPresenterLiveCall() {
   assertIncludes(live, 'createCallRoomOptions()', 'Presenter uses adaptive room media settings');
   assertIncludes(live, "name: 'presenter-mic'", 'Presenter publishes microphone track');
   assertIncludes(live, "name: 'presenter-camera'", 'Presenter publishes camera track');
+  assertIncludes(live, "name: 'presenter-screen-audio'", 'Presenter publishes browser and system audio separately');
+  assertIncludes(live, 'source: Track.Source.ScreenShareAudio', 'Shared website audio is identified as screen audio');
   assertIncludes(live, 'RoomEvent.TrackSubscribed', 'Presenter subscribes to remote participant tracks');
   assertIncludes(live, 'attachRemoteTrack(track, participant)', 'Presenter renders remote media tracks');
   assertIncludes(live, 'updateRemoteParticipants(room)', 'Presenter updates participant count/list');
   assertIncludes(live, 'RoomEvent.AudioPlaybackStatusChanged', 'Presenter detects browser audio playback blocking');
   assertIncludes(live, 'audioSink.querySelector(`[data-track-sid="${track.sid}"]`)', 'Presenter attaches each remote microphone once');
-  assertIncludes(live, 'data-face-count={Math.max(1, remoteParticipants.length + 1)}', 'Presenter exposes participant count to responsive camera layout');
-  assertIncludes(live, '[data-face-grid="true"][data-face-count="1"]', 'Mobile presenter gives a solo caller a large stage');
+  assertIncludes(live, 'data-face-count={remoteParticipants.length}', 'Presenter sizes the camera grid from remote participants only');
+  assertIncludes(live, 'data-face-layout={getParticipantLayout(remoteParticipants.length)}', 'Presenter selects an adaptive participant layout');
+  assertIncludes(live, '[data-face-grid="true"][data-face-layout="solo"]', 'Mobile presenter gives one remote caller a large stage');
+  assertIncludes(live, 'data-self-view="true"', 'Presenter offers an optional compact self preview');
+  assertNotIncludes(live, 'data-local-face-tile="true"', 'Presenter excludes self-view from the main grid');
   assertIncludes(live, 'outputStreamRef.current?.getTracks?.().forEach((track) => track.stop())', 'Presenter releases the enhanced output stream');
+  assertIncludes(live, 'else if (isLive || streamRef.current || outputStreamRef.current) await releaseSharedMedia()', 'Whiteboard changes release the previous live source');
+  assertIncludes(live, 'await releaseSharedMedia();\n    }\n    await startRoom(sourceId)', 'Screen changes release the previous live source');
   assertIncludes(live, "console.warn('Could not disconnect the room during page cleanup:'", 'Presenter disconnects LiveKit during page cleanup');
 }
 
@@ -156,18 +172,21 @@ function checkWatchTogether() {
   assertIncludes(join, "get('previewWatch') !== 'youtube'", 'Development builds can preview the participant Watch Together layout');
   assertIncludes(player, 'https://www.youtube.com/iframe_api', 'Watch Together uses the official YouTube iframe player API');
   assertIncludes(player, '<video', 'Watch Together supports direct browser-playable video links');
-  assertIncludes(player, 'sandbox="allow-forms allow-modals allow-popups allow-presentation allow-same-origin allow-scripts"', 'Shared web pages run in a sandboxed iframe');
-  assertIncludes(player, 'data-web-interactive="true"', 'Shared websites expose an interactive browser surface');
-  assertIncludes(player, 'scrolling="yes"', 'Shared websites permit embedded page scrolling');
-  assertIncludes(player, 'tabIndex={0}', 'Shared websites accept keyboard focus and typing');
-  assertIncludes(player, 'setWebReloadKey((current) => current + 1)', 'Shared website toolbar can reload the embedded page');
-  assertIncludes(player, "window.open(session.url, '_blank', 'noopener,noreferrer')", 'Shared website toolbar can open the page in a full browser tab');
-  assertIncludes(player, "minHeight: 'min(440px, 56dvh)'", 'Shared websites receive a usable mobile presentation height');
   assertIncludes(player, 'PLAYER_DRIFT_TOLERANCE', 'Remote playback corrects meaningful timing drift');
+  assertIncludes(player, 'data-shared-playback-controls="true"', 'Presenter has explicit shared playback controls');
+  assertIncludes(player, 'controls={controller}', 'Participants cannot independently control direct video playback');
+  assertIncludes(player, 'controls: controller ? 1 : 0', 'Participants cannot independently control YouTube playback');
+  assertIncludes(live, 'revision: (Number(current.revision) || 0) + 1', 'Presenter versions every playback update');
+  assertIncludes(join, 'Number(nextWatchSession.revision || 0) < Number(current.revision || 0)', 'Participant ignores stale playback updates');
+  assertIncludes(live, "if (source.kind === 'web')", 'Ordinary websites use the presenter browser workflow');
+  assertIncludes(live, "window.open(source.url, '_blank', 'noopener,noreferrer')", 'Website links open only for the presenter');
+  assertIncludes(live, "await startRoom('')", 'Presenter shares the live website window with the room');
+  assertIncludes(live, 'await window.electron.openExternal(source.url)', 'Desktop presenter opens websites in the signed-in system browser');
+  assertIncludes(live, "setStatus('Choose the browser window under Source, then share the selected window.')", 'Desktop presenter explicitly selects the shared browser window');
   assertIncludes(watch, "kind: 'youtube'", 'Watch Together recognizes YouTube links');
   assertIncludes(watch, "kind: 'video'", 'Watch Together recognizes direct video links');
   assertIncludes(watch, "kind: 'web'", 'Watch Together recognizes embeddable web pages');
-  assertIncludes(watch, "'netflix.com'", 'Watch Together rejects protected subscription services that cannot be embedded');
+  assertIncludes(watch, 'protectedContent', 'Watch Together flags protected services that may block capture');
   assertIncludes(watch, "['http:', 'https:']", 'Watch Together accepts only safe web protocols');
 }
 
@@ -178,10 +197,12 @@ function checkElectronBridge() {
   assertIncludes(preload, 'createLiveKitToken', 'Preload exposes LiveKit token bridge');
   assertIncludes(preload, 'saveRecordedFile', 'Preload exposes recording save bridge');
   assertIncludes(preload, 'saveAIKeys', 'Preload exposes saved settings bridge');
+  assertIncludes(preload, 'openExternal', 'Preload exposes the desktop browser handoff');
   assertIncludes(main, 'livekit-server-sdk', 'Electron main can mint LiveKit presenter tokens');
   assertIncludes(main, 'savedLiveKit', 'Electron main can read saved LiveKit settings');
   assertIncludes(main, 'https://screenflow-ai.vercel.app/api/livekit-token', 'Electron main can fall back to hosted LiveKit token service');
   assertIncludes(main, 'desktopCapturer.getSources', 'Electron main can list screen/window sources');
+  assertIncludes(main, "ipcMain.handle('browser:open-external'", 'Electron main safely opens presenter website links');
   assertIncludes(main, "ipcMain.handle('recording:save-file'", 'Electron main can save recorded videos');
   assertIncludes(settings, 'handleSaveLiveKit', 'Settings page can save LiveKit credentials');
 }

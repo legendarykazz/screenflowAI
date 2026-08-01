@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ExternalLink, RefreshCw } from 'lucide-react';
+import { ExternalLink, FastForward, Pause, Play, RefreshCw, Rewind } from 'lucide-react';
 import { projectedWatchTime } from '../lib/watchTogether';
 
-const PLAYER_SYNC_INTERVAL = 4000;
-const PLAYER_DRIFT_TOLERANCE = 1.25;
+const PLAYER_SYNC_INTERVAL = 1500;
+const PLAYER_DRIFT_TOLERANCE = 0.55;
 
 export default function WatchTogetherPlayer({
   controller = false,
@@ -42,7 +42,8 @@ export default function WatchTogetherPlayer({
           height: '100%',
           host: 'https://www.youtube-nocookie.com',
           playerVars: {
-            controls: 1,
+            controls: controller ? 1 : 0,
+            disablekb: controller ? 0 : 1,
             playsinline: 1,
             rel: 0
           },
@@ -95,15 +96,23 @@ export default function WatchTogetherPlayer({
     const timer = setInterval(() => {
       if (session.kind === 'youtube') {
         const player = youtubePlayerRef.current;
-        if (player?.getPlayerState?.() === window.YT?.PlayerState?.PLAYING) {
-          playbackCallbackRef.current?.({ currentTime: safePlayerTime(player), playing: true, updatedAt: Date.now() });
+        if (player?.getPlayerState) {
+          playbackCallbackRef.current?.({
+            currentTime: safePlayerTime(player),
+            playing: player.getPlayerState() === window.YT?.PlayerState?.PLAYING,
+            updatedAt: Date.now()
+          });
         }
         return;
       }
 
       const video = directVideoRef.current;
-      if (video && !video.paused && !video.ended) {
-        playbackCallbackRef.current?.({ currentTime: video.currentTime || 0, playing: true, updatedAt: Date.now() });
+      if (video) {
+        playbackCallbackRef.current?.({
+          currentTime: video.currentTime || 0,
+          playing: !video.paused && !video.ended,
+          updatedAt: Date.now()
+        });
       }
     }, PLAYER_SYNC_INTERVAL);
     return () => clearInterval(timer);
@@ -119,6 +128,51 @@ export default function WatchTogetherPlayer({
     });
   };
 
+  const controlPlayback = (nextPlaying) => {
+    const activeSession = sessionRef.current;
+    if (!controller || !activeSession || activeSession.kind === 'web') return;
+    const player = youtubePlayerRef.current;
+    const video = directVideoRef.current;
+    const currentTime = activeSession.kind === 'youtube'
+      ? (player ? safePlayerTime(player) : projectedWatchTime(activeSession))
+      : (video?.currentTime || projectedWatchTime(activeSession));
+
+    applyingSyncRef.current = true;
+    if (activeSession.kind === 'youtube') {
+      if (nextPlaying) player?.playVideo?.();
+      else player?.pauseVideo?.();
+    } else if (video) {
+      if (nextPlaying) video.play?.().catch(() => {});
+      else video.pause?.();
+    }
+    playbackCallbackRef.current?.({ currentTime, playing: nextPlaying, updatedAt: Date.now() });
+    setTimeout(() => {
+      applyingSyncRef.current = false;
+    }, 250);
+  };
+
+  const seekPlayback = (deltaSeconds) => {
+    const activeSession = sessionRef.current;
+    if (!controller || !activeSession || activeSession.kind === 'web') return;
+    const player = youtubePlayerRef.current;
+    const video = directVideoRef.current;
+    const currentTime = activeSession.kind === 'youtube'
+      ? (player ? safePlayerTime(player) : projectedWatchTime(activeSession))
+      : (video?.currentTime || projectedWatchTime(activeSession));
+    const targetTime = Math.max(0, currentTime + deltaSeconds);
+    const playing = activeSession.kind === 'youtube'
+      ? player?.getPlayerState?.() === window.YT?.PlayerState?.PLAYING
+      : Boolean(video && !video.paused && !video.ended);
+
+    applyingSyncRef.current = true;
+    if (activeSession.kind === 'youtube') player?.seekTo?.(targetTime, true);
+    else if (video) video.currentTime = Math.min(targetTime, Number.isFinite(video.duration) ? Math.max(0, video.duration - 0.1) : targetTime);
+    playbackCallbackRef.current?.({ currentTime: targetTime, playing, updatedAt: Date.now() });
+    setTimeout(() => {
+      applyingSyncRef.current = false;
+    }, 250);
+  };
+
   if (!session) return null;
 
   return (
@@ -127,10 +181,26 @@ export default function WatchTogetherPlayer({
       data-watch-player="true"
       style={session.kind === 'web' ? webPlayerShellStyle : playerShellStyle}
     >
+      {controller && session.kind !== 'web' && (
+        <div data-shared-playback-controls="true" style={sharedControlsStyle}>
+          <button aria-label="Rewind 10 seconds for everyone" onClick={() => seekPlayback(-10)} style={sharedControlButtonStyle} title="Back 10 seconds" type="button">
+            <Rewind size={17} />
+          </button>
+          <button aria-label="Play for everyone" onClick={() => controlPlayback(true)} style={sharedControlButtonStyle} title="Play for everyone" type="button">
+            <Play size={17} />
+          </button>
+          <button aria-label="Pause for everyone" onClick={() => controlPlayback(false)} style={sharedControlButtonStyle} title="Pause for everyone" type="button">
+            <Pause size={17} />
+          </button>
+          <button aria-label="Forward 10 seconds for everyone" onClick={() => seekPlayback(10)} style={sharedControlButtonStyle} title="Forward 10 seconds" type="button">
+            <FastForward size={17} />
+          </button>
+        </div>
+      )}
       {session.kind === 'youtube' && <div ref={youtubeHostRef} style={playerSurfaceStyle} />}
       {session.kind === 'video' && (
         <video
-          controls
+          controls={controller}
           key={session.sessionId}
           onCanPlay={() => {
             if (!controller) applyDirectVideoSession(directVideoRef.current, sessionRef.current);
@@ -253,7 +323,36 @@ const playerShellStyle = {
   height: '100%',
   minHeight: 0,
   overflow: 'hidden',
+  position: 'relative',
   width: '100%'
+};
+
+const sharedControlsStyle = {
+  alignItems: 'center',
+  background: 'rgba(9, 11, 18, 0.9)',
+  border: '1px solid rgba(255, 255, 255, 0.2)',
+  borderRadius: '8px',
+  display: 'flex',
+  gap: '4px',
+  left: '12px',
+  padding: '5px',
+  position: 'absolute',
+  top: '12px',
+  zIndex: 12
+};
+
+const sharedControlButtonStyle = {
+  alignItems: 'center',
+  background: '#FFFFFF',
+  border: 0,
+  borderRadius: '6px',
+  color: '#111827',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  height: '34px',
+  justifyContent: 'center',
+  padding: 0,
+  width: '34px'
 };
 
 const webPlayerShellStyle = {

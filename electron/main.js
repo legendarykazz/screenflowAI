@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, desktopCapturer, dialog, screen, protocol, net, crashReporter } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer, dialog, screen, shell, protocol, net, crashReporter } = require('electron');
 if (process.env.SCREENFLOW_DISABLE_GPU === '1') {
   app.disableHardwareAcceleration();
 }
@@ -694,6 +694,19 @@ ipcMain.handle('recording:get-sources', async () => {
 ipcMain.handle('live:set-display-source', (_, sourceId) => {
   preferredDisplaySourceId = sourceId || null;
   return { success: true };
+});
+
+ipcMain.handle('browser:open-external', async (_, rawUrl) => {
+  try {
+    const url = new URL(String(rawUrl || ''));
+    if (!['http:', 'https:'].includes(url.protocol)) {
+      return { success: false, error: 'Only HTTP and HTTPS links can be opened.' };
+    }
+    await shell.openExternal(url.href);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error?.message || 'The website could not be opened.' };
+  }
 });
 
 ipcMain.handle('livekit:create-token', async (_, roomName, participantName) => {

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AudioPresets,
   Room,
   RoomEvent,
   ScreenSharePresets,
@@ -14,6 +15,7 @@ import {
 } from '../lib/callAudio';
 import WatchTogetherPlayer from '../components/WatchTogetherPlayer';
 import { createCallRoomOptions } from '../lib/callRoom';
+import { getParticipantLayout } from '../lib/callLayout';
 import { createWatchSession, parseWatchSource } from '../lib/watchTogether';
 import {
   Bot,
@@ -23,6 +25,7 @@ import {
   Copy,
   Eraser,
   Expand,
+  Eye,
   EyeOff,
   Highlighter,
   MoreHorizontal,
@@ -81,6 +84,7 @@ export default function LiveCall() {
   const liveKitVideoTrackRef = useRef(null);
   const liveKitAudioTrackRef = useRef(null);
   const liveKitCameraTrackRef = useRef(null);
+  const liveKitScreenAudioTrackRef = useRef(null);
   const callCaptionRecorderRef = useRef(null);
   const callCaptionChunksRef = useRef([]);
   const callCaptionStartedAtRef = useRef(0);
@@ -134,6 +138,8 @@ export default function LiveCall() {
   const [watchUrl, setWatchUrl] = useState('');
   const [watchSession, setWatchSession] = useState(null);
   const [watchError, setWatchError] = useState('');
+  const [pendingWebsite, setPendingWebsite] = useState(null);
+  const [showSelfView, setShowSelfView] = useState(false);
   const isBrowserPresenter = !window.navigator?.userAgent?.toLowerCase?.().includes('electron') && !window.electron?.getAppVersion;
 
   const [roomCode, setRoomCode] = useState(() => `SF-${Math.random().toString(36).slice(2, 7).toUpperCase()}`);
@@ -160,7 +166,7 @@ export default function LiveCall() {
     if (cameraPreviewRef.current) {
       cameraPreviewRef.current.srcObject = cameraOn ? cameraStreamRef.current : null;
     }
-  }, [cameraOn]);
+  }, [cameraOn, showSelfView]);
 
   useEffect(() => {
     loadSources();
@@ -192,13 +198,14 @@ export default function LiveCall() {
   }, []);
 
   const loadSources = async () => {
-    if (!window.electron?.getSources) return;
+    if (!window.electron?.getSources) return [];
     const sourceList = await window.electron.getSources();
     setSources(sourceList);
     if (!selectedSourceId && sourceList.length > 0) {
       setSelectedSourceId(sourceList[0].id);
       setSourceName(sourceList[0].name);
     }
+    return sourceList;
   };
 
   const startRoom = async (sourceId = selectedSourceId) => {
@@ -230,7 +237,7 @@ export default function LiveCall() {
           frameRate: { ideal: LIVE_OUTPUT_FPS, max: LIVE_OUTPUT_FPS },
           displaySurface: 'monitor'
         },
-        audio: false
+        audio: true
       });
       const screenTrack = screenStream.getVideoTracks()[0];
       if (screenTrack) screenTrack.contentHint = 'text';
@@ -259,8 +266,13 @@ export default function LiveCall() {
         outputVideoRef.current.srcObject = outputStream;
       }
       await publishActiveOutput();
+      await publishScreenAudioStream(screenStream);
 
-      screenTrack?.addEventListener('ended', stopSharedOutput);
+      screenTrack?.addEventListener('ended', () => {
+        if (streamRef.current === screenStream) {
+          stopSharedOutput().catch((error) => setStatus(error?.message || 'The shared screen stopped.'));
+        }
+      }, { once: true });
       renderFrame();
     } catch (error) {
       setStatus(error?.message || 'Screen sharing was cancelled.');
@@ -364,24 +376,40 @@ export default function LiveCall() {
     setAudioPlaybackBlocked(false);
     setWatchSession(null);
     setWatchError('');
+    setPendingWebsite(null);
     setSourceName('No source selected');
     setStatus('Live room ended.');
   };
 
-  const stopSharedOutput = async () => {
-    const wasWatchTogether = Boolean(watchSessionRef.current);
-    if (animationRef.current) cancelAnimationFrame(animationRef.current);
-    animationRef.current = null;
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    outputStreamRef.current?.getTracks?.().forEach((track) => track.stop());
-    if (liveKitVideoTrackRef.current && liveKitRoomRef.current) {
-      await liveKitRoomRef.current.localParticipant.unpublishTrack(liveKitVideoTrackRef.current);
-    }
+  const releaseSharedMedia = async () => {
+    const sourceStream = streamRef.current;
+    const enhancedStream = outputStreamRef.current;
+    const publishedVideoTrack = liveKitVideoTrackRef.current;
+    const publishedScreenAudioTrack = liveKitScreenAudioTrackRef.current;
+    const room = liveKitRoomRef.current;
+
     streamRef.current = null;
     sourceVideoRef.current = null;
     outputStreamRef.current = null;
     liveKitVideoTrackRef.current = null;
+    liveKitScreenAudioTrackRef.current = null;
+    if (animationRef.current) cancelAnimationFrame(animationRef.current);
+    animationRef.current = null;
+    sourceStream?.getTracks().forEach((track) => track.stop());
+    enhancedStream?.getTracks?.().forEach((track) => track.stop());
+    if (room) {
+      await Promise.allSettled(
+        [publishedVideoTrack, publishedScreenAudioTrack]
+          .filter(Boolean)
+          .map((track) => room.localParticipant.unpublishTrack(track))
+      );
+    }
     if (outputVideoRef.current) outputVideoRef.current.srcObject = null;
+  };
+
+  const stopSharedOutput = async () => {
+    const wasWatchTogether = Boolean(watchSessionRef.current);
+    await releaseSharedMedia();
     watchSessionRef.current = null;
     setIsLive(false);
     setShareExpanded(false);
@@ -643,6 +671,7 @@ export default function LiveCall() {
       updateRemoteParticipants(room);
 
       if (outputStreamRef.current || streamRef.current) await publishActiveOutput();
+      if (streamRef.current) await publishScreenAudioStream(streamRef.current);
       if (audioStreamRef.current) await publishMicStream(audioStreamRef.current);
       if (cameraStreamRef.current) await publishCameraStream(cameraStreamRef.current);
       if (watchSessionRef.current) {
@@ -666,6 +695,7 @@ export default function LiveCall() {
     liveKitVideoTrackRef.current = null;
     liveKitAudioTrackRef.current = null;
     liveKitCameraTrackRef.current = null;
+    liveKitScreenAudioTrackRef.current = null;
     setIsLiveKitConnected(false);
     setAudioPlaybackBlocked(false);
     setLiveKitStatus('Disconnected');
@@ -786,6 +816,24 @@ export default function LiveCall() {
         maxFramerate: 30,
         priority: 'high'
       }
+    });
+  };
+
+  const publishScreenAudioStream = async (screenStream) => {
+    const room = liveKitRoomRef.current;
+    const audioTrack = screenStream?.getAudioTracks?.()[0];
+    if (!room || !audioTrack || liveKitScreenAudioTrackRef.current === audioTrack) return;
+    if (liveKitScreenAudioTrackRef.current) {
+      await room.localParticipant.unpublishTrack(liveKitScreenAudioTrackRef.current);
+    }
+    liveKitScreenAudioTrackRef.current = audioTrack;
+    audioTrack.contentHint = 'music';
+    await room.localParticipant.publishTrack(audioTrack, {
+      audioPreset: AudioPresets.musicHighQuality,
+      dtx: false,
+      name: 'presenter-screen-audio',
+      red: true,
+      source: Track.Source.ScreenShareAudio
     });
   };
 
@@ -1323,7 +1371,8 @@ export default function LiveCall() {
 
   const activateWhiteboard = async () => {
     if (watchSessionRef.current) await stopSharedOutput();
-    if (animationRef.current) cancelAnimationFrame(animationRef.current);
+    else if (isLive || streamRef.current || outputStreamRef.current) await releaseSharedMedia();
+    setPendingWebsite(null);
     sourceVideoRef.current = null;
     shareModeRef.current = 'whiteboard';
     setShareMode('whiteboard');
@@ -1341,6 +1390,7 @@ export default function LiveCall() {
 
   const activateScreenMode = async () => {
     if (watchSessionRef.current) await stopSharedOutput();
+    setPendingWebsite(null);
     shareModeRef.current = 'screen';
     setShareMode('screen');
     setSourceName(sources.find((source) => source.id === selectedSourceId)?.name || 'No screen selected');
@@ -1351,8 +1401,27 @@ export default function LiveCall() {
     event?.preventDefault?.();
     try {
       const source = parseWatchSource(watchUrl);
+      if (source.kind === 'web') {
+        if (isBrowserPresenter || !window.electron?.openExternal) {
+          window.open(source.url, '_blank', 'noopener,noreferrer');
+        } else {
+          const openResult = await window.electron.openExternal(source.url);
+          if (openResult?.success === false) throw new Error(openResult.error || 'The website could not be opened.');
+        }
+        if (isLive) await stopSharedOutput();
+        watchSessionRef.current = null;
+        setWatchSession(null);
+        setPendingWebsite(source);
+        setSourceName(source.label);
+        setWatchError(source.protectedContent ? 'Protected video may appear black during capture.' : '');
+        setStatus(`${source.label} is ready to present.`);
+        setTimeout(() => loadSources(), 700);
+        setNotes((current) => [`Website ready for live presentation: ${source.label}.`, ...current]);
+        return;
+      }
       if (isLive) await stopSharedOutput();
       const session = createWatchSession(source);
+      setPendingWebsite(null);
       watchSessionRef.current = session;
       shareModeRef.current = 'watch';
       setShareMode('watch');
@@ -1370,6 +1439,22 @@ export default function LiveCall() {
     }
   };
 
+  const presentWebsite = async () => {
+    if (!pendingWebsite) return;
+    shareModeRef.current = 'screen';
+    setShareMode('screen');
+    setSourceName(pendingWebsite.label);
+    if (isBrowserPresenter) {
+      await startRoom('');
+    } else {
+      await loadSources();
+      setSelectedSourceId('');
+      setSourceName('Choose browser window');
+      setStatus('Choose the browser window under Source, then share the selected window.');
+    }
+    setPendingWebsite(null);
+  };
+
   const handleWatchPlaybackChange = (playback) => {
     const current = watchSessionRef.current;
     if (!current || current.kind === 'web') return;
@@ -1377,6 +1462,7 @@ export default function LiveCall() {
       ...current,
       currentTime: Math.max(0, Number(playback.currentTime) || 0),
       playing: Boolean(playback.playing),
+      revision: (Number(current.revision) || 0) + 1,
       updatedAt: Number(playback.updatedAt) || Date.now()
     };
     watchSessionRef.current = next;
@@ -1388,6 +1474,10 @@ export default function LiveCall() {
 
   const shareSelectedScreen = async () => {
     await activateScreenMode();
+    if (!isBrowserPresenter && !selectedSourceId) {
+      setStatus('Choose a screen or browser window before sharing.');
+      return;
+    }
     await switchScreen(selectedSourceId);
   };
 
@@ -1395,10 +1485,7 @@ export default function LiveCall() {
     if (watchSessionRef.current) {
       await stopSharedOutput();
     } else if (isLive) {
-      streamRef.current?.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-      sourceVideoRef.current = null;
-      if (animationRef.current) cancelAnimationFrame(animationRef.current);
+      await releaseSharedMedia();
     }
     await startRoom(sourceId);
     setNotes((current) => ['Presenter switched the shared screen source.', ...current]);
@@ -1490,6 +1577,16 @@ export default function LiveCall() {
             data-share-expanded={shareExpanded ? 'true' : 'false'}
             style={callStageBodyStyle(isLive, shareExpanded)}
           >
+            {showSelfView && (
+              <div data-self-view="true" style={hostSelfPreviewStyle}>
+                {cameraOn ? (
+                  <video ref={cameraPreviewRef} autoPlay muted playsInline style={stageVideoStyle} />
+                ) : (
+                  <div style={emptyTileStyle}>Camera off</div>
+                )}
+                <span style={tileLabelStyle}>You</span>
+              </div>
+            )}
             {isLive && (
               <div data-host-share-tile="true" style={shareTileStyle(shareExpanded)}>
                 <div data-share-actions="true" style={shareActionGroupStyle}>
@@ -1606,18 +1703,11 @@ export default function LiveCall() {
               </div>
             )}
             <div
-              data-face-count={Math.max(1, remoteParticipants.length + 1)}
+              data-face-count={remoteParticipants.length}
               data-face-grid="true"
+              data-face-layout={getParticipantLayout(remoteParticipants.length)}
               style={faceGridStyle(isLive, shareExpanded)}
             >
-              <div data-local-face-tile="true" style={localPresenterTileStyle}>
-                {cameraOn ? (
-                  <video ref={cameraPreviewRef} autoPlay muted playsInline style={stageVideoStyle} />
-                ) : (
-                  <div style={emptyTileStyle}>Camera is off</div>
-                )}
-                <span style={tileLabelStyle}>You - Host</span>
-              </div>
               <div ref={remoteMediaRef} style={remoteGridStyle} />
             </div>
           </div>
@@ -1654,6 +1744,9 @@ export default function LiveCall() {
                 <div style={dockMenuStyle}>
                   <button onClick={copyInvite} style={menuItemStyle}><Copy size={15} /> Copy Invite</button>
                   <button onClick={askAi} style={menuItemStyle}><Bot size={15} /> Ask AI</button>
+                  <button onClick={() => setShowSelfView((visible) => !visible)} style={menuItemStyle}>
+                    {showSelfView ? <EyeOff size={15} /> : <Eye size={15} />} {showSelfView ? 'Hide Self View' : 'Show Self View'}
+                  </button>
                   <button
                     onClick={captionRecording ? stopCallCaptionRecording : startCallCaptionRecording}
                     disabled={captionGenerating}
@@ -1708,6 +1801,7 @@ export default function LiveCall() {
                   }}
                   style={selectStyle}
                 >
+                  <option disabled value="">Choose a screen or window</option>
                   {sources.map((source) => (
                     <option key={source.id} value={source.id}>{source.name}</option>
                   ))}
@@ -1730,11 +1824,19 @@ export default function LiveCall() {
                   </div>
                 </label>
                 {watchError && <span role="alert" style={watchErrorStyle}>{watchError}</span>}
+                {pendingWebsite && (
+                  <button onClick={presentWebsite} style={{ ...secondaryButtonStyle(false), width: '100%' }} type="button">
+                    <ScreenShare size={16} /> {isBrowserPresenter ? 'Present Website' : 'Choose Website Window'}
+                  </button>
+                )}
               </form>
             )}
             {shareMode !== 'watch' && (
               <>
-                <button onClick={() => switchScreen(selectedSourceId)} style={{ ...secondaryButtonStyle(false), width: '100%', marginTop: '10px' }}>
+                <button
+                  onClick={shareMode === 'whiteboard' ? () => switchScreen(selectedSourceId) : shareSelectedScreen}
+                  style={{ ...secondaryButtonStyle(false), width: '100%', marginTop: '10px' }}
+                >
                   <ScreenShare size={16} /> {shareMode === 'whiteboard' ? (isLive ? 'Switch To Whiteboard' : 'Share Whiteboard') : (isLive ? 'Switch To Selected' : 'Share Selected')}
                 </button>
                 <div style={segmentedStyle}>
@@ -2032,23 +2134,23 @@ const callStageBodyStyle = (presenting, expanded) => ({
   borderRadius: '8px',
   display: 'grid',
   gap: '10px',
-  gridTemplateColumns: presenting && !expanded ? 'minmax(0, 1fr) 230px' : 'minmax(0, 1fr)',
-  minHeight: '220px',
+  gridTemplateColumns: presenting && !expanded ? 'minmax(0, 1fr) minmax(280px, 30%)' : 'minmax(0, 1fr)',
+  minHeight: '360px',
   overflow: 'hidden',
-  padding: '12px'
+  padding: '12px',
+  position: 'relative'
 });
 
 const faceGridStyle = (presenting, expanded) => ({
   alignContent: 'start',
   display: 'grid',
   gap: '10px',
-  gridTemplateColumns: presenting && !expanded
-    ? 'minmax(0, 1fr)'
-    : 'repeat(auto-fit, minmax(260px, 420px))',
+  gridTemplateColumns: 'minmax(0, 1fr)',
   justifyContent: presenting && !expanded ? 'stretch' : 'center',
-  maxHeight: presenting && !expanded ? '510px' : 'none',
+  maxHeight: presenting && !expanded ? '560px' : 'min(72dvh, 760px)',
   minWidth: 0,
-  overflowY: presenting && !expanded ? 'auto' : 'visible'
+  overflowY: 'auto',
+  scrollSnapType: 'y proximity'
 });
 
 const meetControlDockStyle = {
@@ -2098,6 +2200,18 @@ const localPresenterTileStyle = {
   minHeight: '112px',
   overflow: 'hidden',
   position: 'relative'
+};
+
+const hostSelfPreviewStyle = {
+  ...localPresenterTileStyle,
+  bottom: '20px',
+  boxShadow: '0 18px 44px rgba(0, 0, 0, 0.42)',
+  height: '126px',
+  minHeight: 0,
+  position: 'absolute',
+  right: '20px',
+  width: '224px',
+  zIndex: 12
 };
 
 const shareTileStyle = (expanded) => ({
@@ -2598,13 +2712,45 @@ const liveCallResponsiveStyles = `
     transform: none !important;
   }
 
+  [data-face-grid="true"] [data-participant-id] {
+    aspect-ratio: 16 / 9 !important;
+    min-height: 0 !important;
+    scroll-snap-align: start;
+    width: 100% !important;
+  }
+
+  [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"][data-face-layout="solo"] {
+    grid-template-columns: minmax(0, min(960px, 100%)) !important;
+  }
+
+  [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"][data-face-layout="solo"] [data-participant-id] {
+    min-height: min(56dvh, 540px) !important;
+  }
+
+  [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"][data-face-layout="pair"],
+  [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"][data-face-layout="quad"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"][data-face-layout="compact"] {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"][data-face-layout="dense"] {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  }
+
+  [data-call-stage-body="true"][data-presenting="true"] [data-face-grid="true"] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
   @media (max-width: 1180px) {
     [data-live-call-root="true"] {
       margin: -18px !important;
     }
 
     [data-call-stage-body="true"][data-presenting="true"][data-share-expanded="false"] {
-      grid-template-columns: minmax(0, 1fr) 190px !important;
+      grid-template-columns: minmax(0, 1fr) minmax(240px, 30%) !important;
     }
 
     [data-call-side-panel="true"] {
@@ -2653,56 +2799,78 @@ const liveCallResponsiveStyles = `
     }
 
     [data-face-grid="true"] {
-      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)) !important;
       max-height: none !important;
       overflow: visible !important;
     }
 
     [data-call-stage-body="true"][data-presenting="true"] [data-face-grid="true"] {
-      grid-auto-columns: minmax(140px, 42vw) !important;
+      grid-auto-columns: min(72vw, 320px) !important;
       grid-auto-flow: column !important;
       grid-template-columns: none !important;
       overflow-x: auto !important;
       overflow-y: hidden !important;
       padding-bottom: 2px !important;
+      scroll-snap-type: x mandatory;
     }
 
-    [data-local-face-tile="true"],
     [data-participant-id] {
       aspect-ratio: 16 / 9 !important;
-      min-height: 96px !important;
+      min-height: 156px !important;
     }
 
     [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"] {
       align-content: start !important;
       gap: 8px !important;
-      grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
       justify-content: stretch !important;
       width: 100% !important;
     }
 
-    [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"][data-face-count="1"],
-    [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"][data-face-count="2"] {
+    [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"][data-face-layout="solo"],
+    [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"][data-face-layout="pair"] {
       grid-template-columns: minmax(0, 1fr) !important;
     }
 
-    [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"][data-face-count="1"] [data-local-face-tile="true"] {
+    [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"][data-face-layout="solo"] [data-tile-kind="camera"] {
       aspect-ratio: 3 / 4 !important;
       max-height: 58dvh !important;
       min-height: min(360px, 52dvh) !important;
       width: 100% !important;
     }
 
-    [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"][data-face-count="2"] [data-local-face-tile="true"],
-    [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"][data-face-count="2"] [data-tile-kind="camera"] {
+    [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"][data-face-layout="pair"] [data-tile-kind="camera"] {
       aspect-ratio: 16 / 9 !important;
       min-height: 0 !important;
     }
 
-    [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"]:not([data-face-count="1"]):not([data-face-count="2"]) [data-local-face-tile="true"],
-    [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"]:not([data-face-count="1"]):not([data-face-count="2"]) [data-tile-kind="camera"] {
-      aspect-ratio: 3 / 4 !important;
+    [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"][data-face-layout="quad"] {
+      grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+
+    [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"][data-face-layout="quad"] [data-tile-kind="camera"] {
+      aspect-ratio: 4 / 3 !important;
       min-height: 0 !important;
+    }
+
+    [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"][data-face-layout="compact"],
+    [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"][data-face-layout="dense"] {
+      grid-auto-columns: min(74vw, 320px) !important;
+      grid-auto-flow: column !important;
+      grid-template-columns: none !important;
+      overflow-x: auto !important;
+      overflow-y: hidden !important;
+      scroll-snap-type: x mandatory;
+    }
+
+    [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"][data-face-layout="compact"] [data-tile-kind="camera"],
+    [data-call-stage-body="true"][data-presenting="false"] [data-face-grid="true"][data-face-layout="dense"] [data-tile-kind="camera"] {
+      aspect-ratio: 4 / 3 !important;
+    }
+
+    [data-self-view="true"] {
+      bottom: 12px !important;
+      height: 82px !important;
+      right: 12px !important;
+      width: 132px !important;
     }
 
     [data-participant-admin="true"] {
