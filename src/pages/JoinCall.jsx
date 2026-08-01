@@ -47,6 +47,15 @@ export default function JoinCall() {
     () => ['Maya', 'Jordan', 'Sam', 'Taylor', 'Chris', 'Avery', 'Morgan'].slice(0, Math.max(0, previewFaceCount - 1)),
     [previewFaceCount]
   );
+  const previewUnsupportedMobileShare = useMemo(
+    () => import.meta.env.DEV && new URLSearchParams(window.location.search).get('previewMobileShare') === 'unsupported',
+    []
+  );
+  const isMobileBrowser = useMemo(
+    () => previewUnsupportedMobileShare || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent),
+    [previewUnsupportedMobileShare]
+  );
+  const supportsBrowserScreenShare = () => !previewUnsupportedMobileShare && typeof navigator.mediaDevices?.getDisplayMedia === 'function';
 
   const [name, setName] = useState(previewFaceCount ? 'Alex' : '');
   const [status, setStatus] = useState(previewFaceCount ? 'Mobile call layout preview' : 'Ready to join');
@@ -58,6 +67,7 @@ export default function JoinCall() {
   const [participants, setParticipants] = useState(previewParticipantNames);
   const [fatalError, setFatalError] = useState('');
   const [audioPlaybackBlocked, setAudioPlaybackBlocked] = useState(false);
+  const [screenShareNotice, setScreenShareNotice] = useState('');
 
   useEffect(() => {
     if (localCameraRef.current) {
@@ -237,6 +247,7 @@ export default function JoinCall() {
     setScreenOn(false);
     setHasHostScreen(false);
     setAudioPlaybackBlocked(false);
+    setScreenShareNotice('');
     activeVideoSidRef.current = null;
     activeCameraSidRef.current = null;
     publishedCameraTrackRef.current = null;
@@ -347,6 +358,16 @@ export default function JoinCall() {
 
   const toggleScreenShare = async () => {
     const room = roomRef.current;
+
+    if (!supportsBrowserScreenShare()) {
+      const message = isMobileBrowser
+        ? 'This phone browser cannot capture other apps or your whole phone screen. Google Meet and WhatsApp use native Android or iPhone screen-capture permission. Use the whiteboard here, or join from the ScreenFlow desktop app until the native mobile app is available.'
+        : 'This browser cannot capture your screen. Open the call in current Chrome, Edge, Firefox, or desktop Safari.';
+      setScreenShareNotice(message);
+      setStatus('Screen sharing is unavailable on this device.');
+      return;
+    }
+
     if (!room) return;
 
     if (screenOnRef.current) {
@@ -356,19 +377,18 @@ export default function JoinCall() {
     }
 
     try {
-      if (!navigator.mediaDevices?.getDisplayMedia) {
-        setStatus('Screen sharing is not available in this browser.');
-        return;
-      }
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: {
-          displaySurface: 'monitor',
-          frameRate: { ideal: 30, max: 30 },
-          height: { ideal: 1080 },
-          width: { ideal: 1920 }
-        },
-        audio: false
-      });
+      setScreenShareNotice('');
+      const stream = await navigator.mediaDevices.getDisplayMedia(isMobileBrowser
+        ? { video: true, audio: false }
+        : {
+            video: {
+              displaySurface: 'monitor',
+              frameRate: { ideal: 30, max: 30 },
+              height: { ideal: 1080 },
+              width: { ideal: 1920 }
+            },
+            audio: false
+          });
       const screenTrack = stream.getVideoTracks()[0];
       screenTrack.contentHint = 'text';
       screenTrack.onended = () => {
@@ -393,7 +413,9 @@ export default function JoinCall() {
       setScreenOn(true);
       setStatus('Sharing your screen.');
     } catch (error) {
-      setStatus(getErrorMessage(error, 'Screen share permission was not granted.'));
+      const message = describeScreenShareError(error, isMobileBrowser);
+      setScreenShareNotice(message);
+      setStatus(message);
     }
   };
 
@@ -571,6 +593,16 @@ export default function JoinCall() {
     if (error.reason?.message) return error.reason.message;
     if (error.type) return `${fallback} (${error.type})`;
     return fallback;
+  };
+
+  const describeScreenShareError = (error, mobileBrowser) => {
+    if (error?.name === 'NotAllowedError') {
+      return 'Screen sharing was cancelled or blocked. Tap Share again and allow screen capture when the browser asks.';
+    }
+    if (mobileBrowser && ['NotSupportedError', 'TypeError'].includes(error?.name)) {
+      return 'This phone browser cannot capture the phone screen. Full mobile sharing requires the native ScreenFlow app.';
+    }
+    return getErrorMessage(error, 'Screen share permission was not granted.');
   };
 
   const attachTrack = (track, participant) => {
@@ -799,6 +831,12 @@ export default function JoinCall() {
         )}
 
         <p data-call-status="true" style={statusStyle}>{status}</p>
+        {screenShareNotice && (
+          <section data-screen-share-notice="true" style={screenShareNoticeStyle}>
+            <strong>Screen sharing</strong>
+            <span>{screenShareNotice}</span>
+          </section>
+        )}
         {connected && audioPlaybackBlocked && (
           <button onClick={enableCallAudio} style={{ ...primaryButtonStyle, marginBottom: '10px', width: '100%' }}>
             <Volume2 size={17} /> Enable sound
@@ -1187,6 +1225,19 @@ const participantsStyle = {
   borderTop: '1px solid #2A2A2A',
   marginTop: 0,
   paddingTop: '12px'
+};
+
+const screenShareNoticeStyle = {
+  background: '#171717',
+  border: '1px solid #404040',
+  borderRadius: '8px',
+  color: '#D4D4D4',
+  display: 'grid',
+  fontSize: '13px',
+  gap: '5px',
+  lineHeight: 1.45,
+  margin: '0 0 12px',
+  padding: '11px 12px'
 };
 
 const sectionTitleStyle = {

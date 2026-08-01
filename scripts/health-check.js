@@ -95,6 +95,9 @@ function checkJoinCallMedia() {
   assertIncludes(join, 'data-face-count={Math.max(1, participants.length + 1)}', 'Join page exposes participant count to responsive camera layout');
   assertIncludes(join, '.camera-box[data-face-count="1"]', 'Mobile join page gives a solo caller a large stage');
   assertIncludes(join, '.camera-box[data-face-count="2"]', 'Mobile join page stacks two callers at full width');
+  assertIncludes(join, "supportsBrowserScreenShare = () => !previewUnsupportedMobileShare && typeof navigator.mediaDevices?.getDisplayMedia === 'function'", 'Join page detects browser screen-capture support');
+  assertIncludes(join, 'data-screen-share-notice="true"', 'Join page explains unavailable mobile screen capture inline');
+  assertIncludes(join, "isMobileBrowser\n        ? { video: true, audio: false }", 'Join page uses broadly compatible capture constraints on supported mobile browsers');
 }
 
 function checkPresenterLiveCall() {

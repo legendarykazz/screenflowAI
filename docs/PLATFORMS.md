@@ -8,6 +8,7 @@ ScreenFlow AI uses one React product core and three platform shells. This keeps 
 | --- | --- | --- | --- |
 | Join and host LiveKit calls | Yes | Opens web workspace | Yes |
 | Camera and microphone | Yes, with browser permission | Tab audio only | Yes |
+| Share the full phone screen | No, requires a native mobile app | No | N/A |
 | Football Lab and whiteboard | Yes | Opens web workspace | Yes |
 | Record active Chrome tab | Browser share dialog | Yes, one click | Yes |
 | Record other applications | Platform-limited | No | Yes |
