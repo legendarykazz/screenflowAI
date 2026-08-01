@@ -4,8 +4,29 @@ import {
   MousePointer, Scissors, Film, RefreshCw, Type, Eye, Camera, Layers,
   Play, Pause, SkipBack, SkipForward, Volume2, VolumeX,
   ZoomIn, ZoomOut, Wand2, Check, AlertCircle, Clock,
-  ChevronDown, Plus, Trash2, Lock
+  ChevronDown, Plus, Trash2, Lock, Undo2, Redo2, Copy, Upload,
+  Music2, Mic2, Palette, X, Gauge, AudioWaveform, WandSparkles
 } from 'lucide-react';
+import './Editor.css';
+
+const DEFAULT_TIMELINE_CLIPS = [
+  { id: 'screen', role: 'screen', kind: 'video', label: 'Screen Recording', start: 0, end: 1, color: '#f5f5f5', track: 0, enabled: true },
+  { id: 'audio', role: 'audio', kind: 'voice', label: 'Microphone Audio', start: 0, end: 1, color: '#a3a3a3', track: 1, enabled: true, volume: 1 },
+  { id: 'webcam', role: 'webcam', kind: 'webcam', label: 'Webcam Overlay', start: 0.05, end: 1, color: '#737373', track: 3, enabled: true },
+];
+
+const BUILT_IN_SFX = [
+  { id: 'click', label: 'Soft click', duration: 0.22, color: '#f59e0b' },
+  { id: 'pop', label: 'UI pop', duration: 0.38, color: '#fb7185' },
+  { id: 'whoosh', label: 'Transition whoosh', duration: 0.9, color: '#38bdf8' },
+];
+
+const COLOR_PRESETS = {
+  clean: { color_exposure: 4, color_contrast: 8, color_saturation: 6, color_temperature: 0, color_tint: 0 },
+  vivid: { color_exposure: 2, color_contrast: 16, color_saturation: 24, color_temperature: 3, color_tint: 0 },
+  warm: { color_exposure: 3, color_contrast: 12, color_saturation: 10, color_temperature: 18, color_tint: 3 },
+  cool: { color_exposure: 1, color_contrast: 10, color_saturation: 5, color_temperature: -16, color_tint: -2 },
+};
 
 export default function Editor({ projectId, onCloseProject, license }) {
   const isPro = license?.plan === 'pro';
@@ -49,13 +70,15 @@ export default function Editor({ projectId, onCloseProject, license }) {
   const [selectedClipId, setSelectedClipId] = useState('screen');
   const [timelineDrag, setTimelineDrag] = useState(null);
   const [previewStatus, setPreviewStatus] = useState('Loading video...');
+  const [editorNotice, setEditorNotice] = useState('');
+  const [showSfxMenu, setShowSfxMenu] = useState(false);
+  const [aiEditBusy, setAiEditBusy] = useState(false);
+  const [aiEditPlan, setAiEditPlan] = useState(null);
+  const [undoAvailable, setUndoAvailable] = useState(false);
+  const [redoAvailable, setRedoAvailable] = useState(false);
 
   // Timeline clips state
-  const [timelineClips, setTimelineClips] = useState([
-    { id: 'screen', label: 'Screen Recording', start: 0, end: 1, color: '#f5f5f5', track: 0, enabled: true },
-    { id: 'audio', label: 'Microphone Audio', start: 0, end: 1, color: '#a3a3a3', track: 1, enabled: true },
-    { id: 'webcam', label: 'Webcam Overlay', start: 0.05, end: 1, color: '#737373', track: 2, enabled: true },
-  ]);
+  const [timelineClips, setTimelineClips] = useState(DEFAULT_TIMELINE_CLIPS);
 
   // Refs for real-time preview simulation
   const videoRef = useRef(null);
@@ -69,6 +92,14 @@ export default function Editor({ projectId, onCloseProject, license }) {
   const timelineDragRef = useRef(null);
   const timelineClipsRef = useRef(timelineClips);
   const brandLogoRef = useRef(null);
+  const importedMediaRefs = useRef(new Map());
+  const audioGraphRef = useRef(null);
+  const undoStackRef = useRef([]);
+  const redoStackRef = useRef([]);
+  const dragSnapshotRef = useRef(null);
+  const playedSfxRef = useRef(new Set());
+  const browserFileInputRef = useRef(null);
+  const noticeTimeoutRef = useRef(null);
 
   // Smooth Zoom state for Screen Studio continuous panning
   const smoothZoomRef = useRef(1.0);
@@ -82,6 +113,13 @@ export default function Editor({ projectId, onCloseProject, license }) {
     return () => {
       if (animationRef.current) cancelAnimationFrame(animationRef.current);
       exportProgressUnsubscribeRef.current?.();
+      window.clearTimeout(noticeTimeoutRef.current);
+      importedMediaRefs.current.forEach((element) => {
+        try { element.pause(); } catch (error) {}
+      });
+      if (audioGraphRef.current?.context) {
+        audioGraphRef.current.context.close().catch(() => {});
+      }
     };
   }, [projectId]);
 
@@ -91,6 +129,18 @@ export default function Editor({ projectId, onCloseProject, license }) {
       videoRef.current.volume = volume;
     }
   }, [isMuted, volume]);
+
+  useEffect(() => {
+    const graph = audioGraphRef.current;
+    if (!graph) return;
+    const cleanupEnabled = settings.voice_cleanup_enabled === true;
+    const isolation = Math.max(0, Math.min(100, settings.voice_isolation ?? 55)) / 100;
+    graph.highpass.frequency.value = cleanupEnabled ? 70 + (isolation * 55) : 10;
+    graph.presence.gain.value = cleanupEnabled ? 1.5 + (isolation * 3.5) : 0;
+    graph.compressor.threshold.value = cleanupEnabled ? -24 + (isolation * 6) : 0;
+    graph.compressor.ratio.value = cleanupEnabled ? 2.2 + (isolation * 2.8) : 1;
+    graph.gain.gain.value = Math.pow(10, (settings.voice_gain ?? 0) / 20);
+  }, [settings.voice_cleanup_enabled, settings.voice_isolation, settings.voice_gain]);
 
   useEffect(() => {
     timelineDragRef.current = timelineDrag;
@@ -116,9 +166,10 @@ export default function Editor({ projectId, onCloseProject, license }) {
   useEffect(() => {
     const handleMove = (event) => {
       const drag = timelineDragRef.current;
-      if (!drag || !timelineRef.current || duration <= 0) return;
+      if (!drag || duration <= 0) return;
 
-      const rect = timelineRef.current.getBoundingClientRect();
+      const rect = drag.laneRect || timelineRef.current?.getBoundingClientRect();
+      if (!rect) return;
       const pct = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
       const time = pct * duration;
       const minLength = Math.min(1, Math.max(0.15, duration * 0.04));
@@ -156,8 +207,17 @@ export default function Editor({ projectId, onCloseProject, license }) {
 
     const handleUp = () => {
       if (timelineDragRef.current) {
+        const before = dragSnapshotRef.current;
+        if (before && JSON.stringify(before) !== JSON.stringify(timelineClipsRef.current)) {
+          undoStackRef.current.push(before);
+          if (undoStackRef.current.length > 40) undoStackRef.current.shift();
+          redoStackRef.current = [];
+          setUndoAvailable(true);
+          setRedoAvailable(false);
+        }
         saveTimelineClips(timelineClipsRef.current);
       }
+      dragSnapshotRef.current = null;
       setTimelineDrag(null);
     };
     window.addEventListener('mousemove', handleMove);
@@ -176,18 +236,23 @@ export default function Editor({ projectId, onCloseProject, license }) {
       if (proj?.duration) setDuration(proj.duration);
       if (Array.isArray(proj?.settings?.timeline_clips)) {
         const repairedClips = proj.settings.timeline_clips.map((clip) => {
+          const role = clip.role || (clip.id === 'screen' ? 'screen' : clip.id === 'audio' ? 'audio' : clip.id === 'webcam' ? 'webcam' : null);
+          const kind = clip.kind || (role === 'screen' ? 'video' : role === 'audio' ? 'voice' : role === 'webcam' ? 'webcam' : 'video');
+          const repaired = { ...clip, role, kind, volume: clip.volume ?? 1 };
           if ((clip.id === 'screen' || clip.id === 'audio') && clip.start === 0 && clip.end < 0.99) {
-            return { ...clip, end: 1 };
+            return { ...repaired, end: 1 };
           }
           if (clip.id === 'webcam' && clip.end < 0.99) {
-            return { ...clip, end: 1 };
+            return { ...repaired, end: 1 };
           }
-          return clip;
+          return repaired;
         });
         setTimelineClips(repairedClips);
         if (JSON.stringify(repairedClips) !== JSON.stringify(proj.settings.timeline_clips)) {
           await window.electron.updateProject(projectId, { timeline_clips: repairedClips });
         }
+      } else {
+        setTimelineClips(DEFAULT_TIMELINE_CLIPS);
       }
       
       const events = await window.electron.getCursorEvents(projectId);
@@ -319,10 +384,142 @@ export default function Editor({ projectId, onCloseProject, license }) {
 
   const saveTimelineClips = async (nextClips) => {
     setTimelineClips(nextClips);
+    timelineClipsRef.current = nextClips;
     setSettings((prev) => ({ ...prev, timeline_clips: nextClips }));
     if (window.electron?.updateProject) {
       await window.electron.updateProject(projectId, { timeline_clips: nextClips });
     }
+  };
+
+  const cloneClips = (clips) => clips.map((clip) => ({ ...clip }));
+
+  const commitTimeline = (nextClips, options = {}) => {
+    const current = cloneClips(timelineClipsRef.current);
+    if (JSON.stringify(current) === JSON.stringify(nextClips)) return;
+    if (options.recordHistory !== false) {
+      undoStackRef.current.push(current);
+      if (undoStackRef.current.length > 40) undoStackRef.current.shift();
+      redoStackRef.current = [];
+    }
+    setUndoAvailable(undoStackRef.current.length > 0);
+    setRedoAvailable(redoStackRef.current.length > 0);
+    saveTimelineClips(nextClips);
+  };
+
+  const undoTimeline = () => {
+    const previous = undoStackRef.current.pop();
+    if (!previous) return;
+    redoStackRef.current.push(cloneClips(timelineClipsRef.current));
+    setUndoAvailable(undoStackRef.current.length > 0);
+    setRedoAvailable(true);
+    saveTimelineClips(previous);
+    setSelectedClipId(previous.some((clip) => clip.id === selectedClipId) ? selectedClipId : previous[0]?.id || null);
+  };
+
+  const redoTimeline = () => {
+    const next = redoStackRef.current.pop();
+    if (!next) return;
+    undoStackRef.current.push(cloneClips(timelineClipsRef.current));
+    setUndoAvailable(true);
+    setRedoAvailable(redoStackRef.current.length > 0);
+    saveTimelineClips(next);
+    setSelectedClipId(next.some((clip) => clip.id === selectedClipId) ? selectedClipId : next[0]?.id || null);
+  };
+
+  const showEditorNotice = (message) => {
+    setEditorNotice(message);
+    window.clearTimeout(noticeTimeoutRef.current);
+    noticeTimeoutRef.current = window.setTimeout(() => setEditorNotice(''), 2800);
+  };
+
+  const clipStartSeconds = (clip) => Math.max(0, (clip?.start || 0) * duration);
+  const clipEndSeconds = (clip) => Math.max(clipStartSeconds(clip), (clip?.end ?? 1) * duration);
+  const clipIsActive = (clip, timestamp) => (
+    clip?.enabled !== false && timestamp >= clipStartSeconds(clip) && timestamp <= clipEndSeconds(clip)
+  );
+
+  const getMediaPreviewUrl = useCallback((sourcePath) => {
+    if (!sourcePath) return '';
+    if (/^(https?:|blob:|data:|file:|screenflow-media:)/i.test(sourcePath)) return sourcePath;
+    const normalized = sourcePath.replace(/\\/g, '/');
+    return window.electron
+      ? `screenflow-media:///${encodeURIComponent(normalized)}`
+      : sourcePath;
+  }, []);
+
+  const registerImportedMedia = (clipId, element) => {
+    if (element) importedMediaRefs.current.set(clipId, element);
+    else importedMediaRefs.current.delete(clipId);
+  };
+
+  const ensureAudioGraph = async () => {
+    if (audioGraphRef.current) {
+      if (audioGraphRef.current.context.state === 'suspended') await audioGraphRef.current.context.resume();
+      return audioGraphRef.current;
+    }
+    const video = videoRef.current;
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!video || !AudioContextClass) return null;
+    try {
+      const context = new AudioContextClass();
+      const source = context.createMediaElementSource(video);
+      const highpass = context.createBiquadFilter();
+      const presence = context.createBiquadFilter();
+      const compressor = context.createDynamicsCompressor();
+      const gain = context.createGain();
+      highpass.type = 'highpass';
+      presence.type = 'peaking';
+      presence.frequency.value = 3400;
+      presence.Q.value = 0.8;
+      compressor.knee.value = 18;
+      compressor.attack.value = 0.012;
+      compressor.release.value = 0.22;
+      source.connect(highpass).connect(presence).connect(compressor).connect(gain).connect(context.destination);
+      audioGraphRef.current = { context, source, highpass, presence, compressor, gain };
+      const cleanupEnabled = settings.voice_cleanup_enabled === true;
+      const isolation = Math.max(0, Math.min(100, settings.voice_isolation ?? 55)) / 100;
+      highpass.frequency.value = cleanupEnabled ? 70 + (isolation * 55) : 10;
+      presence.gain.value = cleanupEnabled ? 1.5 + (isolation * 3.5) : 0;
+      compressor.threshold.value = cleanupEnabled ? -24 + (isolation * 6) : 0;
+      compressor.ratio.value = cleanupEnabled ? 2.2 + (isolation * 2.8) : 1;
+      gain.gain.value = Math.pow(10, (settings.voice_gain ?? 0) / 20);
+      await context.resume();
+      return audioGraphRef.current;
+    } catch (error) {
+      console.warn('Voice preview processing is unavailable:', error);
+      return null;
+    }
+  };
+
+  const previewSoundEffect = (kind, gainValue = 0.75) => {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return;
+    const context = audioGraphRef.current?.context || new AudioContextClass();
+    const gain = context.createGain();
+    gain.gain.setValueAtTime(Math.max(0, Math.min(1, gainValue)), context.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + (kind === 'whoosh' ? 0.85 : 0.3));
+    gain.connect(context.destination);
+    if (kind === 'whoosh') {
+      const buffer = context.createBuffer(1, Math.floor(context.sampleRate * 0.9), context.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let index = 0; index < data.length; index += 1) data[index] = (Math.random() * 2 - 1) * (index / data.length);
+      const source = context.createBufferSource();
+      const filter = context.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(500, context.currentTime);
+      filter.frequency.exponentialRampToValueAtTime(6500, context.currentTime + 0.75);
+      source.buffer = buffer;
+      source.connect(filter).connect(gain);
+      source.start();
+      return;
+    }
+    const oscillator = context.createOscillator();
+    oscillator.type = kind === 'pop' ? 'sine' : 'triangle';
+    oscillator.frequency.setValueAtTime(kind === 'pop' ? 520 : 880, context.currentTime);
+    oscillator.frequency.exponentialRampToValueAtTime(kind === 'pop' ? 190 : 420, context.currentTime + 0.22);
+    oscillator.connect(gain);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.3);
   };
 
   const easeInOutCubic = (t) => (
@@ -404,17 +601,237 @@ export default function Editor({ projectId, onCloseProject, license }) {
   const getClipById = (id) => timelineClips.find((clip) => clip.id === id);
 
   const isClipActive = (id, timestamp = currentTime) => {
-    const clip = getClipById(id);
-    if (!clip || !duration) return true;
-    if (clip.enabled === false) return false;
-    const start = clip.start * duration;
-    const end = clip.end * duration;
-    return timestamp >= start && timestamp <= end;
+    const matchingClips = timelineClips.filter((clip) => clip.id === id || clip.role === id);
+    if (!matchingClips.length || !duration) return true;
+    return matchingClips.some((clip) => clipIsActive(clip, timestamp));
+  };
+
+  const splitSelectedClip = () => {
+    const selected = getClipById(selectedClipId);
+    if (!selected || duration <= 0) return;
+    const start = clipStartSeconds(selected);
+    const end = clipEndSeconds(selected);
+    if (currentTime <= start + 0.08 || currentTime >= end - 0.08) {
+      showEditorNotice('Move the playhead inside the selected clip before splitting.');
+      return;
+    }
+    const splitPoint = currentTime / duration;
+    const sourceLength = selected.sourceEnd != null
+      ? selected.sourceEnd - (selected.sourceStart || 0)
+      : end - start;
+    const sourceSplit = (selected.sourceStart || 0) + sourceLength * ((currentTime - start) / Math.max(0.01, end - start));
+    const left = { ...selected, end: splitPoint, sourceEnd: sourceSplit };
+    const right = {
+      ...selected,
+      id: `${selected.id}-split-${Date.now()}`,
+      label: `${selected.label} 2`,
+      start: splitPoint,
+      sourceStart: sourceSplit,
+    };
+    const index = timelineClips.findIndex((clip) => clip.id === selected.id);
+    const next = [...timelineClips];
+    next.splice(index, 1, left, right);
+    commitTimeline(next);
+    setSelectedClipId(right.id);
+    showEditorNotice(`Split at ${formatTime(currentTime)}.`);
+  };
+
+  const deleteSelectedClip = () => {
+    const selected = getClipById(selectedClipId);
+    if (!selected) return;
+    const sameRole = timelineClips.filter((clip) => clip.role && clip.role === selected.role);
+    if ((selected.role === 'screen' || selected.role === 'audio') && sameRole.length === 1) {
+      const next = timelineClips.map((clip) => clip.id === selected.id ? { ...clip, enabled: false } : clip);
+      commitTimeline(next);
+      showEditorNotice(`${selected.label} hidden. Undo restores it.`);
+      return;
+    }
+    const next = timelineClips.filter((clip) => clip.id !== selected.id);
+    commitTimeline(next);
+    setSelectedClipId(next[Math.max(0, timelineClips.findIndex((clip) => clip.id === selected.id) - 1)]?.id || null);
+    showEditorNotice(`${selected.label} removed.`);
+  };
+
+  const duplicateSelectedClip = () => {
+    const selected = getClipById(selectedClipId);
+    if (!selected || duration <= 0) return;
+    if (!selected.sourcePath && !selected.sfxKind) {
+      showEditorNotice('Recorded tracks can be split; imported clips and effects can be duplicated.');
+      return;
+    }
+    const length = selected.end - selected.start;
+    const nextStart = Math.min(Math.max(0, 1 - length), selected.end + (0.12 / duration));
+    const copy = {
+      ...selected,
+      id: `${selected.id}-copy-${Date.now()}`,
+      label: `${selected.label} copy`,
+      start: nextStart,
+      end: Math.min(1, nextStart + length),
+    };
+    const next = [...timelineClips, copy];
+    commitTimeline(next);
+    setSelectedClipId(copy.id);
+    showEditorNotice('Clip duplicated.');
+  };
+
+  const addImportedClip = async (kind, browserFile = null) => {
+    let sourcePath = '';
+    let label = kind === 'video' ? 'Imported video' : 'Imported audio';
+    let mediaDuration = 5;
+
+    if (browserFile) {
+      sourcePath = URL.createObjectURL(browserFile);
+      label = browserFile.name;
+      mediaDuration = await new Promise((resolve) => {
+        const media = document.createElement(kind === 'video' ? 'video' : 'audio');
+        media.preload = 'metadata';
+        media.onloadedmetadata = () => resolve(Number.isFinite(media.duration) ? media.duration : 5);
+        media.onerror = () => resolve(5);
+        media.src = sourcePath;
+      });
+    } else if (window.electron?.selectFile) {
+      sourcePath = await window.electron.selectFile([
+        kind === 'video'
+          ? { name: 'Video', extensions: ['mp4', 'mov', 'webm', 'mkv', 'avi'] }
+          : { name: 'Audio', extensions: ['mp3', 'wav', 'm4a', 'aac', 'ogg'] }
+      ]);
+      if (!sourcePath) return;
+      label = sourcePath.split(/[\\/]/).pop() || label;
+      const probe = await window.electron.probeMedia?.(sourcePath);
+      mediaDuration = probe?.duration || 5;
+    } else {
+      browserFileInputRef.current?.click();
+      return;
+    }
+
+    const maxLength = Math.max(0.4, duration - currentTime);
+    const clipLength = Math.min(mediaDuration, maxLength || Math.min(mediaDuration, duration));
+    const timelineStart = Math.min(currentTime, Math.max(0, duration - clipLength));
+    const clip = {
+      id: `${kind}-${Date.now()}`,
+      role: kind === 'video' ? 'broll' : 'music',
+      kind,
+      label,
+      sourcePath,
+      sourceStart: 0,
+      sourceEnd: clipLength,
+      start: timelineStart / duration,
+      end: Math.min(1, (timelineStart + clipLength) / duration),
+      color: kind === 'video' ? '#a78bfa' : '#34d399',
+      track: kind === 'video' ? 2 : 4,
+      enabled: true,
+      volume: kind === 'video' ? 0 : 0.8,
+      useAudio: false,
+    };
+    commitTimeline([...timelineClips, clip]);
+    setSelectedClipId(clip.id);
+    setSidebarTab(kind === 'video' ? 'color' : 'audio');
+    showEditorNotice(`${kind === 'video' ? 'Video' : 'Audio'} added at ${formatTime(timelineStart)}.`);
+  };
+
+  const addSoundEffect = (effect) => {
+    if (duration <= 0) return;
+    const start = Math.min(currentTime, Math.max(0, duration - effect.duration));
+    const clip = {
+      id: `sfx-${effect.id}-${Date.now()}`,
+      role: 'sfx',
+      kind: 'sfx',
+      sfxKind: effect.id,
+      label: effect.label,
+      start: start / duration,
+      end: Math.min(1, (start + effect.duration) / duration),
+      sourceStart: 0,
+      sourceEnd: effect.duration,
+      color: effect.color,
+      track: 4,
+      enabled: true,
+      volume: 0.75,
+    };
+    commitTimeline([...timelineClips, clip]);
+    setSelectedClipId(clip.id);
+    setSidebarTab('audio');
+    setShowSfxMenu(false);
+    previewSoundEffect(effect.id, clip.volume);
+  };
+
+  const analyzeCurrentFrame = () => {
+    const video = videoRef.current;
+    if (!video || video.readyState < 2 || !video.videoWidth) return COLOR_PRESETS.clean;
+    try {
+      const sample = document.createElement('canvas');
+      sample.width = 48;
+      sample.height = 27;
+      const sampleContext = sample.getContext('2d', { willReadFrequently: true });
+      sampleContext.drawImage(video, 0, 0, sample.width, sample.height);
+      const pixels = sampleContext.getImageData(0, 0, sample.width, sample.height).data;
+      let luminance = 0;
+      let chroma = 0;
+      for (let index = 0; index < pixels.length; index += 4) {
+        const r = pixels[index];
+        const g = pixels[index + 1];
+        const b = pixels[index + 2];
+        luminance += (r * 0.2126) + (g * 0.7152) + (b * 0.0722);
+        chroma += Math.max(r, g, b) - Math.min(r, g, b);
+      }
+      const count = pixels.length / 4;
+      const averageLight = luminance / count;
+      const averageChroma = chroma / count;
+      return {
+        color_exposure: Math.round(Math.max(-12, Math.min(18, (122 - averageLight) / 5))),
+        color_contrast: averageLight < 80 || averageLight > 185 ? 5 : 11,
+        color_saturation: Math.round(Math.max(2, Math.min(20, (55 - averageChroma) / 3))),
+        color_temperature: 2,
+        color_tint: 0,
+      };
+    } catch (error) {
+      return COLOR_PRESETS.clean;
+    }
+  };
+
+  const applyAutoColor = async () => {
+    const grade = analyzeCurrentFrame();
+    await handleSaveSettings({ ...grade, color_preset: 'auto' });
+    showEditorNotice('Auto color balanced from the current frame.');
+    return grade;
+  };
+
+  const buildAiEditPlan = async () => {
+    setAiEditBusy(true);
+    setSidebarTab('ai');
+    const detectedSilence = window.electron?.detectSilence
+      ? await window.electron.detectSilence(projectId, silenceSensitivity)
+      : [];
+    const grade = analyzeCurrentFrame();
+    const clickCount = cursorEventsRef.current.filter((event) => event.event_type?.includes('click')).length;
+    setSilencePeriods(detectedSilence || []);
+    setAiEditPlan({
+      silence: detectedSilence || [],
+      grade,
+      clickCount,
+      voiceCleanup: true,
+    });
+    setAiEditBusy(false);
+  };
+
+  const applyAiEditPlan = async () => {
+    if (!aiEditPlan) return;
+    await handleSaveSettings({
+      ...aiEditPlan.grade,
+      color_preset: 'auto',
+      voice_cleanup_enabled: true,
+      voice_isolation: Math.max(55, settings.voice_isolation ?? 55),
+      normalize_audio: true,
+    });
+    if (aiEditPlan.clickCount > 0 && isPro) await handleScanScene();
+    showEditorNotice('AI edit applied. Review the marked pauses before removing them.');
   };
 
   const seekToTimelineEvent = (event) => {
-    if (!timelineRef.current || duration <= 0) return;
-    const rect = timelineRef.current.getBoundingClientRect();
+    const timelineElement = event.currentTarget?.dataset?.timelineLane === 'true'
+      ? event.currentTarget
+      : timelineRef.current;
+    if (!timelineElement || duration <= 0) return;
+    const rect = timelineElement.getBoundingClientRect();
     const pct = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
     const newTime = pct * duration;
     if (videoRef.current) videoRef.current.currentTime = newTime;
@@ -426,16 +843,24 @@ export default function Editor({ projectId, onCloseProject, license }) {
   const startClipDrag = (event, clip, mode) => {
     event.stopPropagation();
     setSelectedClipId(clip.id);
+    dragSnapshotRef.current = cloneClips(timelineClipsRef.current);
+    if (mode === 'move' && (clip.role === 'screen' || clip.role === 'audio' || clip.role === 'webcam')) {
+      dragSnapshotRef.current = null;
+      showEditorNotice('Recorded tracks stay time-locked. Drag either edge to trim them.');
+      return;
+    }
     const start = clip.start * duration;
     const end = clip.end * duration;
-    const rect = timelineRef.current?.getBoundingClientRect();
+    const lane = event.currentTarget?.closest?.('[data-timeline-lane="true"]');
+    const rect = lane?.getBoundingClientRect() || timelineRef.current?.getBoundingClientRect();
     const pointerTime = rect ? (((event.clientX - rect.left) / rect.width) * duration) : start;
     setTimelineDrag({
       id: clip.id,
       mode,
       start,
       end,
-      offset: Math.max(0, pointerTime - start)
+      offset: Math.max(0, pointerTime - start),
+      laneRect: rect ? { left: rect.left, width: rect.width } : null
     });
   };
 
@@ -545,11 +970,50 @@ export default function Editor({ projectId, onCloseProject, license }) {
       animationRef.current = null;
       return;
     }
-    const videoReady = video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0;
+    const playbackActive = !video.paused && !video.ended;
     const screenActive = isClipActive('screen', timestamp);
     const audioActive = isClipActive('audio', timestamp);
     const webcamActive = isClipActive('webcam', timestamp);
     video.muted = isMuted || !audioActive;
+
+    const activeImportedVideo = [...timelineClipsRef.current]
+      .filter((clip) => clip.kind === 'video' && clip.sourcePath && clipIsActive(clip, timestamp))
+      .sort((a, b) => (a.track || 0) - (b.track || 0))
+      .at(-1);
+
+    timelineClipsRef.current.forEach((clip) => {
+      if (!clip.sourcePath) return;
+      const media = importedMediaRefs.current.get(clip.id);
+      if (!media) return;
+      const active = clipIsActive(clip, timestamp);
+      if (!active) {
+        if (!media.paused) media.pause();
+        return;
+      }
+      const localTime = (clip.sourceStart || 0) + Math.max(0, timestamp - clipStartSeconds(clip));
+      if (Number.isFinite(media.duration) && Math.abs(media.currentTime - localTime) > 0.16) {
+        try { media.currentTime = Math.min(Math.max(0, localTime), Math.max(0, media.duration - 0.03)); } catch (error) {}
+      }
+      media.volume = Math.max(0, Math.min(1, (clip.volume ?? 1) * volume));
+      media.muted = isMuted || (clip.kind === 'video' && !clip.useAudio);
+      if (playbackActive && media.paused) media.play().catch(() => {});
+      if (!playbackActive && !media.paused) media.pause();
+    });
+
+    timelineClipsRef.current
+      .filter((clip) => clip.kind === 'sfx')
+      .forEach((clip) => {
+        const start = clipStartSeconds(clip);
+        if (timestamp < start - 0.1) playedSfxRef.current.delete(clip.id);
+        if (playbackActive && clipIsActive(clip, timestamp) && timestamp - start < 0.09 && !playedSfxRef.current.has(clip.id)) {
+          playedSfxRef.current.add(clip.id);
+          previewSoundEffect(clip.sfxKind, clip.volume ?? 0.75);
+        }
+      });
+
+    const importedVideoElement = activeImportedVideo ? importedMediaRefs.current.get(activeImportedVideo.id) : null;
+    const drawSource = importedVideoElement?.readyState >= 2 ? importedVideoElement : video;
+    const drawSourceReady = drawSource.readyState >= 2 && drawSource.videoWidth > 0 && drawSource.videoHeight > 0;
 
     // 1. Draw Background
     ctx.save();
@@ -592,7 +1056,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
     }
     ctx.restore();
 
-    if (!screenActive) {
+    if (!screenActive && !activeImportedVideo) {
       ctx.save();
       ctx.fillStyle = '#070912';
       ctx.fillRect(0, 0, width, height);
@@ -718,9 +1182,21 @@ export default function Editor({ projectId, onCloseProject, license }) {
     }
 
     ctx.save();
-    if (blurAmt > 0.5) {
-      ctx.filter = `blur(${blurAmt.toFixed(1)}px)`;
+    const exposure = Math.max(-100, Math.min(100, settings.color_exposure || 0));
+    const contrast = Math.max(-100, Math.min(100, settings.color_contrast || 0));
+    const saturation = Math.max(-100, Math.min(100, settings.color_saturation || 0));
+    const temperature = Math.max(-100, Math.min(100, settings.color_temperature || 0));
+    const tint = Math.max(-100, Math.min(100, settings.color_tint || 0));
+    const previewFilters = [];
+    if (blurAmt > 0.5) previewFilters.push(`blur(${blurAmt.toFixed(1)}px)`);
+    previewFilters.push(`brightness(${Math.max(0.35, 1 + exposure / 100)})`);
+    previewFilters.push(`contrast(${Math.max(0.35, 1 + contrast / 100)})`);
+    previewFilters.push(`saturate(${Math.max(0, 1 + saturation / 100)})`);
+    if (temperature !== 0 || tint !== 0) {
+      previewFilters.push(`sepia(${Math.min(0.22, (Math.abs(temperature) + Math.abs(tint)) / 700)})`);
+      previewFilters.push(`hue-rotate(${(-temperature * 0.12 + tint * 0.16).toFixed(1)}deg)`);
     }
+    ctx.filter = previewFilters.join(' ');
 
     if (zoom > 1.0) {
       ctx.translate(width / 2, height / 2);
@@ -729,10 +1205,10 @@ export default function Editor({ projectId, onCloseProject, license }) {
     }
 
     try {
-      if (!videoReady) {
+      if (!drawSourceReady) {
         throw new Error('Video frame is not ready');
       }
-      const vAspectRatio = (video.videoWidth && video.videoHeight) ? (video.videoWidth / video.videoHeight) : (16 / 9);
+      const vAspectRatio = (drawSource.videoWidth && drawSource.videoHeight) ? (drawSource.videoWidth / drawSource.videoHeight) : (16 / 9);
       const canvasAspectRatio = width / height;
       
       let drawW = width;
@@ -748,7 +1224,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
         drawY = (height - drawH) / 2;
       }
 
-      ctx.drawImage(video, drawX, drawY, drawW, drawH);
+      ctx.drawImage(drawSource, drawX, drawY, drawW, drawH);
     } catch (e) {
       // Fallback if video isn't ready
       ctx.fillStyle = '#080808';
@@ -1022,6 +1498,12 @@ export default function Editor({ projectId, onCloseProject, license }) {
     }
   };
 
+  useEffect(() => {
+    if (!videoRef.current) return;
+    if (animationRef.current) cancelAnimationFrame(animationRef.current);
+    animationRef.current = requestAnimationFrame(renderPreview);
+  }, [settings, timelineClips, isPlaying, duration]);
+
   const handleCanvasClick = (e) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -1050,9 +1532,11 @@ export default function Editor({ projectId, onCloseProject, license }) {
 
     if (isPlaying) {
       video.pause();
+      importedMediaRefs.current.forEach((media) => media.pause());
       cancelAnimationFrame(animationRef.current);
       setIsPlaying(false);
     } else {
+      ensureAudioGraph();
       video.muted = isMuted;
       const playPromise = video.play();
       if (playPromise !== undefined && typeof playPromise.catch === 'function') {
@@ -1358,6 +1842,31 @@ export default function Editor({ projectId, onCloseProject, license }) {
               style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0, pointerEvents: 'none' }}
               playsInline
             />
+            {timelineClips.filter((clip) => clip.sourcePath).map((clip) => {
+              const MediaTag = clip.kind === 'audio' ? 'audio' : 'video';
+              return (
+                <MediaTag
+                  key={clip.id}
+                  ref={(element) => registerImportedMedia(clip.id, element)}
+                  src={getMediaPreviewUrl(clip.sourcePath)}
+                  preload="auto"
+                  playsInline
+                  style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0, pointerEvents: 'none' }}
+                />
+              );
+            })}
+            <input
+              ref={browserFileInputRef}
+              type="file"
+              accept="video/*,audio/*"
+              hidden
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (!file) return;
+                addImportedClip(file.type.startsWith('audio/') ? 'audio' : 'video', file);
+                event.target.value = '';
+              }}
+            />
 
             {/* Playback overlay controls */}
             {!isPlaying && (
@@ -1442,6 +1951,59 @@ export default function Editor({ projectId, onCloseProject, license }) {
               </div>
             </div>
 
+            <div className="editor-command-bar">
+              <div className="editor-command-group">
+                <button className="editor-icon-button" title="Undo timeline change" onClick={undoTimeline} disabled={!undoAvailable}>
+                  <Undo2 size={15} />
+                </button>
+                <button className="editor-icon-button" title="Redo timeline change" onClick={redoTimeline} disabled={!redoAvailable}>
+                  <Redo2 size={15} />
+                </button>
+              </div>
+              <div className="editor-command-separator" />
+              <div className="editor-command-group">
+                <button className="editor-command-button" title="Split selected clip at the playhead" onClick={splitSelectedClip}>
+                  <Scissors size={14} /> Split
+                </button>
+                <button className="editor-icon-button" title="Duplicate selected clip" onClick={duplicateSelectedClip}>
+                  <Copy size={14} />
+                </button>
+                <button className="editor-icon-button danger" title="Remove selected clip" onClick={deleteSelectedClip}>
+                  <Trash2 size={14} />
+                </button>
+              </div>
+              <div className="editor-command-separator" />
+              <div className="editor-command-group">
+                <button className="editor-command-button" onClick={() => addImportedClip('video')} title="Add a video layer at the playhead">
+                  <Upload size={14} /> Video
+                </button>
+                <button className="editor-command-button" onClick={() => addImportedClip('audio')} title="Add music or another audio file">
+                  <Music2 size={14} /> Audio
+                </button>
+                <div className="editor-sfx-menu-wrap">
+                  <button className="editor-command-button" onClick={() => setShowSfxMenu((visible) => !visible)} title="Add a built-in sound effect">
+                    <AudioWaveform size={14} /> SFX <ChevronDown size={12} />
+                  </button>
+                  {showSfxMenu && (
+                    <div className="editor-sfx-menu">
+                      {BUILT_IN_SFX.map((effect) => (
+                        <button key={effect.id} onClick={() => addSoundEffect(effect)}>
+                          <span style={{ background: effect.color }} />
+                          {effect.label}
+                          <small>{effect.duration.toFixed(1)}s</small>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="editor-command-spacer" />
+              {editorNotice && <div className="editor-notice">{editorNotice}</div>}
+              <button className="editor-ai-button" onClick={buildAiEditPlan} disabled={aiEditBusy}>
+                <WandSparkles size={15} /> {aiEditBusy ? 'Analyzing...' : 'AI Edit'}
+              </button>
+            </div>
+
             {/* Visual Timeline Tracks */}
             <div style={{ padding: '10px 16px', display: 'flex', flexDirection: 'column', gap: '6px', overflowX: 'auto' }}>
               {selectedClipId && (
@@ -1463,7 +2025,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
                           value={start.toFixed(1)}
                           onChange={(event) => {
                             const nextStart = Math.max(0, Math.min(parseFloat(event.target.value) || 0, end - 0.15));
-                            saveTimelineClips(timelineClips.map((clip) => clip.id === selectedClip.id ? { ...clip, start: nextStart / duration, enabled: true } : clip));
+                            commitTimeline(timelineClips.map((clip) => clip.id === selectedClip.id ? { ...clip, start: nextStart / duration, enabled: true } : clip));
                           }}
                           style={{ width: '58px', background: '#0f1322', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '6px', color: '#fff', padding: '4px 6px', fontSize: '11px' }}
                         />
@@ -1476,7 +2038,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
                           value={end.toFixed(1)}
                           onChange={(event) => {
                             const nextEnd = Math.min(duration, Math.max(parseFloat(event.target.value) || duration, start + 0.15));
-                            saveTimelineClips(timelineClips.map((clip) => clip.id === selectedClip.id ? { ...clip, end: nextEnd / duration, enabled: true } : clip));
+                            commitTimeline(timelineClips.map((clip) => clip.id === selectedClip.id ? { ...clip, end: nextEnd / duration, enabled: true } : clip));
                           }}
                           style={{ width: '58px', background: '#0f1322', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '6px', color: '#fff', padding: '4px 6px', fontSize: '11px' }}
                         />
@@ -1505,15 +2067,16 @@ export default function Editor({ projectId, onCloseProject, license }) {
                 ))}
               </div>
 
-              {timelineClips.map(clip => (
+              {[...timelineClips].sort((a, b) => (a.track || 0) - (b.track || 0) || a.start - b.start).map(clip => (
                 <div key={clip.id} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   {/* Track label */}
                   <div style={{ width: '80px', flexShrink: 0, fontSize: '10px', color: 'rgba(255,255,255,0.4)', fontWeight: 600, textAlign: 'right', paddingRight: '8px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {clip.label.split(' ')[0]}
+                    {clip.kind === 'voice' ? 'Voice' : clip.kind === 'audio' || clip.kind === 'sfx' ? 'Audio' : clip.kind === 'webcam' ? 'Camera' : clip.role === 'broll' ? 'B-roll' : 'Video'}
                   </div>
 
                   {/* Track lane */}
                   <div
+                    data-timeline-lane="true"
                     style={{ flex: 1, height: '32px', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)', position: 'relative', overflow: 'hidden', minWidth: `${100 * timelineZoom}%`, cursor: 'pointer' }}
                     onClick={seekToTimelineEvent}
                   >
@@ -1573,11 +2136,14 @@ export default function Editor({ projectId, onCloseProject, license }) {
           {/* Compact icon-tab bar */}
           <div style={{ display: 'flex', gap: '0', borderBottom: '1px solid rgba(255,255,255,0.08)', padding: '10px 12px 0', overflowX: 'auto', background: 'rgba(10,13,24,0.36)' }}>
             {[
+              { id: 'audio', icon: Mic2, label: 'Audio' },
+              { id: 'color', icon: Palette, label: 'Color' },
               { id: 'zoom', icon: ZoomIn, label: 'Zoom' },
               { id: 'bg', icon: Image, label: 'Background' },
               { id: 'cursor', icon: MousePointer, label: 'Cursor' },
               { id: 'brand', icon: Layers, label: 'Brand' },
               { id: 'captions', icon: Type, label: 'Captions' },
+              { id: 'ai', icon: WandSparkles, label: 'AI Edit' },
             ].map(tab => {
               const Icon = tab.icon;
               return (
@@ -1601,6 +2167,185 @@ export default function Editor({ projectId, onCloseProject, license }) {
 
           {sidebarTab !== 'captions' ? (
             <>
+          {sidebarTab === 'audio' && (
+            <div className="editor-panel-stack">
+              <section className="editor-tool-panel">
+                <div className="editor-panel-heading">
+                  <div>
+                    <span className="editor-panel-kicker">Voice processing</span>
+                    <h3><Mic2 size={15} /> Clean Voice</h3>
+                  </div>
+                  <label className="editor-switch" title="Enable voice cleanup in preview and export">
+                    <input
+                      type="checkbox"
+                      checked={settings.voice_cleanup_enabled === true}
+                      onChange={(event) => handleSaveSettings({ voice_cleanup_enabled: event.target.checked })}
+                    />
+                    <span />
+                  </label>
+                </div>
+                <p className="editor-panel-copy">Reduces low-frequency noise, lifts speech presence, and controls sudden volume peaks.</p>
+                <label className="editor-control-label">
+                  <span>Voice isolation <strong>{settings.voice_isolation ?? 55}%</strong></span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value={settings.voice_isolation ?? 55}
+                    onChange={(event) => handleSaveSettings({ voice_isolation: Number(event.target.value), voice_cleanup_enabled: true })}
+                  />
+                </label>
+                <label className="editor-control-label">
+                  <span>Voice gain <strong>{settings.voice_gain ?? 0} dB</strong></span>
+                  <input
+                    type="range"
+                    min="-12"
+                    max="12"
+                    step="1"
+                    value={settings.voice_gain ?? 0}
+                    onChange={(event) => handleSaveSettings({ voice_gain: Number(event.target.value) })}
+                  />
+                </label>
+                <label className="editor-check-row">
+                  <input
+                    type="checkbox"
+                    checked={settings.normalize_audio !== false}
+                    onChange={(event) => handleSaveSettings({ normalize_audio: event.target.checked })}
+                  />
+                  Normalize loudness for speech
+                </label>
+              </section>
+
+              {(() => {
+                const selected = getClipById(selectedClipId);
+                if (!selected || !['voice', 'audio', 'sfx', 'video'].includes(selected.kind)) return null;
+                return (
+                  <section className="editor-tool-panel">
+                    <div className="editor-panel-heading">
+                      <div>
+                        <span className="editor-panel-kicker">Selected clip</span>
+                        <h3><AudioWaveform size={15} /> {selected.label}</h3>
+                      </div>
+                      <span className="editor-kind-badge">{selected.kind}</span>
+                    </div>
+                    <label className="editor-control-label">
+                      <span>Clip volume <strong>{Math.round((selected.volume ?? 1) * 100)}%</strong></span>
+                      <input
+                        type="range"
+                        min="0"
+                        max="1.5"
+                        step="0.05"
+                        value={selected.volume ?? 1}
+                        onChange={(event) => commitTimeline(timelineClips.map((clip) => clip.id === selected.id ? { ...clip, volume: Number(event.target.value) } : clip))}
+                      />
+                    </label>
+                    {selected.kind === 'video' && selected.sourcePath && (
+                      <label className="editor-check-row">
+                        <input
+                          type="checkbox"
+                          checked={selected.useAudio === true}
+                          onChange={(event) => commitTimeline(timelineClips.map((clip) => clip.id === selected.id ? { ...clip, useAudio: event.target.checked, volume: event.target.checked ? 0.8 : 0 } : clip))}
+                        />
+                        Use audio from this video
+                      </label>
+                    )}
+                  </section>
+                );
+              })()}
+            </div>
+          )}
+
+          {sidebarTab === 'color' && (
+            <div className="editor-panel-stack">
+              <section className="editor-tool-panel">
+                <div className="editor-panel-heading">
+                  <div>
+                    <span className="editor-panel-kicker">Image treatment</span>
+                    <h3><Palette size={15} /> Color Grade</h3>
+                  </div>
+                  <button className="editor-mini-action" onClick={applyAutoColor} title="Analyze the current frame and balance it">
+                    <Wand2 size={13} /> Auto
+                  </button>
+                </div>
+                <div className="editor-preset-grid">
+                  {Object.entries(COLOR_PRESETS).map(([preset, values]) => (
+                    <button
+                      key={preset}
+                      className={settings.color_preset === preset ? 'active' : ''}
+                      onClick={() => handleSaveSettings({ ...values, color_preset: preset })}
+                    >
+                      <span className={`editor-grade-swatch ${preset}`} />
+                      {preset.charAt(0).toUpperCase() + preset.slice(1)}
+                    </button>
+                  ))}
+                </div>
+                {[
+                  ['color_exposure', 'Exposure', -40, 40],
+                  ['color_contrast', 'Contrast', -50, 50],
+                  ['color_saturation', 'Saturation', -100, 100],
+                  ['color_temperature', 'Temperature', -50, 50],
+                  ['color_tint', 'Tint', -50, 50],
+                ].map(([key, label, min, max]) => (
+                  <label className="editor-control-label" key={key}>
+                    <span>{label} <strong>{settings[key] ?? 0}</strong></span>
+                    <input
+                      type="range"
+                      min={min}
+                      max={max}
+                      step="1"
+                      value={settings[key] ?? 0}
+                      onChange={(event) => handleSaveSettings({ [key]: Number(event.target.value), color_preset: 'custom' })}
+                    />
+                  </label>
+                ))}
+                <button
+                  className="editor-reset-button"
+                  onClick={() => handleSaveSettings({ color_exposure: 0, color_contrast: 0, color_saturation: 0, color_temperature: 0, color_tint: 0, color_preset: 'none' })}
+                >
+                  <RefreshCw size={13} /> Reset grade
+                </button>
+              </section>
+            </div>
+          )}
+
+          {sidebarTab === 'ai' && (
+            <div className="editor-panel-stack">
+              <section className="editor-tool-panel editor-ai-panel">
+                <div className="editor-panel-heading">
+                  <div>
+                    <span className="editor-panel-kicker">Project review</span>
+                    <h3><WandSparkles size={15} /> AI Edit</h3>
+                  </div>
+                  {aiEditPlan && <span className="editor-ready-badge"><Check size={11} /> Ready</span>}
+                </div>
+                {!aiEditPlan ? (
+                  <>
+                    <p className="editor-panel-copy">Analyze the recording for voice cleanup, color balance, quiet pauses, and useful cursor focus points.</p>
+                    <button className="editor-primary-panel-button" onClick={buildAiEditPlan} disabled={aiEditBusy}>
+                      <WandSparkles size={14} /> {aiEditBusy ? 'Reviewing recording...' : 'Review project'}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <div className="editor-ai-findings">
+                      <div><Mic2 size={14} /><span><strong>Voice</strong><small>Cleanup and loudness balance</small></span><Check size={13} /></div>
+                      <div><Palette size={14} /><span><strong>Color</strong><small>Exposure {aiEditPlan.grade.color_exposure >= 0 ? '+' : ''}{aiEditPlan.grade.color_exposure}, contrast +{aiEditPlan.grade.color_contrast}</small></span><Check size={13} /></div>
+                      <div><Scissors size={14} /><span><strong>Quiet pauses</strong><small>{aiEditPlan.silence.length} section{aiEditPlan.silence.length === 1 ? '' : 's'} marked for review</small></span><Eye size={13} /></div>
+                      <div><MousePointer size={14} /><span><strong>Focus moments</strong><small>{aiEditPlan.clickCount} cursor interaction{aiEditPlan.clickCount === 1 ? '' : 's'} found</small></span><Check size={13} /></div>
+                    </div>
+                    <button className="editor-primary-panel-button" onClick={applyAiEditPlan}>
+                      <Wand2 size={14} /> Apply recommended edit
+                    </button>
+                    <button className="editor-reset-button" onClick={buildAiEditPlan} disabled={aiEditBusy}>
+                      <RefreshCw size={13} /> Analyze again
+                    </button>
+                  </>
+                )}
+              </section>
+            </div>
+          )}
+
           {sidebarTab === 'zoom' && (
             <>
           <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>

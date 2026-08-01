@@ -9,6 +9,7 @@ const path = require('path');
 const fs = require('fs');
 const db = require('./database');
 const { spawn } = require('child_process');
+const { ffmpegPath, ffprobePath } = require('./media-tools');
 const { autoUpdater } = require('electron-updater');
 
 let mainWindow;
@@ -337,7 +338,6 @@ async function generateGeminiCaptions(project, apiKey) {
 
 function transcodeRecordingForPreview(inputPath) {
   const outputPath = inputPath.replace(/\.webm$/i, '_preview.mp4');
-  const ffmpegPath = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
   const args = [
     '-y',
     '-fflags', '+genpts',
@@ -384,7 +384,6 @@ function transcodeRecordingForPreview(inputPath) {
 }
 
 function probeMediaDuration(inputPath) {
-  const ffprobePath = process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe';
   const args = [
     '-v', 'error',
     '-show_entries', 'format=duration',
@@ -615,6 +614,13 @@ ipcMain.handle('system:save-file', async (_, defaultName, filters) => {
     filters: filters || []
   });
   return result.canceled ? null : result.filePath;
+});
+
+ipcMain.handle('media:probe', async (_, filePath) => {
+  const normalizedPath = normalizeExistingPath(filePath);
+  if (!normalizedPath) return { duration: null };
+  const duration = await probeMediaDuration(normalizedPath);
+  return { duration };
 });
 
 // IPC - Licensing
@@ -1197,17 +1203,45 @@ ipcMain.handle('ai:detect-silence', async (_, projectId, sensitivity = -40) => {
     return [];
   }
   logActivity('AI_SILENCE_DETECTION', `Detecting silent periods on project ${projectId}.`);
-  const duration = Math.max(12, Number(project.duration || 18));
-  const first = Math.max(1.5, duration * 0.22);
-  const second = Math.max(first + 2, duration * 0.52);
-  const third = Math.max(second + 2, duration * 0.78);
-  return [first, second, third]
-    .filter(start => start + 0.55 < duration)
-    .map((start, index) => ({
-      start: Number(start.toFixed(2)),
-      end: Number(Math.min(duration, start + 0.45 + index * 0.12).toFixed(2)),
-      sensitivity
-    }));
+  const mediaPath = normalizeExistingPath(project.audio_path)
+    || normalizeExistingPath(project.raw_video_path)
+    || normalizeExistingPath(project.video_path);
+  if (!mediaPath) return [];
+
+  const threshold = Math.max(-70, Math.min(-15, Number(sensitivity) || -40));
+  return new Promise((resolve) => {
+    const proc = spawn(ffmpegPath, [
+      '-hide_banner',
+      '-i', mediaPath,
+      '-af', `silencedetect=noise=${threshold}dB:d=0.35`,
+      '-f', 'null',
+      '-'
+    ]);
+    let errorLog = '';
+    const timeout = setTimeout(() => {
+      proc.kill();
+      resolve([]);
+    }, 90_000);
+
+    proc.stderr.on('data', (data) => {
+      errorLog += data.toString();
+    });
+    proc.on('error', () => {
+      clearTimeout(timeout);
+      resolve([]);
+    });
+    proc.on('close', () => {
+      clearTimeout(timeout);
+      const starts = [...errorLog.matchAll(/silence_start:\s*([0-9.]+)/g)].map((match) => Number(match[1]));
+      const ends = [...errorLog.matchAll(/silence_end:\s*([0-9.]+)/g)].map((match) => Number(match[1]));
+      const periods = starts.map((start, index) => ({
+        start: Number(start.toFixed(3)),
+        end: Number((ends[index] ?? Math.min(Number(project.duration || start + 0.5), start + 0.5)).toFixed(3)),
+        sensitivity: threshold
+      })).filter((period) => period.end > period.start);
+      resolve(periods);
+    });
+  });
 });
 
 // IPC - Exporter & Video Renderer

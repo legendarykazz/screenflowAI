@@ -1,7 +1,8 @@
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const db = require('./database');
+const { ffmpegPath, ffprobePath } = require('./media-tools');
 
 function getEventCoordinate(event, axis, outputSize) {
   const value = Number(event?.[axis]);
@@ -11,12 +12,77 @@ function getEventCoordinate(event, axis, outputSize) {
     : value;
 }
 
+function hasMediaStream(filePath, streamType) {
+  if (!filePath || !fs.existsSync(filePath)) return false;
+  const result = spawnSync(ffprobePath, [
+    '-v', 'error',
+    '-select_streams', `${streamType}:0`,
+    '-show_entries', 'stream=index',
+    '-of', 'csv=p=0',
+    filePath
+  ], { encoding: 'utf8', timeout: 8000 });
+  return result.status === 0 && Boolean(result.stdout?.trim());
+}
+
+function clipStartSeconds(clip, duration) {
+  return Math.max(0, Math.min(duration, Number(clip?.start || 0) * duration));
+}
+
+function clipEndSeconds(clip, duration) {
+  return Math.max(clipStartSeconds(clip, duration), Math.min(duration, Number(clip?.end ?? 1) * duration));
+}
+
+function getEnabledClips(settings) {
+  return Array.isArray(settings.timeline_clips)
+    ? settings.timeline_clips.filter((clip) => clip && clip.enabled !== false)
+    : [];
+}
+
+function buildColorFilters(settings) {
+  const exposure = Math.max(-100, Math.min(100, Number(settings.color_exposure || 0)));
+  const contrast = Math.max(-100, Math.min(100, Number(settings.color_contrast || 0)));
+  const saturation = Math.max(-100, Math.min(100, Number(settings.color_saturation || 0)));
+  const temperature = Math.max(-100, Math.min(100, Number(settings.color_temperature || 0)));
+  const tint = Math.max(-100, Math.min(100, Number(settings.color_tint || 0)));
+  const filters = [
+    `eq=brightness=${(exposure / 100).toFixed(3)}:contrast=${Math.max(0.25, 1 + contrast / 100).toFixed(3)}:saturation=${Math.max(0, 1 + saturation / 100).toFixed(3)}`
+  ];
+  if (temperature !== 0 || tint !== 0) {
+    filters.push(`colorbalance=rs=${(temperature / 500).toFixed(3)}:bs=${(-temperature / 500).toFixed(3)}:gm=${(tint / 500).toFixed(3)}`);
+  }
+  return filters.join(',');
+}
+
+function buildVoiceFilters(settings) {
+  const filters = [];
+  const cleanupEnabled = settings.voice_cleanup_enabled === true;
+  const isolation = Math.max(0, Math.min(100, Number(settings.voice_isolation ?? 55))) / 100;
+  if (cleanupEnabled) {
+    filters.push(`highpass=f=${Math.round(70 + isolation * 55)}`);
+    filters.push(`afftdn=nf=${Math.round(-22 - isolation * 10)}`);
+    filters.push(`equalizer=f=3400:t=q:w=0.8:g=${(1.5 + isolation * 3.5).toFixed(2)}`);
+    filters.push(`acompressor=threshold=${(-24 + isolation * 6).toFixed(1)}dB:ratio=${(2.2 + isolation * 2.8).toFixed(2)}:attack=12:release=220`);
+  }
+  const voiceGain = Math.max(-18, Math.min(18, Number(settings.voice_gain || 0)));
+  if (voiceGain !== 0) filters.push(`volume=${voiceGain.toFixed(1)}dB`);
+  return filters;
+}
+
+function hasAdvancedEdits(settings, enabledClips) {
+  const colorChanged = ['color_exposure', 'color_contrast', 'color_saturation', 'color_temperature', 'color_tint']
+    .some((key) => Number(settings[key] || 0) !== 0);
+  const extraMedia = enabledClips.some((clip) => clip.sourcePath || clip.kind === 'sfx');
+  const splitRecording = enabledClips.filter((clip) => clip.role === 'screen' || clip.id === 'screen').length > 1;
+  return colorChanged || settings.voice_cleanup_enabled === true || settings.normalize_audio === true || Number(settings.voice_gain || 0) !== 0 || extraMedia || splitRecording;
+}
+
 async function renderAndExport(projectId, exportPath, format, quality, isPro, onProgress) {
   const project = db.getProject(projectId);
   if (!project) throw new Error('Project not found');
 
   const cursorEvents = db.getCursorEvents(projectId);
   const settings = project.settings;
+  const enabledClips = getEnabledClips(settings);
 
   const duration = project.duration || 10;
   const fps = 30;
@@ -40,7 +106,7 @@ async function renderAndExport(projectId, exportPath, format, quality, isPro, on
   };
   const qualityParams = qualityPresets[quality.toLowerCase()] || qualityPresets.medium;
 
-  if (settings.cursor_baked && settings.zoom_level <= 1.0) {
+  if (settings.cursor_baked && settings.zoom_level <= 1.0 && !hasAdvancedEdits(settings, enabledClips)) {
     return exportDirect(screenVideoPath, exportPath, qualityParams, isPro, duration, onProgress, settings.timeline_clips);
   }
 
@@ -172,41 +238,121 @@ async function renderAndExport(projectId, exportPath, format, quality, isPro, on
     }
   }
 
-  // Setup input streams: [0:v] screen video, [1:v] cursor overlay, optional [2:a] audio
-  const ffmpegParams = [
-    '-i', screenVideoPath,
-    '-i', tempCursorPath,
-  ];
+  // Inputs: primary video, a looped cursor image, optional clean microphone, then imported media.
+  const ffmpegParams = ['-i', screenVideoPath, '-i', tempCursorPath];
+  let nextInputIndex = 2;
+  const microphonePath = project.audio_path && fs.existsSync(project.audio_path) ? project.audio_path : null;
+  const microphoneInputIndex = microphonePath ? nextInputIndex++ : null;
+  if (microphonePath) ffmpegParams.push('-i', microphonePath);
 
-  const hasAudio = project.audio_path && fs.existsSync(project.audio_path);
-  if (project.audio_path && fs.existsSync(project.audio_path)) {
-    ffmpegParams.push('-i', project.audio_path);
-  }
+  const importedInputs = enabledClips
+    .filter((clip) => clip.sourcePath && fs.existsSync(clip.sourcePath))
+    .map((clip) => ({ ...clip, inputIndex: nextInputIndex++ }));
+  importedInputs.forEach((clip) => ffmpegParams.push('-i', clip.sourcePath));
 
-  // Complex Filter:
-  // 1. Create a background (solid dark blue/violet gradient approximation) using a color source
-  // 2. Scale the main video, and overlay on the background
-  // 3. Apply auto-zoom easing zoompan filter only if zoom is active
   const hasZoom = zoomExpr !== '1.0' && zoomExpr !== '1';
+  const colorFilters = buildColorFilters(settings);
   const filterGraphParts = [
-    `[0:v]fps=30,scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,setsar=1[out_v]`
+    `[0:v]fps=30,scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,setsar=1,${colorFilters}[graded_v]`
   ];
-  
-  if (hasZoom) {
-    filterGraphParts.push(`[out_v]scale=w='1920*${zoomExpr}':h='1080*${zoomExpr}',crop=w=1920:h=1080:x='min(max(${zoomXExpr}*${zoomExpr}-960,0),iw-1920)':y='min(max(${zoomYExpr}*${zoomExpr}-540,0),ih-1080)'[zoomed]`);
+
+  const allTimelineClips = Array.isArray(settings.timeline_clips) ? settings.timeline_clips : [];
+  const timelineDeclaresScreen = allTimelineClips.some((clip) => clip.role === 'screen' || clip.id === 'screen');
+  const screenClips = enabledClips.filter((clip) => clip.role === 'screen' || clip.id === 'screen');
+  const screenRanges = screenClips.map((clip) => `between(t,${clipStartSeconds(clip, duration).toFixed(3)},${clipEndSeconds(clip, duration).toFixed(3)})`);
+  if (timelineDeclaresScreen && screenRanges.length === 0) {
+    filterGraphParts.push('[graded_v]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[timed_v]');
+  } else if (screenRanges.length > 0) {
+    filterGraphParts.push(`[graded_v]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill:enable='not(${screenRanges.join('+')})'[timed_v]`);
   } else {
-    filterGraphParts.push(`[out_v]null[zoomed]`);
+    filterGraphParts.push('[graded_v]null[timed_v]');
   }
+
+  if (hasZoom) {
+    filterGraphParts.push(`[timed_v]scale=w='1920*${zoomExpr}':h='1080*${zoomExpr}',crop=w=1920:h=1080:x='min(max(${zoomXExpr}*${zoomExpr}-960,0),iw-1920)':y='min(max(${zoomYExpr}*${zoomExpr}-540,0),ih-1080)'[zoomed]`);
+  } else {
+    filterGraphParts.push('[timed_v]null[zoomed]');
+  }
+
+  let currentVideoLabel = 'zoomed';
+  importedInputs.filter((clip) => clip.kind === 'video').forEach((clip, index) => {
+    const start = clipStartSeconds(clip, duration);
+    const end = clipEndSeconds(clip, duration);
+    const sourceStart = Math.max(0, Number(clip.sourceStart || 0));
+    const sourceEnd = Math.max(sourceStart + 0.05, Number(clip.sourceEnd || sourceStart + (end - start)));
+    const clipLabel = `broll_${index}`;
+    const outputLabel = `with_broll_${index}`;
+    filterGraphParts.push(`[${clip.inputIndex}:v]trim=start=${sourceStart.toFixed(3)}:end=${sourceEnd.toFixed(3)},setpts=PTS-STARTPTS+${start.toFixed(3)}/TB,fps=30,scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,setsar=1,${colorFilters}[${clipLabel}]`);
+    filterGraphParts.push(`[${currentVideoLabel}][${clipLabel}]overlay=eof_action=pass:shortest=0:enable='between(t,${start.toFixed(3)},${end.toFixed(3)})'[${outputLabel}]`);
+    currentVideoLabel = outputLabel;
+  });
 
   const cursorVisible = !settings.cursor_baked && settings.cursor_visible !== false && cursorEvents.length > 0;
   if (cursorVisible) {
     const cursorSize = Math.max(12, Math.min(140, Math.round((settings.cursor_size || 40) * (settings.cursor_scale || 1))));
-    filterGraphParts.push(`[1:v]scale=${cursorSize}:${cursorSize}[cursor]`);
-    filterGraphParts.push(`[zoomed][cursor]overlay=x='${cursorXExpr}':y='${cursorYExpr}'[final_v]`);
+    filterGraphParts.push(`[1:v]scale=${cursorSize}:${cursorSize},format=rgba[cursor]`);
+    filterGraphParts.push(`[${currentVideoLabel}][cursor]overlay=x='${cursorXExpr}':y='${cursorYExpr}':shortest=0:repeatlast=1[final_v]`);
   } else {
-    filterGraphParts.push(`[zoomed]null[final_v]`);
+    filterGraphParts.push(`[${currentVideoLabel}]null[final_v]`);
   }
-  
+
+  const audioLabels = [];
+  const embeddedAudioIndex = hasMediaStream(screenVideoPath, 'a') ? 0 : null;
+  const baseAudioIndex = microphoneInputIndex ?? embeddedAudioIndex;
+  if (baseAudioIndex != null) {
+    const baseFilters = buildVoiceFilters(settings);
+    const audioClips = enabledClips.filter((clip) => clip.role === 'audio' || clip.id === 'audio');
+    const audioRanges = audioClips.map((clip) => `between(t,${clipStartSeconds(clip, duration).toFixed(3)},${clipEndSeconds(clip, duration).toFixed(3)})`);
+    const filters = [...baseFilters];
+    if (allTimelineClips.some((clip) => clip.role === 'audio' || clip.id === 'audio')) {
+      filters.push(audioRanges.length ? `volume=0:enable='not(${audioRanges.join('+')})'` : 'volume=0');
+    }
+    filterGraphParts.push(`[${baseAudioIndex}:a]${filters.length ? filters.join(',') : 'anull'}[voice_a]`);
+    audioLabels.push('voice_a');
+  }
+
+  importedInputs
+    .filter((clip) => clip.kind === 'audio' || (clip.kind === 'video' && clip.useAudio === true))
+    .forEach((clip, index) => {
+      if (!hasMediaStream(clip.sourcePath, 'a')) return;
+      const start = clipStartSeconds(clip, duration);
+      const end = clipEndSeconds(clip, duration);
+      const sourceStart = Math.max(0, Number(clip.sourceStart || 0));
+      const sourceEnd = Math.max(sourceStart + 0.05, Number(clip.sourceEnd || sourceStart + (end - start)));
+      const label = `imported_a_${index}`;
+      const delayMs = Math.max(0, Math.round(start * 1000));
+      const clipVolume = Math.max(0, Math.min(2, Number(clip.volume ?? 0.8)));
+      filterGraphParts.push(`[${clip.inputIndex}:a]atrim=start=${sourceStart.toFixed(3)}:end=${sourceEnd.toFixed(3)},asetpts=PTS-STARTPTS,volume=${clipVolume.toFixed(2)},adelay=delays=${delayMs}:all=1[${label}]`);
+      audioLabels.push(label);
+    });
+
+  enabledClips.filter((clip) => clip.kind === 'sfx').forEach((clip, index) => {
+    const start = clipStartSeconds(clip, duration);
+    const clipLength = Math.max(0.08, clipEndSeconds(clip, duration) - start);
+    const delayMs = Math.max(0, Math.round(start * 1000));
+    const clipVolume = Math.max(0, Math.min(2, Number(clip.volume ?? 0.75)));
+    const label = `sfx_a_${index}`;
+    if (clip.sfxKind === 'whoosh') {
+      filterGraphParts.push(`anoisesrc=color=pink:duration=${clipLength.toFixed(3)},highpass=f=180,lowpass=f=6200,afade=t=in:st=0:d=${Math.min(0.18, clipLength / 3).toFixed(3)},afade=t=out:st=${Math.max(0, clipLength - 0.28).toFixed(3)}:d=${Math.min(0.28, clipLength).toFixed(3)},volume=${(clipVolume * 0.5).toFixed(2)},adelay=delays=${delayMs}:all=1[${label}]`);
+    } else {
+      const frequency = clip.sfxKind === 'pop' ? 520 : 880;
+      filterGraphParts.push(`sine=frequency=${frequency}:duration=${clipLength.toFixed(3)},afade=t=out:st=${Math.max(0, clipLength - 0.16).toFixed(3)}:d=${Math.min(0.16, clipLength).toFixed(3)},volume=${(clipVolume * 0.65).toFixed(2)},adelay=delays=${delayMs}:all=1[${label}]`);
+    }
+    audioLabels.push(label);
+  });
+
+  let finalAudioLabel = null;
+  if (audioLabels.length === 1) {
+    finalAudioLabel = audioLabels[0];
+  } else if (audioLabels.length > 1) {
+    filterGraphParts.push(`${audioLabels.map((label) => `[${label}]`).join('')}amix=inputs=${audioLabels.length}:duration=longest:dropout_transition=0:normalize=0[mixed_a]`);
+    finalAudioLabel = 'mixed_a';
+  }
+  if (finalAudioLabel && settings.normalize_audio === true) {
+    filterGraphParts.push(`[${finalAudioLabel}]loudnorm=I=-16:LRA=7:TP=-1.5[final_a]`);
+    finalAudioLabel = 'final_a';
+  }
+
   const filterGraph = filterGraphParts.join('; ');
 
   // Write filter graph to a temporary script file to prevent command line length issues on Windows
@@ -218,9 +364,7 @@ async function renderAndExport(projectId, exportPath, format, quality, isPro, on
     '-map', '[final_v]',
   );
 
-  if (hasAudio) {
-    ffmpegParams.push('-map', '2:a');
-  }
+  if (finalAudioLabel) ffmpegParams.push('-map', `[${finalAudioLabel}]`);
 
   const threadsParam = isPro ? '0' : '2'; // Pro uses maximum CPU threads. Free plan is throttled to 2 threads.
   ffmpegParams.push(
@@ -228,17 +372,33 @@ async function renderAndExport(projectId, exportPath, format, quality, isPro, on
     '-threads', threadsParam,
     ...qualityParams,
     '-pix_fmt', 'yuv420p',
+    ...(finalAudioLabel ? ['-c:a', 'aac', '-b:a', '192k', '-ar', '48000'] : []),
+    '-t', duration.toFixed(3),
+    '-movflags', '+faststart',
     '-y',
     exportPath
   );
 
-  const ffmpegPath = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
   const ffmpegProcess = spawn(ffmpegPath, ffmpegParams);
 
   return new Promise((resolve, reject) => {
     let errorLog = '';
+    let settled = false;
+    const configuredTimeout = Number(process.env.SCREENFLOW_EXPORT_TIMEOUT_MS || 0);
+    const exportTimeoutMs = configuredTimeout > 0
+      ? configuredTimeout
+      : Math.max(5 * 60 * 1000, duration * 90 * 1000);
+    const exportTimeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      ffmpegProcess.kill();
+      reject(new Error(`FFmpeg export timed out after ${Math.round(exportTimeoutMs / 1000)} seconds. Logs:\n${errorLog.slice(-600)}`));
+    }, exportTimeoutMs);
     
     ffmpegProcess.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(exportTimeout);
       reject(new Error(`Failed to start FFmpeg process: ${err.message}`));
     });
 
@@ -258,10 +418,13 @@ async function renderAndExport(projectId, exportPath, format, quality, isPro, on
     });
 
     ffmpegProcess.on('close', (code) => {
+      clearTimeout(exportTimeout);
       // Cleanup temp cursor PNG and temp filter complex script
       try { fs.unlinkSync(tempCursorPath); } catch (e) {}
       try { fs.unlinkSync(tempFilterScriptPath); } catch (e) {}
 
+      if (settled) return;
+      settled = true;
       if (code === 0) {
         onProgress(100);
         resolve();
@@ -276,7 +439,6 @@ async function renderAndExport(projectId, exportPath, format, quality, isPro, on
 
 function exportDirect(inputPath, exportPath, qualityParams, isPro, duration, onProgress, timelineClips = null) {
   const threadsParam = isPro ? '0' : '2';
-  const ffmpegPath = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
   const screenClip = Array.isArray(timelineClips)
     ? timelineClips.find((clip) => clip.id === 'screen' && clip.enabled !== false)
     : null;

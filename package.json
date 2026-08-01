@@ -22,11 +22,14 @@
     "health": "node scripts/health-check.js",
     "health:quick": "node scripts/health-check.js --skip-build",
     "test:call-load": "node scripts/call-load-check.js",
+    "test:editor-export": "node scripts/editor-export-smoke.js",
     "start": "electron .",
     "dev:electron": "set SCREENFLOW_DEV_SERVER=1&& electron ."
   },
   "dependencies": {
     "electron-updater": "^6.1.7",
+    "ffmpeg-static": "^5.3.0",
+    "ffprobe-static": "^3.1.0",
     "livekit-client": "^2.20.2",
     "livekit-server-sdk": "^2.17.0",
     "lucide-react": "^0.395.0",
@@ -45,10 +48,17 @@
     "appId": "com.screenflow.ai",
     "productName": "ScreenFlowAI",
     "compression": "normal",
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/ffmpeg.exe",
+      "node_modules/ffprobe-static/bin/win32/x64/ffprobe.exe"
+    ],
     "files": [
       "dist/app/**/*",
       "electron/**/*",
-      "package.json"
+      "package.json",
+      "!node_modules/ffprobe-static/bin/darwin/**/*",
+      "!node_modules/ffprobe-static/bin/linux/**/*",
+      "!node_modules/ffprobe-static/bin/win32/ia32/**/*"
     ],
     "directories": {
       "output": "release"

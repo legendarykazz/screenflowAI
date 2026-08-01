@@ -48,6 +48,7 @@ contextBridge.exposeInMainWorld('electron', {
   selectFolder: () => ipcRenderer.invoke('system:select-folder'),
   selectFile: (filters) => ipcRenderer.invoke('system:select-file', filters),
   saveFile: (defaultName, filters) => ipcRenderer.invoke('system:save-file', defaultName, filters),
+  probeMedia: (filePath) => ipcRenderer.invoke('media:probe', filePath),
   
   // Licensing
   checkLicense: () => ipcRenderer.invoke('license:check'),

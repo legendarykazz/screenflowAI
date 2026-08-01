@@ -33,6 +33,7 @@ function checkRequiredFiles() {
     'src/main.jsx',
     'src/pages/Recording.jsx',
     'src/pages/Editor.jsx',
+    'src/pages/Editor.css',
     'src/pages/AITools.jsx',
     'src/pages/FootballLab.jsx',
     'src/pages/LiveCall.jsx',
@@ -50,7 +51,9 @@ function checkRequiredFiles() {
     'extension/offscreen.js',
     'api/livekit-token.js',
     'electron/main.js',
-    'electron/preload.js'
+    'electron/preload.js',
+    'electron/media-tools.js',
+    'scripts/editor-export-smoke.js'
   ].forEach((file) => {
     if (fs.existsSync(path.join(root, file))) pass(`Required file exists: ${file}`);
     else fail(`Required file is missing: ${file}`);
@@ -206,6 +209,41 @@ function checkRecordingPipeline() {
   assertIncludes(renderer, 'project.raw_video_path && fs.existsSync(project.raw_video_path)', 'Exports use the untouched source recording');
 }
 
+function checkEditorPostProduction() {
+  const editor = read('src/pages/Editor.jsx');
+  const styles = read('src/pages/Editor.css');
+  const renderer = read('electron/renderer-engine.js');
+  const main = read('electron/main.js');
+  const preload = read('electron/preload.js');
+  const mediaTools = read('electron/media-tools.js');
+  const packageJson = JSON.parse(read('package.json'));
+
+  assertIncludes(editor, 'splitSelectedClip', 'Editor can split a selected clip at the playhead');
+  assertIncludes(editor, 'undoTimeline', 'Editor supports timeline undo');
+  assertIncludes(editor, "addImportedClip('video')", 'Editor can add another video layer');
+  assertIncludes(editor, "addImportedClip('audio')", 'Editor can add music or imported audio');
+  assertIncludes(editor, 'BUILT_IN_SFX', 'Editor includes timed sound effects');
+  assertIncludes(editor, 'voice_cleanup_enabled', 'Editor exposes voice cleanup controls');
+  assertIncludes(editor, 'analyzeCurrentFrame', 'Editor can analyze a frame for automatic color balance');
+  assertIncludes(editor, 'buildAiEditPlan', 'Editor provides an inspectable AI edit review');
+  assertIncludes(styles, '.editor-command-bar', 'Editor has a stable post-production command bar');
+  assertIncludes(styles, '.editor-ai-findings', 'AI edit findings have a scannable inspector layout');
+  assertIncludes(renderer, 'buildVoiceFilters', 'FFmpeg export applies voice cleanup filters');
+  assertIncludes(renderer, 'buildColorFilters', 'FFmpeg export applies color grading filters');
+  assertIncludes(renderer, 'importedInputs', 'FFmpeg export renders imported media tracks');
+  assertIncludes(renderer, 'anoisesrc=color=pink', 'FFmpeg export synthesizes transition sound effects');
+  assertIncludes(renderer, "loudnorm=I=-16", 'FFmpeg export normalizes speech loudness');
+  assertIncludes(main, "ipcMain.handle('media:probe'", 'Electron can probe imported media duration');
+  assertIncludes(preload, 'probeMedia', 'Preload exposes media probing to the editor');
+  assertIncludes(mediaTools, "require('ffmpeg-static')", 'Desktop builds resolve a bundled FFmpeg binary');
+  assertIncludes(mediaTools, "require('ffprobe-static').path", 'Desktop builds resolve a bundled FFprobe binary');
+  if (packageJson.dependencies?.['ffmpeg-static'] && packageJson.dependencies?.['ffprobe-static']) {
+    pass('FFmpeg and FFprobe are production dependencies');
+  } else {
+    fail('FFmpeg or FFprobe is missing from production dependencies');
+  }
+}
+
 function checkPlatformShells() {
   const main = read('src/main.jsx');
   const pwa = read('src/lib/pwa.js');
@@ -335,6 +373,7 @@ function main() {
   checkWatchTogether();
   checkElectronBridge();
   checkRecordingPipeline();
+  checkEditorPostProduction();
   checkPlatformShells();
   checkMobileLayout();
   checkFootballWorkbench();
