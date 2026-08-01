@@ -37,7 +37,9 @@ function checkRequiredFiles() {
     'src/pages/FootballLab.jsx',
     'src/pages/LiveCall.jsx',
     'src/pages/JoinCall.jsx',
+    'src/components/WatchTogetherPlayer.jsx',
     'src/lib/callAudio.js',
+    'src/lib/watchTogether.js',
     'src/lib/pwa.js',
     'public/manifest.webmanifest',
     'public/sw.js',
@@ -115,6 +117,33 @@ function checkPresenterLiveCall() {
   assertIncludes(live, 'audioSink.querySelector(`[data-track-sid="${track.sid}"]`)', 'Presenter attaches each remote microphone once');
   assertIncludes(live, 'data-face-count={Math.max(1, remoteParticipants.length + 1)}', 'Presenter exposes participant count to responsive camera layout');
   assertIncludes(live, '[data-face-grid="true"][data-face-count="1"]', 'Mobile presenter gives a solo caller a large stage');
+}
+
+function checkWatchTogether() {
+  const live = read('src/pages/LiveCall.jsx');
+  const join = read('src/pages/JoinCall.jsx');
+  const player = read('src/components/WatchTogetherPlayer.jsx');
+  const watch = read('src/lib/watchTogether.js');
+
+  assertIncludes(live, 'parseWatchSource(watchUrl)', 'Presenter validates pasted Watch Together links');
+  assertIncludes(live, "sendRoomCommand('watch-sync'", 'Presenter publishes synchronized playback state');
+  assertIncludes(live, "publishData(payload, { reliable: true })", 'Watch Together state uses reliable LiveKit data');
+  assertIncludes(live, "sendRoomCommand('watch-sync', participant.identity", 'Late joiners receive the active Watch Together state');
+  assertIncludes(live, 'data-watch-control="true"', 'Presenter exposes the Watch Together link control');
+  assertIncludes(live, '<WatchTogetherPlayer', 'Presenter renders the shared Watch Together source');
+  assertIncludes(join, 'normalizeWatchSession(command.watch)', 'Participant validates incoming Watch Together state');
+  assertIncludes(join, "watchSession ? 'Watch Together'", 'Participant labels the synchronized presentation correctly');
+  assertIncludes(join, '<WatchTogetherPlayer', 'Participant renders the synchronized Watch Together source');
+  assertIncludes(join, "get('previewWatch') !== 'youtube'", 'Development builds can preview the participant Watch Together layout');
+  assertIncludes(player, 'https://www.youtube.com/iframe_api', 'Watch Together uses the official YouTube iframe player API');
+  assertIncludes(player, '<video', 'Watch Together supports direct browser-playable video links');
+  assertIncludes(player, 'sandbox="allow-forms allow-modals allow-popups allow-presentation allow-same-origin allow-scripts"', 'Shared web pages run in a sandboxed iframe');
+  assertIncludes(player, 'PLAYER_DRIFT_TOLERANCE', 'Remote playback corrects meaningful timing drift');
+  assertIncludes(watch, "kind: 'youtube'", 'Watch Together recognizes YouTube links');
+  assertIncludes(watch, "kind: 'video'", 'Watch Together recognizes direct video links');
+  assertIncludes(watch, "kind: 'web'", 'Watch Together recognizes embeddable web pages');
+  assertIncludes(watch, "'netflix.com'", 'Watch Together rejects protected subscription services that cannot be embedded');
+  assertIncludes(watch, "['http:', 'https:']", 'Watch Together accepts only safe web protocols');
 }
 
 function checkElectronBridge() {
@@ -255,6 +284,7 @@ function main() {
   checkLiveKitTokenRoles();
   checkJoinCallMedia();
   checkPresenterLiveCall();
+  checkWatchTogether();
   checkElectronBridge();
   checkRecordingPipeline();
   checkPlatformShells();

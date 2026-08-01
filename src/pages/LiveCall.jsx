@@ -13,10 +13,13 @@ import {
   prepareCallAudioTrack,
   resumeCallAudio
 } from '../lib/callAudio';
+import WatchTogetherPlayer from '../components/WatchTogetherPlayer';
+import { createWatchSession, parseWatchSource } from '../lib/watchTogether';
 import {
   Bot,
   Camera,
   Circle,
+  Clapperboard,
   Copy,
   Eraser,
   Expand,
@@ -95,6 +98,7 @@ export default function LiveCall() {
   const panRef = useRef({ x: 0.5, y: 0.5 });
   const shareModeRef = useRef('screen');
   const outputModeRef = useRef('enhanced');
+  const watchSessionRef = useRef(null);
   const lastRenderAtRef = useRef(0);
 
   const [isLive, setIsLive] = useState(false);
@@ -127,6 +131,9 @@ export default function LiveCall() {
   const [meetingSaving, setMeetingSaving] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [shareExpanded, setShareExpanded] = useState(false);
+  const [watchUrl, setWatchUrl] = useState('');
+  const [watchSession, setWatchSession] = useState(null);
+  const [watchError, setWatchError] = useState('');
   const isBrowserPresenter = !window.navigator?.userAgent?.toLowerCase?.().includes('electron') && !window.electron?.getAppVersion;
 
   const [roomCode, setRoomCode] = useState(() => `SF-${Math.random().toString(36).slice(2, 7).toUpperCase()}`);
@@ -144,6 +151,10 @@ export default function LiveCall() {
   useEffect(() => {
     outputModeRef.current = outputMode;
   }, [outputMode]);
+
+  useEffect(() => {
+    watchSessionRef.current = watchSession;
+  }, [watchSession]);
 
   useEffect(() => {
     if (cameraPreviewRef.current) {
@@ -323,15 +334,19 @@ export default function LiveCall() {
     outputStreamRef.current = null;
     if (cameraPreviewRef.current) cameraPreviewRef.current.srcObject = null;
     if (outputVideoRef.current) outputVideoRef.current.srcObject = null;
+    watchSessionRef.current = null;
     setIsLive(false);
     setMicOn(false);
     setCameraOn(false);
     setAudioPlaybackBlocked(false);
-    setSourceName(shareMode === 'whiteboard' ? 'Whiteboard' : 'No screen selected');
+    setWatchSession(null);
+    setWatchError('');
+    setSourceName('No source selected');
     setStatus('Live room ended.');
   };
 
   const stopSharedOutput = async () => {
+    const wasWatchTogether = Boolean(watchSessionRef.current);
     if (animationRef.current) cancelAnimationFrame(animationRef.current);
     animationRef.current = null;
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -344,11 +359,13 @@ export default function LiveCall() {
     outputStreamRef.current = null;
     liveKitVideoTrackRef.current = null;
     if (outputVideoRef.current) outputVideoRef.current.srcObject = null;
+    watchSessionRef.current = null;
     setIsLive(false);
     setShareExpanded(false);
-    setSourceName(shareMode === 'whiteboard' ? 'Whiteboard' : 'No screen selected');
-    setStatus('Shared screen/whiteboard closed.');
-    await sendRoomCommand('share-stopped');
+    setWatchSession(null);
+    setSourceName('No source selected');
+    setStatus(wasWatchTogether ? 'Watch Together closed.' : 'Shared screen/whiteboard closed.');
+    await sendRoomCommand(wasWatchTogether ? 'watch-close' : 'share-stopped');
   };
 
   const getCaptionMimeType = () => {
@@ -549,7 +566,12 @@ export default function LiveCall() {
 
       setLiveKitStatus(`Connecting to ${tokenResult.url}...`);
 
-      room.on(RoomEvent.ParticipantConnected, () => updateRemoteParticipants(room));
+      room.on(RoomEvent.ParticipantConnected, (participant) => {
+        updateRemoteParticipants(room);
+        if (watchSessionRef.current) {
+          sendRoomCommand('watch-sync', participant.identity, { watch: watchSessionRef.current }, room).catch(() => {});
+        }
+      });
       room.on(RoomEvent.AudioPlaybackStatusChanged, (canPlay) => {
         setAudioPlaybackBlocked(!canPlay);
       });
@@ -609,6 +631,9 @@ export default function LiveCall() {
       if (outputStreamRef.current || streamRef.current) await publishActiveOutput();
       if (audioStreamRef.current) await publishMicStream(audioStreamRef.current);
       if (cameraStreamRef.current) await publishCameraStream(cameraStreamRef.current);
+      if (watchSessionRef.current) {
+        await sendRoomCommand('watch-sync', '', { watch: watchSessionRef.current }, room);
+      }
       return room;
     } catch (error) {
       room?.disconnect();
@@ -648,10 +673,10 @@ export default function LiveCall() {
     }
   };
 
-  const sendRoomCommand = async (type, targetIdentity = '') => {
-    const room = liveKitRoomRef.current;
+  const sendRoomCommand = async (type, targetIdentity = '', details = {}, roomOverride = null) => {
+    const room = roomOverride || liveKitRoomRef.current;
     if (!room) return;
-    const payload = new TextEncoder().encode(JSON.stringify({ type, targetIdentity }));
+    const payload = new TextEncoder().encode(JSON.stringify({ ...details, type, targetIdentity }));
     await room.localParticipant.publishData(payload, { reliable: true });
   };
 
@@ -1275,7 +1300,8 @@ export default function LiveCall() {
     }
   };
 
-  const activateWhiteboard = () => {
+  const activateWhiteboard = async () => {
+    if (watchSessionRef.current) await stopSharedOutput();
     if (animationRef.current) cancelAnimationFrame(animationRef.current);
     sourceVideoRef.current = null;
     shareModeRef.current = 'whiteboard';
@@ -1292,8 +1318,62 @@ export default function LiveCall() {
     requestAnimationFrame(renderFrame);
   };
 
+  const activateScreenMode = async () => {
+    if (watchSessionRef.current) await stopSharedOutput();
+    shareModeRef.current = 'screen';
+    setShareMode('screen');
+    setSourceName(sources.find((source) => source.id === selectedSourceId)?.name || 'No screen selected');
+    setWatchError('');
+  };
+
+  const loadWatchTogether = async (event) => {
+    event?.preventDefault?.();
+    try {
+      const source = parseWatchSource(watchUrl);
+      if (isLive) await stopSharedOutput();
+      const session = createWatchSession(source);
+      watchSessionRef.current = session;
+      shareModeRef.current = 'watch';
+      setShareMode('watch');
+      setWatchSession(session);
+      setWatchError('');
+      setSourceName(source.label);
+      setIsLive(true);
+      setShareExpanded(false);
+      setStatus(`${source.label} is ready for everyone.`);
+      await sendRoomCommand('watch-sync', '', { watch: session });
+      setNotes((current) => [`Watch Together loaded: ${source.label}.`, ...current]);
+    } catch (error) {
+      setWatchError(error?.message || 'This link could not be loaded.');
+      setStatus(error?.message || 'This link could not be loaded.');
+    }
+  };
+
+  const handleWatchPlaybackChange = (playback) => {
+    const current = watchSessionRef.current;
+    if (!current || current.kind === 'web') return;
+    const next = {
+      ...current,
+      currentTime: Math.max(0, Number(playback.currentTime) || 0),
+      playing: Boolean(playback.playing),
+      updatedAt: Number(playback.updatedAt) || Date.now()
+    };
+    watchSessionRef.current = next;
+    setWatchSession(next);
+    sendRoomCommand('watch-sync', '', { watch: next }).catch(() => {
+      setLiveKitStatus('Playback changed locally. Reconnect the room to sync viewers.');
+    });
+  };
+
+  const shareSelectedScreen = async () => {
+    await activateScreenMode();
+    await switchScreen(selectedSourceId);
+  };
+
   const switchScreen = async (sourceId = selectedSourceId) => {
-    if (isLive) {
+    if (watchSessionRef.current) {
+      await stopSharedOutput();
+    } else if (isLive) {
       streamRef.current?.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
       sourceVideoRef.current = null;
@@ -1420,7 +1500,7 @@ export default function LiveCall() {
                     Close
                   </button>
                 </div>
-                {shareExpanded && (
+                {shareExpanded && shareMode !== 'watch' && (
                   <div data-share-toolbar="true" style={compactToolBarStyle}>
                     {toolOptions.map((item) => {
                       const Icon = item.icon;
@@ -1448,43 +1528,57 @@ export default function LiveCall() {
                   tabIndex={0}
                   style={shareCanvasWrapStyle}
                 >
-                  <canvas
-                    ref={canvasRef}
-                    onPointerDown={handlePointerDown}
-                    onPointerUp={handlePointerUp}
-                    onPointerLeave={handlePointerUp}
-                    onPointerMove={(event) => {
-                      if (shareMode === 'whiteboard') {
-                        setKeyboardTextAnchor(eventToPoint(event));
-                      }
-                      handlePointerMove(event);
-                    }}
-                    style={canvasStyle}
-                  />
-                  {textDraft && (
-                    <textarea
-                      autoFocus
-                      key={`${textDraft.x}-${textDraft.y}`}
-                      value={textDraft.text}
-                      onChange={(event) => setTextDraft((draft) => ({ ...draft, text: event.target.value }))}
-                      onBlur={() => commitTextDraft()}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' && !event.shiftKey) {
-                          event.preventDefault();
-                          commitTextDraft({ continueTyping: true });
-                        }
-                        if (event.key === 'Escape') {
-                          setTextDraft(null);
-                        }
+                  {shareMode === 'watch' && watchSession ? (
+                    <WatchTogetherPlayer
+                      controller
+                      onPlaybackChange={handleWatchPlaybackChange}
+                      onPlayerError={(message) => {
+                        setWatchError(message);
+                        setStatus(message);
                       }}
-                      placeholder="Type point"
-                      style={{
-                        ...whiteboardTextInputStyle,
-                        color: textDraft.color,
-                        left: `${textDraft.x * 100}%`,
-                        top: `${textDraft.y * 100}%`
-                      }}
+                      session={watchSession}
                     />
+                  ) : (
+                    <>
+                      <canvas
+                        ref={canvasRef}
+                        onPointerDown={handlePointerDown}
+                        onPointerUp={handlePointerUp}
+                        onPointerLeave={handlePointerUp}
+                        onPointerMove={(event) => {
+                          if (shareMode === 'whiteboard') {
+                            setKeyboardTextAnchor(eventToPoint(event));
+                          }
+                          handlePointerMove(event);
+                        }}
+                        style={canvasStyle}
+                      />
+                      {textDraft && (
+                        <textarea
+                          autoFocus
+                          key={`${textDraft.x}-${textDraft.y}`}
+                          value={textDraft.text}
+                          onChange={(event) => setTextDraft((draft) => ({ ...draft, text: event.target.value }))}
+                          onBlur={() => commitTextDraft()}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' && !event.shiftKey) {
+                              event.preventDefault();
+                              commitTextDraft({ continueTyping: true });
+                            }
+                            if (event.key === 'Escape') {
+                              setTextDraft(null);
+                            }
+                          }}
+                          placeholder="Type point"
+                          style={{
+                            ...whiteboardTextInputStyle,
+                            color: textDraft.color,
+                            left: `${textDraft.x * 100}%`,
+                            top: `${textDraft.y * 100}%`
+                          }}
+                        />
+                      )}
+                    </>
                   )}
                 </div>
                 <span style={tileLabelStyle}>Host Share - {sourceName}</span>
@@ -1522,7 +1616,7 @@ export default function LiveCall() {
             <button onClick={toggleCamera} style={dockButtonStyle(cameraOn)} className="tooltip" data-tooltip={cameraOn ? 'Turn camera off' : 'Turn camera on'}>
               <Camera size={18} />
             </button>
-            <button onClick={() => switchScreen(selectedSourceId)} style={dockButtonStyle(isLive)} className="tooltip" data-tooltip="Share screen">
+            <button onClick={shareSelectedScreen} style={dockButtonStyle(isLive && shareMode === 'screen')} className="tooltip" data-tooltip="Share screen">
               <ScreenShare size={18} />
             </button>
             <button onClick={isLiveKitConnected ? disconnectLiveKit : connectLiveKit} style={dockButtonStyle(isLiveKitConnected)} className="tooltip" data-tooltip={isLiveKitConnected ? 'Disconnect room' : 'Go online'}>
@@ -1569,13 +1663,14 @@ export default function LiveCall() {
                 <RotateCcw size={15} /> Refresh
               </button>
             </div>
-            <div style={segmentedStyle}>
-              <button onClick={() => {
-                shareModeRef.current = 'screen';
-                setShareMode('screen');
-                setSourceName(sources.find((source) => source.id === selectedSourceId)?.name || 'No screen selected');
-              }} style={segmentButtonStyle(shareMode === 'screen')}>Screen</button>
+            <div style={{ ...segmentedStyle, gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}>
+              <button onClick={activateScreenMode} style={segmentButtonStyle(shareMode === 'screen')}>Screen</button>
               <button onClick={activateWhiteboard} style={segmentButtonStyle(shareMode === 'whiteboard')}>Whiteboard</button>
+              <button onClick={() => {
+                shareModeRef.current = 'watch';
+                setShareMode('watch');
+                setSourceName(watchSessionRef.current?.label || 'Watch Together');
+              }} style={segmentButtonStyle(shareMode === 'watch')}>Watch</button>
             </div>
             <div style={sourceBoxStyle}>
               <span>Current source</span>
@@ -1598,23 +1693,45 @@ export default function LiveCall() {
                 </select>
               </label>
             )}
-            <button onClick={() => switchScreen(selectedSourceId)} style={{ ...secondaryButtonStyle(false), width: '100%', marginTop: '10px' }}>
-              <ScreenShare size={16} /> {shareMode === 'whiteboard' ? (isLive ? 'Switch To Whiteboard' : 'Share Whiteboard') : (isLive ? 'Switch To Selected' : 'Share Selected')}
-            </button>
-            <div style={segmentedStyle}>
-              <button onClick={() => switchOutputMode('enhanced')} style={segmentButtonStyle(outputMode === 'enhanced')}>Enhanced</button>
-              <button
-                disabled={shareMode === 'whiteboard'}
-                onClick={() => switchOutputMode('raw')}
-                style={{
-                  ...segmentButtonStyle(outputMode === 'raw'),
-                  cursor: shareMode === 'whiteboard' ? 'not-allowed' : 'pointer',
-                  opacity: shareMode === 'whiteboard' ? 0.5 : 1
-                }}
-              >
-                Raw
-              </button>
-            </div>
+            {shareMode === 'watch' && (
+              <form data-watch-control="true" onSubmit={loadWatchTogether} style={watchControlStyle}>
+                <label style={compactLabelStyle}>
+                  <span style={watchLabelStyle}><Clapperboard size={14} /> Video or web link</span>
+                  <div style={watchInputRowStyle}>
+                    <input
+                      aria-label="Video or web link"
+                      onChange={(event) => setWatchUrl(event.target.value)}
+                      placeholder="https://youtube.com/watch?v=..."
+                      style={inputStyle}
+                      value={watchUrl}
+                    />
+                    <button type="submit" style={compactButtonStyle}><Play size={15} /> Load</button>
+                  </div>
+                </label>
+                {watchError && <span role="alert" style={watchErrorStyle}>{watchError}</span>}
+              </form>
+            )}
+            {shareMode !== 'watch' && (
+              <>
+                <button onClick={() => switchScreen(selectedSourceId)} style={{ ...secondaryButtonStyle(false), width: '100%', marginTop: '10px' }}>
+                  <ScreenShare size={16} /> {shareMode === 'whiteboard' ? (isLive ? 'Switch To Whiteboard' : 'Share Whiteboard') : (isLive ? 'Switch To Selected' : 'Share Selected')}
+                </button>
+                <div style={segmentedStyle}>
+                  <button onClick={() => switchOutputMode('enhanced')} style={segmentButtonStyle(outputMode === 'enhanced')}>Enhanced</button>
+                  <button
+                    disabled={shareMode === 'whiteboard'}
+                    onClick={() => switchOutputMode('raw')}
+                    style={{
+                      ...segmentButtonStyle(outputMode === 'raw'),
+                      cursor: shareMode === 'whiteboard' ? 'not-allowed' : 'pointer',
+                      opacity: shareMode === 'whiteboard' ? 0.5 : 1
+                    }}
+                  >
+                    Raw
+                  </button>
+                </div>
+              </>
+            )}
           </section>
 
           <section style={controlCenterCardStyle}>
@@ -2261,6 +2378,32 @@ const sourceBoxStyle = {
   gap: '5px',
   padding: '12px',
   marginTop: '10px'
+};
+
+const watchControlStyle = {
+  display: 'grid',
+  gap: '8px',
+  marginTop: '10px'
+};
+
+const watchLabelStyle = {
+  alignItems: 'center',
+  display: 'inline-flex',
+  gap: '6px'
+};
+
+const watchInputRowStyle = {
+  alignItems: 'stretch',
+  display: 'grid',
+  gap: '8px',
+  gridTemplateColumns: 'minmax(0, 1fr) auto'
+};
+
+const watchErrorStyle = {
+  color: '#B42318',
+  fontSize: '12px',
+  fontWeight: 800,
+  lineHeight: 1.4
 };
 
 const segmentedStyle = {

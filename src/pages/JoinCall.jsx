@@ -14,12 +14,15 @@ import {
   prepareCallAudioTrack,
   resumeCallAudio
 } from '../lib/callAudio';
+import WatchTogetherPlayer from '../components/WatchTogetherPlayer';
+import { normalizeWatchSession } from '../lib/watchTogether';
 
 export default function JoinCall() {
   const roomRef = useRef(null);
   const mediaRef = useRef(null);
   const cameraRef = useRef(null);
   const localCameraRef = useRef(null);
+  const presentationRef = useRef(null);
   const localCameraStreamRef = useRef(null);
   const localMicStreamRef = useRef(null);
   const publishedCameraTrackRef = useRef(null);
@@ -51,15 +54,27 @@ export default function JoinCall() {
     () => import.meta.env.DEV && new URLSearchParams(window.location.search).get('previewMobileShare') === 'unsupported',
     []
   );
+  const previewWatchSession = useMemo(() => {
+    if (!import.meta.env.DEV || new URLSearchParams(window.location.search).get('previewWatch') !== 'youtube') return null;
+    return normalizeWatchSession({
+      currentTime: 0,
+      kind: 'youtube',
+      playing: false,
+      sessionId: 'preview-youtube',
+      updatedAt: Date.now(),
+      url: 'https://www.youtube.com/watch?v=M7lc1UVf-VE',
+      videoId: 'M7lc1UVf-VE'
+    });
+  }, []);
   const isMobileBrowser = useMemo(
     () => previewUnsupportedMobileShare || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent),
     [previewUnsupportedMobileShare]
   );
   const supportsBrowserScreenShare = () => !previewUnsupportedMobileShare && typeof navigator.mediaDevices?.getDisplayMedia === 'function';
 
-  const [name, setName] = useState(previewFaceCount ? 'Alex' : '');
-  const [status, setStatus] = useState(previewFaceCount ? 'Mobile call layout preview' : 'Ready to join');
-  const [connected, setConnected] = useState(previewFaceCount > 0);
+  const [name, setName] = useState(previewFaceCount || previewWatchSession ? 'Alex' : '');
+  const [status, setStatus] = useState(previewFaceCount || previewWatchSession ? 'Mobile call layout preview' : 'Ready to join');
+  const [connected, setConnected] = useState(previewFaceCount > 0 || Boolean(previewWatchSession));
   const [cameraOn, setCameraOn] = useState(false);
   const [micOn, setMicOn] = useState(false);
   const [screenOn, setScreenOn] = useState(false);
@@ -68,6 +83,7 @@ export default function JoinCall() {
   const [fatalError, setFatalError] = useState('');
   const [audioPlaybackBlocked, setAudioPlaybackBlocked] = useState(false);
   const [screenShareNotice, setScreenShareNotice] = useState('');
+  const [watchSession, setWatchSession] = useState(previewWatchSession);
 
   useEffect(() => {
     if (localCameraRef.current) {
@@ -248,6 +264,7 @@ export default function JoinCall() {
     setHasHostScreen(false);
     setAudioPlaybackBlocked(false);
     setScreenShareNotice('');
+    setWatchSession(null);
     activeVideoSidRef.current = null;
     activeCameraSidRef.current = null;
     publishedCameraTrackRef.current = null;
@@ -518,7 +535,19 @@ export default function JoinCall() {
       }
       if (command.type === 'share-stopped') {
         clearHostScreen();
+        setWatchSession(null);
         setStatus('Host closed the shared screen.');
+      }
+      if (command.type === 'watch-sync') {
+        const nextWatchSession = normalizeWatchSession(command.watch);
+        if (nextWatchSession) {
+          setWatchSession(nextWatchSession);
+          setStatus(`${nextWatchSession.label} is synced with the host.`);
+        }
+      }
+      if (command.type === 'watch-close') {
+        setWatchSession(null);
+        setStatus('Host closed Watch Together.');
       }
       if (command.type === 'mute') {
         if (micOnRef.current || publishedMicTrackRef.current) await toggleMic();
@@ -800,6 +829,8 @@ export default function JoinCall() {
     while (node.firstChild) node.removeChild(node.firstChild);
   };
 
+  const hasPresentation = hasHostScreen || Boolean(watchSession);
+
   return (
     <div data-join-call-root="true" style={pageStyle}>
       <style>{responsiveStyles}</style>
@@ -847,23 +878,29 @@ export default function JoinCall() {
 
         <div
           data-call-content="true"
-          data-has-presentation={hasHostScreen ? 'true' : 'false'}
+          data-has-presentation={hasPresentation ? 'true' : 'false'}
           style={{ display: connected ? 'grid' : 'none', gap: '10px' }}
         >
-          <section className="viewer-section" style={{ ...viewerStyle, display: hasHostScreen ? 'block' : 'none' }}>
+          <section className="viewer-section" ref={presentationRef} style={{ ...viewerStyle, display: hasPresentation ? 'block' : 'none' }}>
             <div style={viewerHeaderStyle}>
-              <span style={viewerTitleStyle}><Video size={18} /> Presentation</span>
+              <span style={viewerTitleStyle}><Video size={18} /> {watchSession ? 'Watch Together' : 'Presentation'}</span>
               <button
                 aria-label="Fullscreen presentation"
-                onClick={() => mediaRef.current?.requestFullscreen?.()}
+                onClick={() => presentationRef.current?.requestFullscreen?.()}
                 style={viewerHeaderButtonStyle}
               >
                 <Expand size={16} />
               </button>
             </div>
-            <div className="media-box" ref={mediaRef} style={mediaBoxStyle}>
+            <div className="media-box" ref={mediaRef} style={{ ...mediaBoxStyle, display: watchSession ? 'none' : 'flex' }}>
               <span data-placeholder="true">No presentation yet.</span>
             </div>
+            {watchSession && (
+              <WatchTogetherPlayer
+                onPlayerError={(message) => setStatus(message)}
+                session={watchSession}
+              />
+            )}
           </section>
 
           <section data-people-section="true" style={viewerStyle}>
