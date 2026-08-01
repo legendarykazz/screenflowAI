@@ -205,7 +205,8 @@ function checkRecordingPipeline() {
   assertIncludes(main, "coordinate_space: 'normalized'", 'Global cursor tracking stores DPI-safe normalized coordinates');
   assertIncludes(database, 'coordinate_space: e.coordinate_space || null', 'Cursor coordinate metadata persists with projects');
   assertIncludes(editor, "previous.coordinate_space === 'normalized'", 'Editor understands normalized cursor coordinates');
-  assertIncludes(editor, 'mediaDuration || duration || 0', 'Editor playback follows the actual media duration');
+  assertIncludes(editor, 'const resolvedDuration = mediaDuration || storedDuration || 0', 'Editor resolves playback from the actual source media duration');
+  assertIncludes(editor, 'const nextTimelineDuration = getTimelineDuration', 'Editor keeps edited timeline duration separate from source duration');
   assertIncludes(renderer, 'project.raw_video_path && fs.existsSync(project.raw_video_path)', 'Exports use the untouched source recording');
 }
 

@@ -22,6 +22,7 @@
     "health": "node scripts/health-check.js",
     "health:quick": "node scripts/health-check.js --skip-build",
     "test:call-load": "node scripts/call-load-check.js",
+    "test:editor-timeline": "node scripts/editor-timeline-test.js",
     "test:editor-export": "node scripts/editor-export-smoke.js",
     "start": "electron .",
     "dev:electron": "set SCREENFLOW_DEV_SERVER=1&& electron ."
@@ -55,6 +56,7 @@
     "files": [
       "dist/app/**/*",
       "electron/**/*",
+      "shared/**/*",
       "package.json",
       "!node_modules/ffprobe-static/bin/darwin/**/*",
       "!node_modules/ffprobe-static/bin/linux/**/*",

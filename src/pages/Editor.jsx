@@ -5,15 +5,31 @@ import {
   Play, Pause, SkipBack, SkipForward, Volume2, VolumeX,
   ZoomIn, ZoomOut, Wand2, Check, AlertCircle, Clock,
   ChevronDown, Plus, Trash2, Lock, Undo2, Redo2, Copy, Upload,
-  Music2, Mic2, Palette, X, Gauge, AudioWaveform, WandSparkles
+  Music2, Mic2, Palette, X, Gauge, AudioWaveform, WandSparkles,
+  Magnet, ListRestart, EyeOff, Unlock, PanelLeft, Video, Search
 } from 'lucide-react';
 import './Editor.css';
+import '../../shared/editor-timeline.cjs';
 
-const DEFAULT_TIMELINE_CLIPS = [
-  { id: 'screen', role: 'screen', kind: 'video', label: 'Screen Recording', start: 0, end: 1, color: '#f5f5f5', track: 0, enabled: true },
-  { id: 'audio', role: 'audio', kind: 'voice', label: 'Microphone Audio', start: 0, end: 1, color: '#a3a3a3', track: 1, enabled: true, volume: 1 },
-  { id: 'webcam', role: 'webcam', kind: 'webcam', label: 'Webcam Overlay', start: 0.05, end: 1, color: '#737373', track: 3, enabled: true },
-];
+const timelineTools = globalThis.ScreenFlowEditorTimeline;
+
+const {
+  MIN_CLIP_LENGTH,
+  createMediaLibrary,
+  migrateTimelineClips,
+  normalizeClip,
+  syncLegacyBounds,
+  clipStartSeconds: getClipStartSeconds,
+  clipEndSeconds: getClipEndSeconds,
+  getTimelineDuration,
+  timelineToSourceTime,
+  splitLinkedClipsAt,
+  rippleDeleteRange,
+  rippleDeleteClip,
+  snapTime,
+  updateClipTiming,
+  getVisibleTracks,
+} = timelineTools;
 
 const BUILT_IN_SFX = [
   { id: 'click', label: 'Soft click', duration: 0.22, color: '#f59e0b' },
@@ -35,6 +51,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(30);
+  const [sourceDuration, setSourceDuration] = useState(30);
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
   const [savedStatus, setSavedStatus] = useState('saved'); // 'saved' | 'saving' | 'error'
@@ -44,7 +61,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
   const [captions, setCaptions] = useState([]);
   const [loadingCaptions, setLoadingCaptions] = useState(false);
   const [captionError, setCaptionError] = useState('');
-  const [sidebarTab, setSidebarTab] = useState('zoom');
+  const [sidebarTab, setSidebarTab] = useState('clip');
   
   // Silence Detection
   const [silencePeriods, setSilencePeriods] = useState([]);
@@ -76,9 +93,14 @@ export default function Editor({ projectId, onCloseProject, license }) {
   const [aiEditPlan, setAiEditPlan] = useState(null);
   const [undoAvailable, setUndoAvailable] = useState(false);
   const [redoAvailable, setRedoAvailable] = useState(false);
+  const [mediaLibrary, setMediaLibrary] = useState([]);
+  const [mediaSearch, setMediaSearch] = useState('');
+  const [trackStates, setTrackStates] = useState({});
+  const [timelineSnapEnabled, setTimelineSnapEnabled] = useState(true);
+  const [rippleDeleteEnabled, setRippleDeleteEnabled] = useState(true);
 
   // Timeline clips state
-  const [timelineClips, setTimelineClips] = useState(DEFAULT_TIMELINE_CLIPS);
+  const [timelineClips, setTimelineClips] = useState([]);
 
   // Refs for real-time preview simulation
   const videoRef = useRef(null);
@@ -93,13 +115,22 @@ export default function Editor({ projectId, onCloseProject, license }) {
   const timelineClipsRef = useRef(timelineClips);
   const brandLogoRef = useRef(null);
   const importedMediaRefs = useRef(new Map());
-  const audioGraphRef = useRef(null);
+  const audioGraphsRef = useRef(new Map());
   const undoStackRef = useRef([]);
   const redoStackRef = useRef([]);
   const dragSnapshotRef = useRef(null);
   const playedSfxRef = useRef(new Set());
   const browserFileInputRef = useRef(null);
   const noticeTimeoutRef = useRef(null);
+  const playheadRef = useRef(0);
+  const playbackClockRef = useRef({ startedAt: 0, timelineStart: 0 });
+  const isPlayingRef = useRef(false);
+  const sourceDurationRef = useRef(sourceDuration);
+  const durationRef = useRef(duration);
+  const currentTimeRef = useRef(currentTime);
+  const trackStatesRef = useRef(trackStates);
+  const timelineSnapEnabledRef = useRef(timelineSnapEnabled);
+  const previewSourceTimeRef = useRef(0);
 
   // Smooth Zoom state for Screen Studio continuous panning
   const smoothZoomRef = useRef(1.0);
@@ -117,9 +148,8 @@ export default function Editor({ projectId, onCloseProject, license }) {
       importedMediaRefs.current.forEach((element) => {
         try { element.pause(); } catch (error) {}
       });
-      if (audioGraphRef.current?.context) {
-        audioGraphRef.current.context.close().catch(() => {});
-      }
+      audioGraphsRef.current.forEach((graph) => graph.context.close().catch(() => {}));
+      audioGraphsRef.current.clear();
     };
   }, [projectId]);
 
@@ -128,19 +158,26 @@ export default function Editor({ projectId, onCloseProject, license }) {
       videoRef.current.muted = isMuted;
       videoRef.current.volume = volume;
     }
+    importedMediaRefs.current.forEach((media, clipId) => {
+      const clip = timelineClipsRef.current.find((item) => item.id === clipId);
+      media.volume = Math.max(0, Math.min(1, (clip?.volume ?? 1) * volume));
+      if (isMuted) media.muted = true;
+    });
   }, [isMuted, volume]);
 
   useEffect(() => {
-    const graph = audioGraphRef.current;
-    if (!graph) return;
-    const cleanupEnabled = settings.voice_cleanup_enabled === true;
-    const isolation = Math.max(0, Math.min(100, settings.voice_isolation ?? 55)) / 100;
-    graph.highpass.frequency.value = cleanupEnabled ? 70 + (isolation * 55) : 10;
-    graph.presence.gain.value = cleanupEnabled ? 1.5 + (isolation * 3.5) : 0;
-    graph.compressor.threshold.value = cleanupEnabled ? -24 + (isolation * 6) : 0;
-    graph.compressor.ratio.value = cleanupEnabled ? 2.2 + (isolation * 2.8) : 1;
-    graph.gain.gain.value = Math.pow(10, (settings.voice_gain ?? 0) / 20);
-  }, [settings.voice_cleanup_enabled, settings.voice_isolation, settings.voice_gain]);
+    audioGraphsRef.current.forEach((graph, clipId) => {
+      const clip = timelineClipsRef.current.find((item) => item.id === clipId);
+      const cleanup = clip?.audioCleanup || {};
+      const cleanupEnabled = cleanup.noiseReduction ?? (settings.voice_cleanup_enabled === true);
+      const isolation = Math.max(0, Math.min(100, cleanup.isolation ?? settings.voice_isolation ?? 55)) / 100;
+      graph.highpass.frequency.value = cleanupEnabled ? 70 + (isolation * 55) : 10;
+      graph.presence.gain.value = cleanupEnabled ? 1.5 + (isolation * 3.5) : 0;
+      graph.compressor.threshold.value = cleanupEnabled ? -24 + (isolation * 6) : 0;
+      graph.compressor.ratio.value = cleanupEnabled ? 2.2 + (isolation * 2.8) : 1;
+      graph.gain.gain.value = Math.pow(10, (cleanup.gain ?? settings.voice_gain ?? 0) / 20);
+    });
+  }, [settings.voice_cleanup_enabled, settings.voice_isolation, settings.voice_gain, timelineClips]);
 
   useEffect(() => {
     timelineDragRef.current = timelineDrag;
@@ -149,6 +186,31 @@ export default function Editor({ projectId, onCloseProject, license }) {
   useEffect(() => {
     timelineClipsRef.current = timelineClips;
   }, [timelineClips]);
+
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
+
+  useEffect(() => {
+    sourceDurationRef.current = sourceDuration;
+  }, [sourceDuration]);
+
+  useEffect(() => {
+    durationRef.current = duration;
+  }, [duration]);
+
+  useEffect(() => {
+    currentTimeRef.current = currentTime;
+    playheadRef.current = currentTime;
+  }, [currentTime]);
+
+  useEffect(() => {
+    trackStatesRef.current = trackStates;
+  }, [trackStates]);
+
+  useEffect(() => {
+    timelineSnapEnabledRef.current = timelineSnapEnabled;
+  }, [timelineSnapEnabled]);
 
   useEffect(() => {
     if (!settings.brand_logo) {
@@ -171,34 +233,40 @@ export default function Editor({ projectId, onCloseProject, license }) {
       const rect = drag.laneRect || timelineRef.current?.getBoundingClientRect();
       if (!rect) return;
       const pct = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
-      const time = pct * duration;
-      const minLength = Math.min(1, Math.max(0.15, duration * 0.04));
+      const rawTime = pct * durationRef.current;
+      const minLength = Math.max(MIN_CLIP_LENGTH, Math.min(0.25, durationRef.current * 0.01));
 
       setTimelineClips((clips) => {
         const nextClips = clips.map((clip) => {
-        if (clip.id !== drag.id) return clip;
+          if (clip.id !== drag.id) return clip;
+          const time = snapTime(rawTime, clips, durationRef.current, {
+            enabled: timelineSnapEnabledRef.current,
+            excludeId: clip.id,
+            playhead: currentTimeRef.current,
+            threshold: Math.max(0.06, 0.16 / Math.max(1, timelineZoom)),
+          });
 
-        if (drag.mode === 'move') {
-          const length = drag.end - drag.start;
-          const nextStart = Math.min(Math.max(0, time - drag.offset), Math.max(0, duration - length));
-          return {
-            ...clip,
-            start: nextStart / duration,
-            end: (nextStart + length) / duration
-          };
-        }
+          if (drag.mode === 'move') {
+            const length = drag.end - drag.start;
+            const nextStart = Math.min(Math.max(0, time - drag.offset), Math.max(0, durationRef.current - length));
+            return updateClipTiming(clip, {
+              timelineStart: nextStart,
+              timelineEnd: nextStart + length,
+              mode: 'move',
+            }, sourceDurationRef.current);
+          }
 
-        if (drag.mode === 'trim-start') {
-          const nextStart = Math.min(time, drag.end - minLength);
-          return { ...clip, start: Math.max(0, nextStart) / duration };
-        }
+          if (drag.mode === 'trim-start') {
+            const nextStart = Math.max(0, Math.min(time, getClipEndSeconds(clip, sourceDurationRef.current) - minLength));
+            return updateClipTiming(clip, { timelineStart: nextStart, mode: 'trim-start' }, sourceDurationRef.current);
+          }
 
-        if (drag.mode === 'trim-end') {
-          const nextEnd = Math.max(time, drag.start + minLength);
-          return { ...clip, end: Math.min(duration, nextEnd) / duration };
-        }
+          if (drag.mode === 'trim-end') {
+            const nextEnd = Math.min(durationRef.current, Math.max(time, getClipStartSeconds(clip, sourceDurationRef.current) + minLength));
+            return updateClipTiming(clip, { timelineEnd: nextEnd, mode: 'trim-end' }, sourceDurationRef.current);
+          }
 
-        return clip;
+          return clip;
         });
         timelineClipsRef.current = nextClips;
         return nextClips;
@@ -226,33 +294,53 @@ export default function Editor({ projectId, onCloseProject, license }) {
       window.removeEventListener('mousemove', handleMove);
       window.removeEventListener('mouseup', handleUp);
     };
-  }, [duration]);
+  }, [timelineZoom]);
 
   const loadProjectData = async () => {
     if (window.electron && window.electron.getProject) {
       const proj = await window.electron.getProject(projectId);
       setProject(proj);
-      setSettings(proj.settings || {});
-      if (proj?.duration) setDuration(proj.duration);
-      if (Array.isArray(proj?.settings?.timeline_clips)) {
-        const repairedClips = proj.settings.timeline_clips.map((clip) => {
-          const role = clip.role || (clip.id === 'screen' ? 'screen' : clip.id === 'audio' ? 'audio' : clip.id === 'webcam' ? 'webcam' : null);
-          const kind = clip.kind || (role === 'screen' ? 'video' : role === 'audio' ? 'voice' : role === 'webcam' ? 'webcam' : 'video');
-          const repaired = { ...clip, role, kind, volume: clip.volume ?? 1 };
-          if ((clip.id === 'screen' || clip.id === 'audio') && clip.start === 0 && clip.end < 0.99) {
-            return { ...repaired, end: 1 };
-          }
-          if (clip.id === 'webcam' && clip.end < 0.99) {
-            return { ...repaired, end: 1 };
-          }
-          return repaired;
-        });
-        setTimelineClips(repairedClips);
-        if (JSON.stringify(repairedClips) !== JSON.stringify(proj.settings.timeline_clips)) {
-          await window.electron.updateProject(projectId, { timeline_clips: repairedClips });
-        }
-      } else {
-        setTimelineClips(DEFAULT_TIMELINE_CLIPS);
+      const projectSettings = proj?.settings || {};
+      const storedSourceDuration = Math.max(MIN_CLIP_LENGTH, Number(proj?.duration) || 30);
+      const migratedClips = migrateTimelineClips(projectSettings.timeline_clips, proj, storedSourceDuration);
+      const nextMediaLibrary = createMediaLibrary(proj, projectSettings.media_library, storedSourceDuration);
+      const nextTimelineDuration = getTimelineDuration(migratedClips, storedSourceDuration);
+      const nextTrackStates = projectSettings.track_states && typeof projectSettings.track_states === 'object'
+        ? projectSettings.track_states
+        : {};
+
+      setSettings({
+        ...projectSettings,
+        timeline_clips: migratedClips,
+        media_library: nextMediaLibrary,
+        track_states: nextTrackStates,
+      });
+      setSourceDuration(storedSourceDuration);
+      sourceDurationRef.current = storedSourceDuration;
+      setDuration(nextTimelineDuration);
+      durationRef.current = nextTimelineDuration;
+      setTimelineClips(migratedClips);
+      timelineClipsRef.current = migratedClips;
+      setSelectedClipId(migratedClips[0]?.id || null);
+      setMediaLibrary(nextMediaLibrary);
+      setTrackStates(nextTrackStates);
+      setTimelineSnapEnabled(projectSettings.timeline_snap_enabled !== false);
+      setRippleDeleteEnabled(projectSettings.ripple_delete_enabled !== false);
+
+      const editorRepair = {
+        timeline_clips: migratedClips,
+        media_library: nextMediaLibrary,
+        track_states: nextTrackStates,
+        timeline_snap_enabled: projectSettings.timeline_snap_enabled !== false,
+        ripple_delete_enabled: projectSettings.ripple_delete_enabled !== false,
+        editor_model_version: 2,
+      };
+      if (
+        projectSettings.editor_model_version !== 2
+        || JSON.stringify(migratedClips) !== JSON.stringify(projectSettings.timeline_clips)
+        || JSON.stringify(nextMediaLibrary) !== JSON.stringify(projectSettings.media_library || [])
+      ) {
+        await window.electron.updateProject(projectId, editorRepair);
       }
       
       const events = await window.electron.getCursorEvents(projectId);
@@ -324,7 +412,13 @@ export default function Editor({ projectId, onCloseProject, license }) {
           const resolvedDuration = mediaDuration || storedDuration || 0;
 
           if (resolvedDuration > 0) {
-            setDuration(resolvedDuration);
+            setSourceDuration(resolvedDuration);
+            sourceDurationRef.current = resolvedDuration;
+            if (!Array.isArray(projectSettings.timeline_clips) || projectSettings.timeline_clips.length === 0) {
+              const refreshedProject = { ...proj, duration: resolvedDuration };
+              const refreshedClips = migrateTimelineClips(null, refreshedProject, resolvedDuration);
+              await saveTimelineClips(refreshedClips);
+            }
           }
           if (mediaDuration > 0 && Math.abs(mediaDuration - storedDuration) > 0.08) {
             setProject((current) => current ? { ...current, duration: mediaDuration } : current);
@@ -337,10 +431,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
           animationRef.current = requestAnimationFrame(renderPreview);
         };
         video.onended = () => {
-          setIsPlaying(false);
-          if (animationRef.current) cancelAnimationFrame(animationRef.current);
-          animationRef.current = null;
-          setCurrentTime(video.duration && Number.isFinite(video.duration) ? video.duration : duration);
+          // The editor clock owns playback. A later source segment may seek this media again.
         };
         video.onerror = () => {
           const error = video.error;
@@ -383,12 +474,52 @@ export default function Editor({ projectId, onCloseProject, license }) {
   };
 
   const saveTimelineClips = async (nextClips) => {
-    setTimelineClips(nextClips);
-    timelineClipsRef.current = nextClips;
-    setSettings((prev) => ({ ...prev, timeline_clips: nextClips }));
-    if (window.electron?.updateProject) {
-      await window.electron.updateProject(projectId, { timeline_clips: nextClips });
+    const persistedClips = (Array.isArray(nextClips) ? nextClips : []).map((clip) => (
+      normalizeClip(clip, project || {}, sourceDurationRef.current)
+    ));
+    const nextDuration = getTimelineDuration(persistedClips, persistedClips.length ? 0 : sourceDurationRef.current);
+    setTimelineClips(persistedClips);
+    timelineClipsRef.current = persistedClips;
+    setDuration(nextDuration);
+    durationRef.current = nextDuration;
+    if (playheadRef.current > nextDuration) {
+      playheadRef.current = nextDuration;
+      setCurrentTime(nextDuration);
     }
+    setSettings((prev) => ({ ...prev, timeline_clips: persistedClips, editor_model_version: 2 }));
+    if (window.electron?.updateProject) {
+      await window.electron.updateProject(projectId, { timeline_clips: persistedClips, editor_model_version: 2 });
+    }
+  };
+
+  const saveMediaLibrary = async (nextLibrary) => {
+    setMediaLibrary(nextLibrary);
+    setSettings((prev) => ({ ...prev, media_library: nextLibrary }));
+    if (window.electron?.updateProject) {
+      await window.electron.updateProject(projectId, { media_library: nextLibrary });
+    }
+  };
+
+  const updateTrackState = async (trackId, patch) => {
+    const nextStates = {
+      ...trackStatesRef.current,
+      [trackId]: { ...(trackStatesRef.current[trackId] || {}), ...patch },
+    };
+    trackStatesRef.current = nextStates;
+    setTrackStates(nextStates);
+    setSettings((prev) => ({ ...prev, track_states: nextStates }));
+    if (window.electron?.updateProject) {
+      await window.electron.updateProject(projectId, { track_states: nextStates });
+    }
+  };
+
+  const updateTimelineOption = async (key, value) => {
+    if (key === 'timeline_snap_enabled') {
+      setTimelineSnapEnabled(value);
+      timelineSnapEnabledRef.current = value;
+    }
+    if (key === 'ripple_delete_enabled') setRippleDeleteEnabled(value);
+    await handleSaveSettings({ [key]: value });
   };
 
   const cloneClips = (clips) => clips.map((clip) => ({ ...clip }));
@@ -432,10 +563,13 @@ export default function Editor({ projectId, onCloseProject, license }) {
     noticeTimeoutRef.current = window.setTimeout(() => setEditorNotice(''), 2800);
   };
 
-  const clipStartSeconds = (clip) => Math.max(0, (clip?.start || 0) * duration);
-  const clipEndSeconds = (clip) => Math.max(clipStartSeconds(clip), (clip?.end ?? 1) * duration);
+  const clipStartSeconds = (clip) => getClipStartSeconds(clip, sourceDurationRef.current);
+  const clipEndSeconds = (clip) => getClipEndSeconds(clip, sourceDurationRef.current);
   const clipIsActive = (clip, timestamp) => (
-    clip?.enabled !== false && timestamp >= clipStartSeconds(clip) && timestamp <= clipEndSeconds(clip)
+    clip?.enabled !== false
+    && trackStatesRef.current[clip.trackId]?.visible !== false
+    && timestamp >= clipStartSeconds(clip)
+    && timestamp < clipEndSeconds(clip)
   );
 
   const getMediaPreviewUrl = useCallback((sourcePath) => {
@@ -453,38 +587,48 @@ export default function Editor({ projectId, onCloseProject, license }) {
   };
 
   const ensureAudioGraph = async () => {
-    if (audioGraphRef.current) {
-      if (audioGraphRef.current.context.state === 'suspended') await audioGraphRef.current.context.resume();
-      return audioGraphRef.current;
-    }
-    const video = videoRef.current;
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-    if (!video || !AudioContextClass) return null;
+    if (!AudioContextClass) return null;
+    const voiceCandidates = timelineClipsRef.current
+      .filter((clip) => (clip.kind === 'voice' || clip.role === 'audio') && importedMediaRefs.current.get(clip.id))
+      .map((clip) => ({ clip, id: clip.id, element: importedMediaRefs.current.get(clip.id) }));
+    if (voiceCandidates.length === 0 && videoRef.current) {
+      voiceCandidates.push({ clip: null, id: 'screen-audio', element: videoRef.current });
+    }
+    let firstGraph = null;
     try {
-      const context = new AudioContextClass();
-      const source = context.createMediaElementSource(video);
-      const highpass = context.createBiquadFilter();
-      const presence = context.createBiquadFilter();
-      const compressor = context.createDynamicsCompressor();
-      const gain = context.createGain();
-      highpass.type = 'highpass';
-      presence.type = 'peaking';
-      presence.frequency.value = 3400;
-      presence.Q.value = 0.8;
-      compressor.knee.value = 18;
-      compressor.attack.value = 0.012;
-      compressor.release.value = 0.22;
-      source.connect(highpass).connect(presence).connect(compressor).connect(gain).connect(context.destination);
-      audioGraphRef.current = { context, source, highpass, presence, compressor, gain };
-      const cleanupEnabled = settings.voice_cleanup_enabled === true;
-      const isolation = Math.max(0, Math.min(100, settings.voice_isolation ?? 55)) / 100;
-      highpass.frequency.value = cleanupEnabled ? 70 + (isolation * 55) : 10;
-      presence.gain.value = cleanupEnabled ? 1.5 + (isolation * 3.5) : 0;
-      compressor.threshold.value = cleanupEnabled ? -24 + (isolation * 6) : 0;
-      compressor.ratio.value = cleanupEnabled ? 2.2 + (isolation * 2.8) : 1;
-      gain.gain.value = Math.pow(10, (settings.voice_gain ?? 0) / 20);
-      await context.resume();
-      return audioGraphRef.current;
+      for (const candidate of voiceCandidates) {
+        let graph = audioGraphsRef.current.get(candidate.id);
+        if (!graph) {
+          const context = new AudioContextClass();
+          const source = context.createMediaElementSource(candidate.element);
+          const highpass = context.createBiquadFilter();
+          const presence = context.createBiquadFilter();
+          const compressor = context.createDynamicsCompressor();
+          const gain = context.createGain();
+          highpass.type = 'highpass';
+          presence.type = 'peaking';
+          presence.frequency.value = 3400;
+          presence.Q.value = 0.8;
+          compressor.knee.value = 18;
+          compressor.attack.value = 0.012;
+          compressor.release.value = 0.22;
+          source.connect(highpass).connect(presence).connect(compressor).connect(gain).connect(context.destination);
+          graph = { context, source, highpass, presence, compressor, gain };
+          audioGraphsRef.current.set(candidate.id, graph);
+        }
+        const cleanup = candidate.clip?.audioCleanup || {};
+        const cleanupEnabled = cleanup.noiseReduction ?? (settings.voice_cleanup_enabled === true);
+        const isolation = Math.max(0, Math.min(100, cleanup.isolation ?? settings.voice_isolation ?? 55)) / 100;
+        graph.highpass.frequency.value = cleanupEnabled ? 70 + (isolation * 55) : 10;
+        graph.presence.gain.value = cleanupEnabled ? 1.5 + (isolation * 3.5) : 0;
+        graph.compressor.threshold.value = cleanupEnabled ? -24 + (isolation * 6) : 0;
+        graph.compressor.ratio.value = cleanupEnabled ? 2.2 + (isolation * 2.8) : 1;
+        graph.gain.gain.value = Math.pow(10, (cleanup.gain ?? settings.voice_gain ?? 0) / 20);
+        if (graph.context.state === 'suspended') await graph.context.resume();
+        firstGraph ||= graph;
+      }
+      return firstGraph;
     } catch (error) {
       console.warn('Voice preview processing is unavailable:', error);
       return null;
@@ -494,7 +638,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
   const previewSoundEffect = (kind, gainValue = 0.75) => {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     if (!AudioContextClass) return;
-    const context = audioGraphRef.current?.context || new AudioContextClass();
+    const context = audioGraphsRef.current.values().next().value?.context || new AudioContextClass();
     const gain = context.createGain();
     gain.gain.setValueAtTime(Math.max(0, Math.min(1, gainValue)), context.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + (kind === 'whoosh' ? 0.85 : 0.3));
@@ -600,56 +744,77 @@ export default function Editor({ projectId, onCloseProject, license }) {
 
   const getClipById = (id) => timelineClips.find((clip) => clip.id === id);
 
+  const updateSelectedClip = (updater) => {
+    const selected = getClipById(selectedClipId);
+    if (!selected) return;
+    const nextClips = timelineClips.map((clip) => {
+      if (clip.id !== selected.id) return clip;
+      const next = typeof updater === 'function' ? updater(clip) : { ...clip, ...updater };
+      return normalizeClip(next, project || {}, sourceDurationRef.current);
+    });
+    commitTimeline(nextClips);
+  };
+
+  const updateSelectedGrade = (fields) => {
+    const selected = getClipById(selectedClipId);
+    if (!selected || !['video', 'webcam'].includes(selected.kind)) {
+      handleSaveSettings(fields);
+      return;
+    }
+    updateSelectedClip((clip) => ({
+      ...clip,
+      grade: { ...(clip.grade || {}), ...fields },
+    }));
+  };
+
+  const updateSelectedAudio = (fields) => {
+    updateSelectedClip((clip) => ({
+      ...clip,
+      audioCleanup: { ...(clip.audioCleanup || {}), ...fields },
+    }));
+  };
+
+  const updateSelectedSpeed = (speed) => {
+    const nextSpeed = Math.max(0.25, Math.min(3, Number(speed) || 1));
+    updateSelectedClip((clip) => {
+      const sourceLength = Math.max(MIN_CLIP_LENGTH, (clip.sourceEnd || 0) - (clip.sourceStart || 0));
+      return syncLegacyBounds({
+        ...clip,
+        speed: nextSpeed,
+        timelineEnd: clipStartSeconds(clip) + (sourceLength / nextSpeed),
+      }, sourceDurationRef.current);
+    });
+  };
+
   const isClipActive = (id, timestamp = currentTime) => {
     const matchingClips = timelineClips.filter((clip) => clip.id === id || clip.role === id);
-    if (!matchingClips.length || !duration) return true;
+    if (!matchingClips.length || !duration) return false;
     return matchingClips.some((clip) => clipIsActive(clip, timestamp));
   };
 
   const splitSelectedClip = () => {
     const selected = getClipById(selectedClipId);
     if (!selected || duration <= 0) return;
-    const start = clipStartSeconds(selected);
-    const end = clipEndSeconds(selected);
-    if (currentTime <= start + 0.08 || currentTime >= end - 0.08) {
+    const result = splitLinkedClipsAt(timelineClips, selected.id, currentTimeRef.current, sourceDurationRef.current);
+    if (!result.changed) {
       showEditorNotice('Move the playhead inside the selected clip before splitting.');
       return;
     }
-    const splitPoint = currentTime / duration;
-    const sourceLength = selected.sourceEnd != null
-      ? selected.sourceEnd - (selected.sourceStart || 0)
-      : end - start;
-    const sourceSplit = (selected.sourceStart || 0) + sourceLength * ((currentTime - start) / Math.max(0.01, end - start));
-    const left = { ...selected, end: splitPoint, sourceEnd: sourceSplit };
-    const right = {
-      ...selected,
-      id: `${selected.id}-split-${Date.now()}`,
-      label: `${selected.label} 2`,
-      start: splitPoint,
-      sourceStart: sourceSplit,
-    };
-    const index = timelineClips.findIndex((clip) => clip.id === selected.id);
-    const next = [...timelineClips];
-    next.splice(index, 1, left, right);
-    commitTimeline(next);
-    setSelectedClipId(right.id);
-    showEditorNotice(`Split at ${formatTime(currentTime)}.`);
+    commitTimeline(result.clips);
+    setSelectedClipId(result.rightClipId);
+    const linkedLabel = result.splitCount > 1 ? ` across ${result.splitCount} linked tracks` : '';
+    showEditorNotice(`Split at ${formatTime(currentTimeRef.current)}${linkedLabel}.`);
   };
 
   const deleteSelectedClip = () => {
     const selected = getClipById(selectedClipId);
     if (!selected) return;
-    const sameRole = timelineClips.filter((clip) => clip.role && clip.role === selected.role);
-    if ((selected.role === 'screen' || selected.role === 'audio') && sameRole.length === 1) {
-      const next = timelineClips.map((clip) => clip.id === selected.id ? { ...clip, enabled: false } : clip);
-      commitTimeline(next);
-      showEditorNotice(`${selected.label} hidden. Undo restores it.`);
-      return;
-    }
-    const next = timelineClips.filter((clip) => clip.id !== selected.id);
+    const next = rippleDeleteEnabled
+      ? rippleDeleteClip(timelineClips, selected.id, sourceDurationRef.current)
+      : timelineClips.filter((clip) => clip.id !== selected.id);
     commitTimeline(next);
     setSelectedClipId(next[Math.max(0, timelineClips.findIndex((clip) => clip.id === selected.id) - 1)]?.id || null);
-    showEditorNotice(`${selected.label} removed.`);
+    showEditorNotice(rippleDeleteEnabled ? `${selected.label} removed and the gap closed.` : `${selected.label} removed.`);
   };
 
   const duplicateSelectedClip = () => {
@@ -659,15 +824,15 @@ export default function Editor({ projectId, onCloseProject, license }) {
       showEditorNotice('Recorded tracks can be split; imported clips and effects can be duplicated.');
       return;
     }
-    const length = selected.end - selected.start;
-    const nextStart = Math.min(Math.max(0, 1 - length), selected.end + (0.12 / duration));
-    const copy = {
+    const length = clipEndSeconds(selected) - clipStartSeconds(selected);
+    const nextStart = clipEndSeconds(selected) + 0.12;
+    const copy = syncLegacyBounds({
       ...selected,
       id: `${selected.id}-copy-${Date.now()}`,
       label: `${selected.label} copy`,
-      start: nextStart,
-      end: Math.min(1, nextStart + length),
-    };
+      timelineStart: nextStart,
+      timelineEnd: nextStart + length,
+    }, sourceDurationRef.current);
     const next = [...timelineClips, copy];
     commitTimeline(next);
     setSelectedClipId(copy.id);
@@ -704,49 +869,75 @@ export default function Editor({ projectId, onCloseProject, license }) {
       return;
     }
 
-    const maxLength = Math.max(0.4, duration - currentTime);
-    const clipLength = Math.min(mediaDuration, maxLength || Math.min(mediaDuration, duration));
-    const timelineStart = Math.min(currentTime, Math.max(0, duration - clipLength));
-    const clip = {
-      id: `${kind}-${Date.now()}`,
-      role: kind === 'video' ? 'broll' : 'music',
+    const asset = {
+      id: `asset-${kind}-${Date.now()}`,
+      name: label,
       kind,
-      label,
+      role: kind === 'video' ? 'broll' : 'music',
       sourcePath,
+      duration: mediaDuration,
+      builtin: false,
+    };
+    const existingAsset = mediaLibrary.find((item) => item.sourcePath === sourcePath);
+    const nextLibrary = existingAsset ? mediaLibrary : [...mediaLibrary, asset];
+    if (!existingAsset) await saveMediaLibrary(nextLibrary);
+    addMediaAssetToTimeline(existingAsset || asset);
+  };
+
+  const addMediaAssetToTimeline = (asset) => {
+    if (!asset || duration <= 0) return;
+    if (asset.builtin && ['screen', 'audio', 'webcam'].includes(asset.role)) {
+      const existingClip = timelineClips.find((clip) => clip.role === asset.role);
+      if (existingClip) {
+        setSelectedClipId(existingClip.id);
+        showEditorNotice(`${asset.name} is already on the timeline.`);
+        return;
+      }
+    }
+    const clipLength = Math.max(MIN_CLIP_LENGTH, Number(asset.duration) || 5);
+    const timelineStart = Math.max(0, currentTimeRef.current);
+    const clip = normalizeClip({
+      id: `${asset.kind}-${Date.now()}`,
+      role: asset.role || (asset.kind === 'video' ? 'broll' : 'music'),
+      kind: asset.kind,
+      label: asset.name,
+      sourcePath: asset.sourcePath,
+      mediaId: asset.id,
       sourceStart: 0,
       sourceEnd: clipLength,
-      start: timelineStart / duration,
-      end: Math.min(1, (timelineStart + clipLength) / duration),
-      color: kind === 'video' ? '#a78bfa' : '#34d399',
-      track: kind === 'video' ? 2 : 4,
+      timelineStart,
+      timelineEnd: timelineStart + clipLength,
+      trackId: asset.role === 'webcam' || asset.kind === 'webcam'
+        ? 'camera'
+        : asset.kind === 'video' ? 'video-overlay' : asset.role === 'audio' ? 'voice' : 'music',
       enabled: true,
-      volume: kind === 'video' ? 0 : 0.8,
+      volume: asset.kind === 'video' || asset.kind === 'webcam' ? 0 : 0.8,
       useAudio: false,
-    };
+    }, project || {}, sourceDurationRef.current);
     commitTimeline([...timelineClips, clip]);
     setSelectedClipId(clip.id);
-    setSidebarTab(kind === 'video' ? 'color' : 'audio');
-    showEditorNotice(`${kind === 'video' ? 'Video' : 'Audio'} added at ${formatTime(timelineStart)}.`);
+    setSidebarTab(asset.kind === 'audio' ? 'audio' : 'color');
+    showEditorNotice(`${asset.name} added at ${formatTime(timelineStart)}.`);
   };
 
   const addSoundEffect = (effect) => {
     if (duration <= 0) return;
-    const start = Math.min(currentTime, Math.max(0, duration - effect.duration));
-    const clip = {
+    const start = Math.max(0, currentTimeRef.current);
+    const clip = normalizeClip({
       id: `sfx-${effect.id}-${Date.now()}`,
       role: 'sfx',
       kind: 'sfx',
       sfxKind: effect.id,
       label: effect.label,
-      start: start / duration,
-      end: Math.min(1, (start + effect.duration) / duration),
+      timelineStart: start,
+      timelineEnd: start + effect.duration,
       sourceStart: 0,
       sourceEnd: effect.duration,
       color: effect.color,
-      track: 4,
+      trackId: 'music',
       enabled: true,
       volume: 0.75,
-    };
+    }, project || {}, sourceDurationRef.current);
     commitTimeline([...timelineClips, clip]);
     setSelectedClipId(clip.id);
     setSidebarTab('audio');
@@ -790,8 +981,14 @@ export default function Editor({ projectId, onCloseProject, license }) {
 
   const applyAutoColor = async () => {
     const grade = analyzeCurrentFrame();
-    await handleSaveSettings({ ...grade, color_preset: 'auto' });
-    showEditorNotice('Auto color balanced from the current frame.');
+    const selected = getClipById(selectedClipId);
+    if (selected && ['video', 'webcam'].includes(selected.kind)) {
+      updateSelectedGrade({ ...grade, color_preset: 'auto' });
+      showEditorNotice(`Auto color applied to ${selected.label}.`);
+    } else {
+      await handleSaveSettings({ ...grade, color_preset: 'auto' });
+      showEditorNotice('Auto color applied to the project.');
+    }
     return grade;
   };
 
@@ -822,8 +1019,24 @@ export default function Editor({ projectId, onCloseProject, license }) {
       voice_isolation: Math.max(55, settings.voice_isolation ?? 55),
       normalize_audio: true,
     });
+    const voiceClips = timelineClips.map((clip) => (
+      clip.kind === 'voice' || clip.role === 'audio'
+        ? { ...clip, audioCleanup: { ...(clip.audioCleanup || {}), noiseReduction: true, isolation: Math.max(55, clip.audioCleanup?.isolation ?? 55), normalize: true } }
+        : clip
+    ));
+    commitTimeline(voiceClips);
     if (aiEditPlan.clickCount > 0 && isPro) await handleScanScene();
     showEditorNotice('AI edit applied. Review the marked pauses before removing them.');
+  };
+
+  const seekToTime = (time) => {
+    const nextTime = Math.min(durationRef.current, Math.max(0, Number(time) || 0));
+    playheadRef.current = nextTime;
+    currentTimeRef.current = nextTime;
+    setCurrentTime(nextTime);
+    playbackClockRef.current = { startedAt: performance.now(), timelineStart: nextTime };
+    if (animationRef.current) cancelAnimationFrame(animationRef.current);
+    animationRef.current = requestAnimationFrame(renderPreview);
   };
 
   const seekToTimelineEvent = (event) => {
@@ -834,23 +1047,19 @@ export default function Editor({ projectId, onCloseProject, license }) {
     const rect = timelineElement.getBoundingClientRect();
     const pct = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
     const newTime = pct * duration;
-    if (videoRef.current) videoRef.current.currentTime = newTime;
-    setCurrentTime(newTime);
-    if (animationRef.current) cancelAnimationFrame(animationRef.current);
-    animationRef.current = requestAnimationFrame(renderPreview);
+    seekToTime(newTime);
   };
 
   const startClipDrag = (event, clip, mode) => {
     event.stopPropagation();
     setSelectedClipId(clip.id);
-    dragSnapshotRef.current = cloneClips(timelineClipsRef.current);
-    if (mode === 'move' && (clip.role === 'screen' || clip.role === 'audio' || clip.role === 'webcam')) {
-      dragSnapshotRef.current = null;
-      showEditorNotice('Recorded tracks stay time-locked. Drag either edge to trim them.');
+    if (trackStatesRef.current[clip.trackId]?.locked === true) {
+      showEditorNotice(`${getVisibleTracks([clip])[0]?.label || 'Track'} is locked.`);
       return;
     }
-    const start = clip.start * duration;
-    const end = clip.end * duration;
+    dragSnapshotRef.current = cloneClips(timelineClipsRef.current);
+    const start = clipStartSeconds(clip);
+    const end = clipEndSeconds(clip);
     const lane = event.currentTarget?.closest?.('[data-timeline-lane="true"]');
     const rect = lane?.getBoundingClientRect() || timelineRef.current?.getBoundingClientRect();
     const pointerTime = rect ? (((event.clientX - rect.left) / rect.width) * duration) : start;
@@ -879,7 +1088,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
       ctx.globalAlpha = (settings.cursor_opacity !== undefined ? settings.cursor_opacity : 0.8) * cursorAlpha;
 
       if (activeClick && (highlightMode === 'ripple' || highlightMode === 'both')) {
-        const age = videoRef.current ? videoRef.current.currentTime - activeClick.timestamp : 0;
+        const age = previewSourceTimeRef.current - activeClick.timestamp;
         if (age < 0.7) {
           ctx.beginPath();
           ctx.arc(activeClick.x, activeClick.y, hSize * 2.2 * (age / 0.7), 0, 2 * Math.PI);
@@ -946,38 +1155,70 @@ export default function Editor({ projectId, onCloseProject, license }) {
     const video = videoRef.current;
     if (!canvas || !video) return;
 
-    // Live Auto-Cut Silence preview skipping
-    if (autoCutSilence && silencePeriods.length > 0) {
-      const t = video.currentTime;
-      const matched = silencePeriods.find(p => t >= p.start && t < p.end);
-      if (matched) {
-        video.currentTime = matched.end;
-      }
-    }
-
     const ctx = canvas.getContext('2d');
     const width = canvas.width;
     const height = canvas.height;
-    const timestamp = video.currentTime;
+    let timestamp = playheadRef.current;
+    if (isPlayingRef.current) {
+      timestamp = playbackClockRef.current.timelineStart
+        + ((performance.now() - playbackClockRef.current.startedAt) / 1000);
+    }
+    if (autoCutSilence && silencePeriods.length > 0) {
+      const matched = silencePeriods.find((period) => timestamp >= period.start && timestamp < period.end);
+      if (matched) {
+        timestamp = matched.end;
+        playbackClockRef.current = { startedAt: performance.now(), timelineStart: timestamp };
+      }
+    }
+    timestamp = Math.min(durationRef.current, Math.max(0, timestamp));
+    playheadRef.current = timestamp;
+    currentTimeRef.current = timestamp;
     setCurrentTime(timestamp);
-    const mediaDuration = Number.isFinite(video.duration) ? video.duration : 0;
-    const playbackEnd = Math.max(0, mediaDuration || duration || 0);
-    if (isPlaying && playbackEnd > 0 && timestamp >= playbackEnd - 0.05) {
+    const playbackEnd = durationRef.current;
+    if (isPlayingRef.current && playbackEnd > 0 && timestamp >= playbackEnd - 0.015) {
       video.pause();
-      video.currentTime = playbackEnd;
+      importedMediaRefs.current.forEach((media) => media.pause());
+      playheadRef.current = playbackEnd;
+      currentTimeRef.current = playbackEnd;
       setCurrentTime(playbackEnd);
+      isPlayingRef.current = false;
       setIsPlaying(false);
       animationRef.current = null;
       return;
     }
-    const playbackActive = !video.paused && !video.ended;
-    const screenActive = isClipActive('screen', timestamp);
-    const audioActive = isClipActive('audio', timestamp);
-    const webcamActive = isClipActive('webcam', timestamp);
-    video.muted = isMuted || !audioActive;
+    const playbackActive = isPlayingRef.current;
+    const activeScreenClip = [...timelineClipsRef.current]
+      .filter((clip) => clip.role === 'screen' && clipIsActive(clip, timestamp))
+      .sort((left, right) => clipStartSeconds(right) - clipStartSeconds(left))[0] || null;
+    const activeVoiceClip = [...timelineClipsRef.current]
+      .filter((clip) => (clip.role === 'audio' || clip.kind === 'voice') && clipIsActive(clip, timestamp))[0] || null;
+    const activeWebcamClip = [...timelineClipsRef.current]
+      .filter((clip) => (clip.role === 'webcam' || clip.kind === 'webcam') && clipIsActive(clip, timestamp))[0] || null;
+    const screenActive = Boolean(activeScreenClip);
+    const screenSourceTime = activeScreenClip
+      ? timelineToSourceTime(activeScreenClip, timestamp, sourceDurationRef.current)
+      : 0;
+    previewSourceTimeRef.current = screenSourceTime;
+
+    if (screenActive) {
+      video.playbackRate = Math.max(0.25, Math.min(3, Number(activeScreenClip.speed) || 1));
+      const boundedSourceTime = Number.isFinite(video.duration) && video.duration > 0
+        ? Math.min(screenSourceTime, Math.max(0, video.duration - 0.02))
+        : screenSourceTime;
+      if (Math.abs(video.currentTime - boundedSourceTime) > (playbackActive ? 0.12 : 0.025)) {
+        try { video.currentTime = boundedSourceTime; } catch (error) {}
+      }
+      if (playbackActive && video.paused) video.play().catch(() => {});
+    } else if (!video.paused) {
+      video.pause();
+    }
+    const voiceUsesSeparateElement = Boolean(activeVoiceClip?.sourcePath);
+    video.muted = isMuted
+      || voiceUsesSeparateElement
+      || trackStatesRef.current['video-main']?.muted === true;
 
     const activeImportedVideo = [...timelineClipsRef.current]
-      .filter((clip) => clip.kind === 'video' && clip.sourcePath && clipIsActive(clip, timestamp))
+      .filter((clip) => clip.kind === 'video' && clip.role !== 'screen' && clip.sourcePath && clipIsActive(clip, timestamp))
       .sort((a, b) => (a.track || 0) - (b.track || 0))
       .at(-1);
 
@@ -990,12 +1231,21 @@ export default function Editor({ projectId, onCloseProject, license }) {
         if (!media.paused) media.pause();
         return;
       }
-      const localTime = (clip.sourceStart || 0) + Math.max(0, timestamp - clipStartSeconds(clip));
+      const localTime = timelineToSourceTime(clip, timestamp, sourceDurationRef.current);
+      media.playbackRate = Math.max(0.25, Math.min(3, Number(clip.speed) || 1));
       if (Number.isFinite(media.duration) && Math.abs(media.currentTime - localTime) > 0.16) {
         try { media.currentTime = Math.min(Math.max(0, localTime), Math.max(0, media.duration - 0.03)); } catch (error) {}
       }
-      media.volume = Math.max(0, Math.min(1, (clip.volume ?? 1) * volume));
-      media.muted = isMuted || (clip.kind === 'video' && !clip.useAudio);
+      const clipProgress = Math.max(0, timestamp - clipStartSeconds(clip));
+      const clipLength = Math.max(MIN_CLIP_LENGTH, clipEndSeconds(clip) - clipStartSeconds(clip));
+      const fadeIn = Math.max(0, Number(clip.audioCleanup?.fadeIn) || 0);
+      const fadeOut = Math.max(0, Number(clip.audioCleanup?.fadeOut) || 0);
+      const fadeInGain = fadeIn > 0 ? Math.min(1, clipProgress / fadeIn) : 1;
+      const fadeOutGain = fadeOut > 0 ? Math.min(1, (clipLength - clipProgress) / fadeOut) : 1;
+      media.volume = Math.max(0, Math.min(1, (clip.volume ?? 1) * volume * fadeInGain * fadeOutGain));
+      media.muted = isMuted
+        || trackStatesRef.current[clip.trackId]?.muted === true
+        || ((clip.kind === 'video' || clip.kind === 'webcam') && !clip.useAudio);
       if (playbackActive && media.paused) media.play().catch(() => {});
       if (!playbackActive && !media.paused) media.pause();
     });
@@ -1012,6 +1262,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
       });
 
     const importedVideoElement = activeImportedVideo ? importedMediaRefs.current.get(activeImportedVideo.id) : null;
+    const webcamVideoElement = activeWebcamClip ? importedMediaRefs.current.get(activeWebcamClip.id) : null;
     const drawSource = importedVideoElement?.readyState >= 2 ? importedVideoElement : video;
     const drawSourceReady = drawSource.readyState >= 2 && drawSource.videoWidth > 0 && drawSource.videoHeight > 0;
 
@@ -1065,17 +1316,18 @@ export default function Editor({ projectId, onCloseProject, license }) {
       ctx.textAlign = 'center';
       ctx.fillText('Screen track is trimmed here', width / 2, height / 2);
       ctx.restore();
-      animationRef.current = requestAnimationFrame(renderPreview);
+      if (isPlayingRef.current) animationRef.current = requestAnimationFrame(renderPreview);
       return;
     }
 
     // 2. Smooth cursor tracker and normalize it into the preview canvas.
     const events = cursorEventsRef.current;
-    const cursorPoint = getCursorPointAtTime(events, timestamp, width, height, video);
+    const sourceTimestamp = screenActive ? screenSourceTime : timestamp;
+    const cursorPoint = getCursorPointAtTime(events, sourceTimestamp, width, height, video);
     let currentX = cursorPoint.x;
     let currentY = cursorPoint.y;
     let cursorAlpha = cursorPoint.source?.visible === false ? 0 : 1;
-    let activeClick = getActiveClick(events, timestamp, width, height, video);
+    let activeClick = getActiveClick(events, sourceTimestamp, width, height, video);
 
     if (settings.cursor_loop_to_start && duration > 1.5 && timestamp > duration - 1.2 && events.length > 0) {
       const loopT = Math.min(1, Math.max(0, (timestamp - (duration - 1.2)) / 1.2));
@@ -1086,7 +1338,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
 
     if (settings.cursor_auto_hide !== false && cursorPoint.source && !activeClick) {
       const idleDelay = settings.cursor_idle_hide_delay !== undefined ? settings.cursor_idle_hide_delay : 1.2;
-      const idleTime = timestamp - cursorPoint.source.timestamp;
+      const idleTime = sourceTimestamp - cursorPoint.source.timestamp;
       if (idleTime > idleDelay) {
         cursorAlpha = Math.max(0, 1 - ((idleTime - idleDelay) / 0.45));
       }
@@ -1109,11 +1361,11 @@ export default function Editor({ projectId, onCloseProject, license }) {
     // Check if we have active AI scene suggested zoom active
     let activeSceneZoom = null;
     if (smartZoomActive && sceneEvents.length > 0) {
-      activeSceneZoom = sceneEvents.find(s => timestamp >= s.timestamp && timestamp < s.timestamp + 1.1);
+      activeSceneZoom = sceneEvents.find(s => sourceTimestamp >= s.timestamp && sourceTimestamp < s.timestamp + 1.1);
     }
 
     if (activeSceneZoom) {
-      const age = timestamp - activeSceneZoom.timestamp;
+      const age = sourceTimestamp - activeSceneZoom.timestamp;
       const sceneTargetZoom = activeSceneZoom.zoom || settings.zoom_level || 1.5;
       if (age <= 0.3) {
         const t = age / 0.3;
@@ -1127,7 +1379,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
       targetX = currentX;
       targetY = currentY;
     } else if (activeClick && settings.zoom_level > 1.0) {
-      const age = timestamp - activeClick.timestamp;
+      const age = sourceTimestamp - activeClick.timestamp;
       const inDuration = settings.zoom_in_duration || 0.35;
       const holdDuration = settings.zoom_hold_duration || 0.55;
       const outDuration = settings.zoom_out_duration || 0.35;
@@ -1167,7 +1419,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
     // 4. Draw Screen Capture with Motion Blur
     let blurAmt = 0;
     if (activeClick && settings.motion_blur !== 0) {
-      const age = timestamp - activeClick.timestamp;
+      const age = sourceTimestamp - activeClick.timestamp;
       const intensity = settings.motion_blur_intensity !== undefined ? settings.motion_blur_intensity : 0.5;
       
       if (age > 0 && age < 0.3) {
@@ -1182,11 +1434,14 @@ export default function Editor({ projectId, onCloseProject, license }) {
     }
 
     ctx.save();
-    const exposure = Math.max(-100, Math.min(100, settings.color_exposure || 0));
-    const contrast = Math.max(-100, Math.min(100, settings.color_contrast || 0));
-    const saturation = Math.max(-100, Math.min(100, settings.color_saturation || 0));
-    const temperature = Math.max(-100, Math.min(100, settings.color_temperature || 0));
-    const tint = Math.max(-100, Math.min(100, settings.color_tint || 0));
+    const activeVisualClip = activeImportedVideo || activeScreenClip;
+    const activeGrade = activeVisualClip?.grade || {};
+    ctx.globalAlpha = Math.max(0, Math.min(1, activeVisualClip?.transform?.opacity ?? 1));
+    const exposure = Math.max(-100, Math.min(100, activeGrade.color_exposure ?? settings.color_exposure ?? 0));
+    const contrast = Math.max(-100, Math.min(100, activeGrade.color_contrast ?? settings.color_contrast ?? 0));
+    const saturation = Math.max(-100, Math.min(100, activeGrade.color_saturation ?? settings.color_saturation ?? 0));
+    const temperature = Math.max(-100, Math.min(100, activeGrade.color_temperature ?? settings.color_temperature ?? 0));
+    const tint = Math.max(-100, Math.min(100, activeGrade.color_tint ?? settings.color_tint ?? 0));
     const previewFilters = [];
     if (blurAmt > 0.5) previewFilters.push(`blur(${blurAmt.toFixed(1)}px)`);
     previewFilters.push(`brightness(${Math.max(0.35, 1 + exposure / 100)})`);
@@ -1238,15 +1493,17 @@ export default function Editor({ projectId, onCloseProject, license }) {
       ctx.fillText('The preview will appear here once media frames are ready.', width / 2, height / 2 + 30);
     }
 
+    ctx.globalAlpha = 1;
     drawCinematicCursor(ctx, currentX, currentY, activeClick, cursorAlpha);
     ctx.restore();
 
-    // 5. Draw Webcam Overlay mockup (only if enabled in settings)
-    if (settings.webcam_enabled && !settings.webcam_baked && webcamActive) {
+    // 5. Draw a camera overlay only when the project contains separate camera media.
+    if (activeWebcamClip && webcamVideoElement?.readyState >= 2 && webcamVideoElement.videoWidth > 0) {
       const webcamPos = settings.webcam_position || 'bottom-right';
-      const webcamScale = settings.webcam_size || 0.22;
+      const webcamScale = activeWebcamClip.transform?.scale || settings.webcam_size || 0.22;
       const camW = Math.round(width * webcamScale);
-      const camH = Math.round(camW * 0.68);
+      const sourceRatio = webcamVideoElement.videoWidth / Math.max(1, webcamVideoElement.videoHeight);
+      const camH = Math.round(camW / sourceRatio);
       const margin = 42;
       let camX = width - camW - margin;
       let camY = height - camH - margin;
@@ -1269,40 +1526,23 @@ export default function Editor({ projectId, onCloseProject, license }) {
 
       ctx.beginPath();
       ctx.roundRect(camX, camY, camW, camH, 18);
-      ctx.fillStyle = '#111827';
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(255,255,255,0.72)';
-      ctx.lineWidth = 3;
-      ctx.stroke();
-
       ctx.clip();
-      const tileGrad = ctx.createLinearGradient(camX, camY, camX + camW, camY + camH);
-      tileGrad.addColorStop(0, '#1f2937');
-      tileGrad.addColorStop(1, '#334155');
-      ctx.fillStyle = tileGrad;
-      ctx.fillRect(camX, camY, camW, camH);
-
-      ctx.shadowBlur = 0;
-      ctx.fillStyle = 'rgba(255,255,255,0.08)';
-      ctx.beginPath();
-      ctx.arc(camX + camW * 0.22, camY + camH * 0.18, camW * 0.38, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.fillStyle = '#cbd5e1';
-      ctx.beginPath();
-      ctx.arc(camX + camW / 2, camY + camH * 0.42, camH * 0.18, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#94a3b8';
-      ctx.beginPath();
-      ctx.roundRect(camX + camW * 0.28, camY + camH * 0.64, camW * 0.44, camH * 0.28, 28);
-      ctx.fill();
+      ctx.drawImage(webcamVideoElement, camX, camY, camW, camH);
 
       ctx.fillStyle = 'rgba(15,23,42,0.58)';
       ctx.fillRect(camX, camY + camH - 28, camW, 28);
       ctx.fillStyle = '#f8fafc';
       ctx.font = '700 13px Inter';
       ctx.textAlign = 'left';
-      ctx.fillText(settings.webcam_label || 'Camera', camX + 14, camY + camH - 10);
+      ctx.fillText(activeWebcamClip.label || settings.webcam_label || 'Camera', camX + 14, camY + camH - 10);
+      ctx.restore();
+
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,255,255,0.72)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.roundRect(camX, camY, camW, camH, 18);
+      ctx.stroke();
       ctx.restore();
     }
 
@@ -1491,7 +1731,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
       ctx.restore();
     }
 
-    if (!video.paused && !video.ended) {
+    if (isPlayingRef.current) {
       animationRef.current = requestAnimationFrame(renderPreview);
     } else {
       animationRef.current = null;
@@ -1530,40 +1770,25 @@ export default function Editor({ projectId, onCloseProject, license }) {
     const video = videoRef.current;
     if (!video) return;
 
-    if (isPlaying) {
+    if (isPlayingRef.current) {
       video.pause();
       importedMediaRefs.current.forEach((media) => media.pause());
-      cancelAnimationFrame(animationRef.current);
+      if (animationRef.current) cancelAnimationFrame(animationRef.current);
+      isPlayingRef.current = false;
       setIsPlaying(false);
     } else {
-      ensureAudioGraph();
-      video.muted = isMuted;
-      const playPromise = video.play();
-      if (playPromise !== undefined && typeof playPromise.catch === 'function') {
-        playPromise
-          .then(() => {
-            setPreviewStatus('');
-            setIsPlaying(true);
-          })
-          .catch((err) => {
-          console.warn("Video playback was blocked or interrupted. Muting and retrying...", err);
-          video.muted = true;
-          setIsMuted(true);
-          video.play()
-            .then(() => {
-              setPreviewStatus('');
-              setIsPlaying(true);
-            })
-            .catch((e) => {
-              setPreviewStatus(e?.message || 'Video playback failed.');
-              setIsPlaying(false);
-              console.error("Video play retry failed:", e);
-            });
-          });
-      } else {
-        setIsPlaying(true);
+      if (playheadRef.current >= durationRef.current - 0.02) {
+        playheadRef.current = 0;
+        currentTimeRef.current = 0;
+        setCurrentTime(0);
       }
-      animationRef.current = requestAnimationFrame(renderPreview);
+      ensureAudioGraph();
+      playbackClockRef.current = { startedAt: performance.now(), timelineStart: playheadRef.current };
+      isPlayingRef.current = true;
+      setIsPlaying(true);
+      setPreviewStatus('');
+      if (animationRef.current) cancelAnimationFrame(animationRef.current);
+      renderPreview();
     }
   };
 
@@ -1605,24 +1830,20 @@ export default function Editor({ projectId, onCloseProject, license }) {
   const applySilenceCutToTimeline = (enabled) => {
     setAutoCutSilence(enabled);
     if (!enabled || silencePeriods.length === 0 || duration <= 0) return;
-
-    const firstGap = silencePeriods[0];
-    const lastGap = silencePeriods[silencePeriods.length - 1];
-    const nextStart = Math.max(0, Math.min((firstGap.end || 0) / duration, 0.92));
-    const nextEnd = Math.min(1, Math.max((lastGap.start || duration) / duration, nextStart + 0.08));
-
-    const nextClips = timelineClips.map((clip) => (
-      clip.id === 'screen' || clip.id === 'audio'
-        ? { ...clip, start: nextStart, end: nextEnd, enabled: true }
-        : clip
-    ));
-    saveTimelineClips(nextClips);
+    const orderedPeriods = [...silencePeriods]
+      .filter((period) => period.end - period.start >= MIN_CLIP_LENGTH)
+      .sort((left, right) => right.start - left.start);
+    const nextClips = orderedPeriods.reduce((clips, period) => (
+      rippleDeleteRange(clips, period.start, period.end, sourceDurationRef.current)
+    ), timelineClips);
+    commitTimeline(nextClips);
+    showEditorNotice(`${orderedPeriods.length} quiet section${orderedPeriods.length === 1 ? '' : 's'} removed.`);
   };
 
   const toggleTimelineLayer = (id, enabled) => {
     const nextClips = timelineClips.map((clip) => (
       clip.id === id
-        ? { ...clip, enabled, start: enabled ? Math.min(clip.start, 0.05) : clip.start, end: enabled ? Math.max(clip.end, 0.85) : clip.end }
+        ? { ...clip, enabled }
         : clip
     ));
     saveTimelineClips(nextClips);
@@ -1634,29 +1855,21 @@ export default function Editor({ projectId, onCloseProject, license }) {
       return;
     }
     setAnalyzingScene(true);
-    // Simulate complex AI scene analysis
-    await new Promise(r => setTimeout(r, 1500));
-    
     const recordedClicks = cursorEventsRef.current
       .filter((event) => event.event_type?.includes('click'))
       .filter((event, index, list) => index === 0 || event.timestamp - list[index - 1].timestamp > 0.8);
 
-    const suggestions = recordedClicks.length > 0
-      ? recordedClicks.slice(0, 12).map((event, index) => ({
-          timestamp: event.timestamp,
-          type: event.event_type,
-          desc: `${event.event_type === 'right-click' ? 'Right' : 'Left'} click focus point`,
-          zoom: index % 3 === 0 ? 1.65 : index % 3 === 1 ? 1.5 : 1.8
-        }))
-      : [
-          { timestamp: 1.5, type: 'click', desc: 'Demo click focus point', zoom: 1.5 },
-          { timestamp: 5.2, type: 'click', desc: 'Demo interaction focus point', zoom: 1.8 },
-          { timestamp: 9.8, type: 'click', desc: 'Demo button focus point', zoom: 2.0 }
-        ];
+    const suggestions = recordedClicks.slice(0, 12).map((event, index) => ({
+      timestamp: event.timestamp,
+      type: event.event_type,
+      desc: `${event.event_type === 'right-click' ? 'Right' : 'Left'} click focus point`,
+      zoom: index % 3 === 0 ? 1.65 : index % 3 === 1 ? 1.5 : 1.8
+    }));
     
     setSceneEvents(suggestions);
     setSmartZoomActive(true);
     setAnalyzingScene(false);
+    if (suggestions.length === 0) showEditorNotice('No recorded cursor clicks were found for focus suggestions.');
   };
 
   const applyBrandKitToProject = async () => {
@@ -1749,6 +1962,9 @@ export default function Editor({ projectId, onCloseProject, license }) {
     return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
+  const selectedTimelineClip = getClipById(selectedClipId);
+  const selectedGrade = selectedTimelineClip?.grade || settings;
+
   return (
     <div className="editor-fullscreen" style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: '0', background: '#050505', color: '#f5f5f5' }}>
       {/* Top Header Bar */}
@@ -1765,7 +1981,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
             <h2 style={{ fontSize: '15px', fontWeight: 700, color: '#ffffff' }}>{project?.name || 'Loading...'}</h2>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '2px' }}>
               <Clock size={10} style={{ color: 'var(--text-muted)' }} />
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500 }}>{formatTime(duration)} · 1080p · {isPro ? 'Pro' : 'Free'}</span>
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500 }}>{formatTime(duration)} | 1080p | {isPro ? 'Pro' : 'Free'}</span>
             </div>
           </div>
         </div>
@@ -1803,9 +2019,54 @@ export default function Editor({ projectId, onCloseProject, license }) {
       </div>
 
       {/* Main workspace panels */}
-      <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 300px', minHeight: 0, overflow: 'hidden' }}>
+      <div className="editor-workspace-grid">
+        <aside className="editor-media-bin">
+          <div className="editor-media-header">
+            <div>
+              <span>Project</span>
+              <h3><PanelLeft size={14} /> Media</h3>
+            </div>
+            <button className="editor-icon-button" onClick={() => addImportedClip('video')} title="Import video">
+              <Plus size={14} />
+            </button>
+          </div>
+          <label className="editor-media-search">
+            <Search size={13} />
+            <input
+              value={mediaSearch}
+              onChange={(event) => setMediaSearch(event.target.value)}
+              placeholder="Search media"
+            />
+          </label>
+          <div className="editor-media-imports">
+            <button onClick={() => addImportedClip('video')}><Video size={13} /> Video</button>
+            <button onClick={() => addImportedClip('audio')}><Music2 size={13} /> Audio</button>
+          </div>
+          <div className="editor-media-list">
+            {mediaLibrary
+              .filter((asset) => asset.name?.toLowerCase().includes(mediaSearch.trim().toLowerCase()))
+              .map((asset) => (
+                <div className="editor-media-item" key={asset.id}>
+                  <div className={`editor-media-thumb ${asset.kind}`}>
+                    {asset.kind === 'audio' ? <AudioWaveform size={18} /> : asset.kind === 'webcam' ? <Camera size={18} /> : <Film size={18} />}
+                  </div>
+                  <div className="editor-media-meta">
+                    <strong title={asset.name}>{asset.name}</strong>
+                    <span>{asset.kind === 'webcam' ? 'Camera' : asset.kind} · {formatTime(asset.duration || 0)}</span>
+                  </div>
+                  <button className="editor-media-add" onClick={() => addMediaAssetToTimeline(asset)} title={`Add ${asset.name} at playhead`}>
+                    <Plus size={13} />
+                  </button>
+                </div>
+              ))}
+            {mediaLibrary.length === 0 && (
+              <div className="editor-media-empty">Import a video or audio file to begin.</div>
+            )}
+          </div>
+        </aside>
+
         {/* Editor Screen & Canvas */}
-        <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, borderRight: '1px solid #262626' }}>
+        <div className="editor-stage-column">
           {/* Canvas Wrapper */}
           <div 
             style={{ 
@@ -1842,8 +2103,8 @@ export default function Editor({ projectId, onCloseProject, license }) {
               style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0, pointerEvents: 'none' }}
               playsInline
             />
-            {timelineClips.filter((clip) => clip.sourcePath).map((clip) => {
-              const MediaTag = clip.kind === 'audio' ? 'audio' : 'video';
+            {timelineClips.filter((clip) => clip.sourcePath && clip.role !== 'screen').map((clip) => {
+              const MediaTag = clip.kind === 'audio' || clip.kind === 'voice' ? 'audio' : 'video';
               return (
                 <MediaTag
                   key={clip.id}
@@ -1899,7 +2160,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
           <div style={{ background: 'rgba(0,0,0,0.3)', borderTop: '1px solid var(--border-color)', padding: '0', flexShrink: 0 }}>
             {/* Transport Controls */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 16px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-              <button onClick={() => { if(videoRef.current) videoRef.current.currentTime = 0; setCurrentTime(0); }}
+              <button onClick={() => seekToTime(0)} title="Go to beginning"
                 style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: '4px' }}>
                 <SkipBack size={16} />
               </button>
@@ -1909,7 +2170,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
                 {isPlaying ? <Pause size={14} fill="#050505" /> : <Play size={14} fill="#050505" style={{ marginLeft: '1px' }} />}
               </button>
 
-              <button onClick={() => { if(videoRef.current) videoRef.current.currentTime = Math.min(duration, currentTime + 10); }}
+              <button onClick={() => seekToTime(Math.min(duration, currentTime + 10))} title="Forward 10 seconds"
                 style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: '4px' }}>
                 <SkipForward size={16} />
               </button>
@@ -1958,6 +2219,23 @@ export default function Editor({ projectId, onCloseProject, license }) {
                 </button>
                 <button className="editor-icon-button" title="Redo timeline change" onClick={redoTimeline} disabled={!redoAvailable}>
                   <Redo2 size={15} />
+                </button>
+              </div>
+              <div className="editor-command-separator" />
+              <div className="editor-command-group">
+                <button
+                  className={`editor-command-button ${timelineSnapEnabled ? 'active' : ''}`}
+                  title="Snap clip edges to the playhead and nearby edits"
+                  onClick={() => updateTimelineOption('timeline_snap_enabled', !timelineSnapEnabled)}
+                >
+                  <Magnet size={14} /> Snap
+                </button>
+                <button
+                  className={`editor-command-button ${rippleDeleteEnabled ? 'active' : ''}`}
+                  title="Close the timeline gap when deleting a clip"
+                  onClick={() => updateTimelineOption('ripple_delete_enabled', !rippleDeleteEnabled)}
+                >
+                  <ListRestart size={14} /> Ripple
                 </button>
               </div>
               <div className="editor-command-separator" />
@@ -2011,8 +2289,8 @@ export default function Editor({ projectId, onCloseProject, license }) {
                   {(() => {
                     const selectedClip = getClipById(selectedClipId);
                     if (!selectedClip) return null;
-                    const start = selectedClip.start * duration;
-                    const end = selectedClip.end * duration;
+                    const start = clipStartSeconds(selectedClip);
+                    const end = clipEndSeconds(selectedClip);
                     return (
                       <>
                         <strong style={{ color: selectedClip.color }}>{selectedClip.label}</strong>
@@ -2024,8 +2302,10 @@ export default function Editor({ projectId, onCloseProject, license }) {
                           step="0.1"
                           value={start.toFixed(1)}
                           onChange={(event) => {
-                            const nextStart = Math.max(0, Math.min(parseFloat(event.target.value) || 0, end - 0.15));
-                            commitTimeline(timelineClips.map((clip) => clip.id === selectedClip.id ? { ...clip, start: nextStart / duration, enabled: true } : clip));
+                            const nextStart = Math.max(0, Math.min(parseFloat(event.target.value) || 0, end - MIN_CLIP_LENGTH));
+                            commitTimeline(timelineClips.map((clip) => clip.id === selectedClip.id
+                              ? updateClipTiming(clip, { timelineStart: nextStart, mode: 'trim-start', enabled: true }, sourceDurationRef.current)
+                              : clip));
                           }}
                           style={{ width: '58px', background: '#0f1322', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '6px', color: '#fff', padding: '4px 6px', fontSize: '11px' }}
                         />
@@ -2037,17 +2317,15 @@ export default function Editor({ projectId, onCloseProject, license }) {
                           step="0.1"
                           value={end.toFixed(1)}
                           onChange={(event) => {
-                            const nextEnd = Math.min(duration, Math.max(parseFloat(event.target.value) || duration, start + 0.15));
-                            commitTimeline(timelineClips.map((clip) => clip.id === selectedClip.id ? { ...clip, end: nextEnd / duration, enabled: true } : clip));
+                            const nextEnd = Math.max(parseFloat(event.target.value) || duration, start + MIN_CLIP_LENGTH);
+                            commitTimeline(timelineClips.map((clip) => clip.id === selectedClip.id
+                              ? updateClipTiming(clip, { timelineEnd: nextEnd, mode: 'trim-end', enabled: true }, sourceDurationRef.current)
+                              : clip));
                           }}
                           style={{ width: '58px', background: '#0f1322', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '6px', color: '#fff', padding: '4px 6px', fontSize: '11px' }}
                         />
                         <button
-                          onClick={() => {
-                            if (videoRef.current) videoRef.current.currentTime = start;
-                            setCurrentTime(start);
-                            animationRef.current = requestAnimationFrame(renderPreview);
-                          }}
+                          onClick={() => seekToTime(start)}
                           style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px', color: '#fff', padding: '4px 8px', cursor: 'pointer', fontSize: '11px', fontWeight: 700 }}
                         >
                           Jump
@@ -2058,75 +2336,93 @@ export default function Editor({ projectId, onCloseProject, license }) {
                 </div>
               )}
               {/* Timecode ruler */}
-              <div style={{ display: 'flex', gap: '0', position: 'relative', height: '18px', marginLeft: '80px' }}>
+              <div style={{ display: 'flex', gap: '0', position: 'relative', height: '18px', marginLeft: '104px', minWidth: `${100 * timelineZoom}%` }}>
                 {Array.from({ length: Math.ceil(duration) + 1 }, (_, i) => i).filter(i => i % 5 === 0).map(sec => (
-                  <div key={sec} style={{ position: 'absolute', left: `${(sec / duration) * 100 * timelineZoom}%`, fontSize: '9px', color: 'rgba(255,255,255,0.3)', fontFamily: 'monospace', display: 'flex', flexDirection: 'column', alignItems: 'center', userSelect: 'none' }}>
+                  <div key={sec} style={{ position: 'absolute', left: `${(sec / duration) * 100}%`, fontSize: '9px', color: 'rgba(255,255,255,0.3)', fontFamily: 'monospace', display: 'flex', flexDirection: 'column', alignItems: 'center', userSelect: 'none' }}>
                     <div style={{ height: '6px', width: '1px', background: 'rgba(255,255,255,0.15)', marginBottom: '2px' }} />
                     {formatTime(sec)}
                   </div>
                 ))}
               </div>
 
-              {[...timelineClips].sort((a, b) => (a.track || 0) - (b.track || 0) || a.start - b.start).map(clip => (
-                <div key={clip.id} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  {/* Track label */}
-                  <div style={{ width: '80px', flexShrink: 0, fontSize: '10px', color: 'rgba(255,255,255,0.4)', fontWeight: 600, textAlign: 'right', paddingRight: '8px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {clip.kind === 'voice' ? 'Voice' : clip.kind === 'audio' || clip.kind === 'sfx' ? 'Audio' : clip.kind === 'webcam' ? 'Camera' : clip.role === 'broll' ? 'B-roll' : 'Video'}
-                  </div>
-
-                  {/* Track lane */}
-                  <div
-                    data-timeline-lane="true"
-                    style={{ flex: 1, height: '32px', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)', position: 'relative', overflow: 'hidden', minWidth: `${100 * timelineZoom}%`, cursor: 'pointer' }}
-                    onClick={seekToTimelineEvent}
-                  >
-                    {/* Clip block */}
-                    <div style={{
-                      position: 'absolute',
-                      left: `${clip.start * 100}%`,
-                      width: `${(clip.end - clip.start) * 100}%`,
-                      height: '100%',
-                      background: `${clip.color}33`,
-                      border: selectedClipId === clip.id ? `2px solid ${clip.color}` : `1px solid ${clip.color}66`,
-                      opacity: clip.enabled === false ? 0.35 : 1,
-                      borderRadius: '5px',
-                      display: 'flex', alignItems: 'center', padding: '0 8px',
-                      cursor: timelineDrag?.id === clip.id ? 'grabbing' : 'grab', transition: 'opacity 0.2s, border 0.2s'
-                    }}
-                    onMouseDown={(event) => startClipDrag(event, clip, 'move')}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      setSelectedClipId(clip.id);
-                    }}
-                    onMouseEnter={e => e.currentTarget.style.opacity = '0.8'}
-                    onMouseLeave={e => e.currentTarget.style.opacity = '1'}
-                    >
-                      <div
-                        onMouseDown={(event) => startClipDrag(event, clip, 'trim-start')}
-                        style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: '8px', cursor: 'ew-resize', background: 'rgba(255,255,255,0.18)' }}
-                      />
-                      <span style={{ fontSize: '9px', fontWeight: 700, color: clip.color, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{clip.label}</span>
-                      <div
-                        onMouseDown={(event) => startClipDrag(event, clip, 'trim-end')}
-                        style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: '8px', cursor: 'ew-resize', background: 'rgba(255,255,255,0.18)' }}
-                      />
+              {getVisibleTracks(timelineClips).map((track) => {
+                const clips = timelineClips
+                  .filter((clip) => clip.trackId === track.id)
+                  .sort((left, right) => clipStartSeconds(left) - clipStartSeconds(right));
+                const state = trackStates[track.id] || {};
+                return (
+                  <div className="editor-track-row" key={track.id}>
+                    <div className="editor-track-header">
+                      <strong>{track.label}</strong>
+                      <div>
+                        <button
+                          title={state.visible === false ? `Show ${track.label}` : `Hide ${track.label}`}
+                          onClick={() => updateTrackState(track.id, { visible: state.visible === false })}
+                        >
+                          {state.visible === false ? <EyeOff size={11} /> : <Eye size={11} />}
+                        </button>
+                        <button
+                          title={state.muted ? `Unmute ${track.label}` : `Mute ${track.label}`}
+                          onClick={() => updateTrackState(track.id, { muted: !state.muted })}
+                        >
+                          {state.muted ? <VolumeX size={11} /> : <Volume2 size={11} />}
+                        </button>
+                        <button
+                          title={state.locked ? `Unlock ${track.label}` : `Lock ${track.label}`}
+                          onClick={() => updateTrackState(track.id, { locked: !state.locked })}
+                        >
+                          {state.locked ? <Lock size={11} /> : <Unlock size={11} />}
+                        </button>
+                      </div>
                     </div>
-
-                    {/* Playhead line overlay */}
-                    <div style={{ position: 'absolute', top: 0, bottom: 0, left: `${(currentTime / duration) * 100}%`, width: '2px', background: '#ffffff', opacity: 0.9, pointerEvents: 'none' }} />
-
-                    {/* Silence markers */}
-                    {clip.id === 'screen' && silencePeriods.map((p, i) => (
-                      <div key={i} style={{ position: 'absolute', left: `${(p.start / duration) * 100}%`, width: `${((p.end - p.start) / duration) * 100}%`, height: '100%', background: 'rgba(239,68,68,0.25)', borderRadius: '3px', border: '1px solid rgba(239,68,68,0.4)' }} />
-                    ))}
-
-                    {/* Scene zoom event markers */}
-                    {clip.id === 'screen' && sceneEvents.map((ev, i) => (
-                      <div key={i} style={{ position: 'absolute', top: '2px', left: `${(ev.timestamp / duration) * 100}%`, transform: 'translateX(-50%)', width: '8px', height: '8px', borderRadius: '50%', background: '#ffffff', border: '2px solid rgba(0,0,0,0.5)', cursor: 'pointer', zIndex: 2 }} />
-                    ))}
+                    <div
+                      className="editor-track-lane"
+                      data-timeline-lane="true"
+                      style={{ minWidth: `${100 * timelineZoom}%`, opacity: state.visible === false ? 0.42 : 1 }}
+                      onClick={seekToTimelineEvent}
+                    >
+                      {clips.map((clip) => {
+                        const clipStart = clipStartSeconds(clip);
+                        const clipEnd = clipEndSeconds(clip);
+                        return (
+                          <div
+                            className={`editor-timeline-clip ${selectedClipId === clip.id ? 'selected' : ''}`}
+                            key={clip.id}
+                            style={{
+                              left: `${(clipStart / duration) * 100}%`,
+                              width: `${Math.max(0.2, ((clipEnd - clipStart) / duration) * 100)}%`,
+                              '--clip-color': clip.color,
+                              opacity: clip.enabled === false ? 0.35 : 1,
+                            }}
+                            onMouseDown={(event) => startClipDrag(event, clip, 'move')}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setSelectedClipId(clip.id);
+                              setSidebarTab('clip');
+                            }}
+                          >
+                            <div className="editor-clip-handle left" onMouseDown={(event) => startClipDrag(event, clip, 'trim-start')} />
+                            <span>{clip.label}</span>
+                            {clip.speed !== 1 && <small>{clip.speed.toFixed(2)}x</small>}
+                            <div className="editor-clip-handle right" onMouseDown={(event) => startClipDrag(event, clip, 'trim-end')} />
+                          </div>
+                        );
+                      })}
+                      <div className="editor-track-playhead" style={{ left: `${(currentTime / duration) * 100}%` }} />
+                      {track.id === 'video-main' && silencePeriods.map((period, index) => (
+                        <div
+                          className="editor-silence-marker"
+                          key={`silence-${index}`}
+                          style={{ left: `${(period.start / duration) * 100}%`, width: `${((period.end - period.start) / duration) * 100}%` }}
+                        />
+                      ))}
+                      {track.id === 'video-main' && sceneEvents.map((event, index) => (
+                        <div className="editor-scene-marker" key={`scene-${index}`} style={{ left: `${(event.timestamp / duration) * 100}%` }} />
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>
@@ -2136,6 +2432,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
           {/* Compact icon-tab bar */}
           <div style={{ display: 'flex', gap: '0', borderBottom: '1px solid rgba(255,255,255,0.08)', padding: '10px 12px 0', overflowX: 'auto', background: 'rgba(10,13,24,0.36)' }}>
             {[
+              { id: 'clip', icon: Sliders, label: 'Clip' },
               { id: 'audio', icon: Mic2, label: 'Audio' },
               { id: 'color', icon: Palette, label: 'Color' },
               { id: 'zoom', icon: ZoomIn, label: 'Zoom' },
@@ -2167,6 +2464,105 @@ export default function Editor({ projectId, onCloseProject, license }) {
 
           {sidebarTab !== 'captions' ? (
             <>
+          {sidebarTab === 'clip' && (
+            <div className="editor-panel-stack">
+              {selectedTimelineClip ? (
+                <section className="editor-tool-panel">
+                  <div className="editor-panel-heading">
+                    <div>
+                      <span className="editor-panel-kicker">Selected clip</span>
+                      <h3><Sliders size={15} /> {selectedTimelineClip.label}</h3>
+                    </div>
+                    <span className="editor-kind-badge">{selectedTimelineClip.kind}</span>
+                  </div>
+                  <div className="editor-clip-time-grid">
+                    <label>
+                      <span>Start</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.1"
+                        value={clipStartSeconds(selectedTimelineClip).toFixed(1)}
+                        onChange={(event) => {
+                          const nextStart = Math.max(0, Math.min(Number(event.target.value) || 0, clipEndSeconds(selectedTimelineClip) - MIN_CLIP_LENGTH));
+                          updateSelectedClip((clip) => updateClipTiming(clip, { timelineStart: nextStart, mode: 'trim-start' }, sourceDurationRef.current));
+                        }}
+                      />
+                    </label>
+                    <label>
+                      <span>End</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.1"
+                        value={clipEndSeconds(selectedTimelineClip).toFixed(1)}
+                        onChange={(event) => {
+                          const nextEnd = Math.max(Number(event.target.value) || 0, clipStartSeconds(selectedTimelineClip) + MIN_CLIP_LENGTH);
+                          updateSelectedClip((clip) => updateClipTiming(clip, { timelineEnd: nextEnd, mode: 'trim-end' }, sourceDurationRef.current));
+                        }}
+                      />
+                    </label>
+                  </div>
+                  {!['sfx'].includes(selectedTimelineClip.kind) && (
+                    <label className="editor-control-label">
+                      <span>Speed <strong>{(selectedTimelineClip.speed || 1).toFixed(2)}x</strong></span>
+                      <input
+                        type="range"
+                        min="0.25"
+                        max="3"
+                        step="0.05"
+                        value={selectedTimelineClip.speed || 1}
+                        onChange={(event) => updateSelectedSpeed(event.target.value)}
+                      />
+                    </label>
+                  )}
+                  {['video', 'webcam'].includes(selectedTimelineClip.kind) && (
+                    <>
+                      <label className="editor-control-label">
+                        <span>Opacity <strong>{Math.round((selectedTimelineClip.transform?.opacity ?? 1) * 100)}%</strong></span>
+                        <input
+                          type="range"
+                          min="0"
+                          max="1"
+                          step="0.05"
+                          value={selectedTimelineClip.transform?.opacity ?? 1}
+                          onChange={(event) => updateSelectedClip((clip) => ({
+                            ...clip,
+                            transform: { ...(clip.transform || {}), opacity: Number(event.target.value) },
+                          }))}
+                        />
+                      </label>
+                      {selectedTimelineClip.kind === 'webcam' && (
+                        <label className="editor-control-label">
+                          <span>Camera size <strong>{Math.round((selectedTimelineClip.transform?.scale ?? settings.webcam_size ?? 0.22) * 100)}%</strong></span>
+                          <input
+                            type="range"
+                            min="0.12"
+                            max="0.42"
+                            step="0.01"
+                            value={selectedTimelineClip.transform?.scale ?? settings.webcam_size ?? 0.22}
+                            onChange={(event) => updateSelectedClip((clip) => ({
+                              ...clip,
+                              transform: { ...(clip.transform || {}), scale: Number(event.target.value) },
+                            }))}
+                          />
+                        </label>
+                      )}
+                    </>
+                  )}
+                  <button className="editor-reset-button" onClick={() => seekToTime(clipStartSeconds(selectedTimelineClip))}>
+                    <Play size={13} /> Preview clip
+                  </button>
+                </section>
+              ) : (
+                <section className="editor-tool-panel">
+                  <div className="editor-panel-heading"><h3><MousePointer size={15} /> No clip selected</h3></div>
+                  <p className="editor-panel-copy">Select a clip in the timeline to edit its timing, speed, audio, and color.</p>
+                </section>
+              )}
+            </div>
+          )}
+
           {sidebarTab === 'audio' && (
             <div className="editor-panel-stack">
               <section className="editor-tool-panel">
@@ -2184,7 +2580,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
                     <span />
                   </label>
                 </div>
-                <p className="editor-panel-copy">Reduces low-frequency noise, lifts speech presence, and controls sudden volume peaks.</p>
+                <p className="editor-panel-copy">The export engine removes steady background noise, improves speech presence, and controls sudden peaks.</p>
                 <label className="editor-control-label">
                   <span>Voice isolation <strong>{settings.voice_isolation ?? 55}%</strong></span>
                   <input
@@ -2240,6 +2636,61 @@ export default function Editor({ projectId, onCloseProject, license }) {
                         onChange={(event) => commitTimeline(timelineClips.map((clip) => clip.id === selected.id ? { ...clip, volume: Number(event.target.value) } : clip))}
                       />
                     </label>
+                    {(selected.kind === 'voice' || selected.kind === 'audio' || selected.useAudio === true) && (
+                      <>
+                        <label className="editor-check-row">
+                          <input
+                            type="checkbox"
+                            checked={selected.audioCleanup?.noiseReduction === true}
+                            onChange={(event) => updateSelectedAudio({ noiseReduction: event.target.checked })}
+                          />
+                          Remove background noise
+                        </label>
+                        <label className="editor-control-label">
+                          <span>Noise reduction <strong>{selected.audioCleanup?.isolation ?? 55}%</strong></span>
+                          <input
+                            type="range"
+                            min="0"
+                            max="100"
+                            step="1"
+                            value={selected.audioCleanup?.isolation ?? 55}
+                            onChange={(event) => updateSelectedAudio({ noiseReduction: true, isolation: Number(event.target.value) })}
+                          />
+                        </label>
+                        <div className="editor-clip-time-grid">
+                          <label>
+                            <span>Fade in</span>
+                            <input
+                              type="number"
+                              min="0"
+                              max="5"
+                              step="0.1"
+                              value={selected.audioCleanup?.fadeIn ?? 0}
+                              onChange={(event) => updateSelectedAudio({ fadeIn: Math.max(0, Number(event.target.value) || 0) })}
+                            />
+                          </label>
+                          <label>
+                            <span>Fade out</span>
+                            <input
+                              type="number"
+                              min="0"
+                              max="5"
+                              step="0.1"
+                              value={selected.audioCleanup?.fadeOut ?? 0}
+                              onChange={(event) => updateSelectedAudio({ fadeOut: Math.max(0, Number(event.target.value) || 0) })}
+                            />
+                          </label>
+                        </div>
+                        <label className="editor-check-row">
+                          <input
+                            type="checkbox"
+                            checked={selected.audioCleanup?.normalize === true}
+                            onChange={(event) => updateSelectedAudio({ normalize: event.target.checked })}
+                          />
+                          Normalize this clip
+                        </label>
+                      </>
+                    )}
                     {selected.kind === 'video' && selected.sourcePath && (
                       <label className="editor-check-row">
                         <input
@@ -2261,7 +2712,7 @@ export default function Editor({ projectId, onCloseProject, license }) {
               <section className="editor-tool-panel">
                 <div className="editor-panel-heading">
                   <div>
-                    <span className="editor-panel-kicker">Image treatment</span>
+                    <span className="editor-panel-kicker">{selectedTimelineClip && ['video', 'webcam'].includes(selectedTimelineClip.kind) ? selectedTimelineClip.label : 'Project image'}</span>
                     <h3><Palette size={15} /> Color Grade</h3>
                   </div>
                   <button className="editor-mini-action" onClick={applyAutoColor} title="Analyze the current frame and balance it">
@@ -2272,8 +2723,8 @@ export default function Editor({ projectId, onCloseProject, license }) {
                   {Object.entries(COLOR_PRESETS).map(([preset, values]) => (
                     <button
                       key={preset}
-                      className={settings.color_preset === preset ? 'active' : ''}
-                      onClick={() => handleSaveSettings({ ...values, color_preset: preset })}
+                      className={selectedGrade.color_preset === preset ? 'active' : ''}
+                      onClick={() => updateSelectedGrade({ ...values, color_preset: preset })}
                     >
                       <span className={`editor-grade-swatch ${preset}`} />
                       {preset.charAt(0).toUpperCase() + preset.slice(1)}
@@ -2288,20 +2739,20 @@ export default function Editor({ projectId, onCloseProject, license }) {
                   ['color_tint', 'Tint', -50, 50],
                 ].map(([key, label, min, max]) => (
                   <label className="editor-control-label" key={key}>
-                    <span>{label} <strong>{settings[key] ?? 0}</strong></span>
+                    <span>{label} <strong>{selectedGrade[key] ?? 0}</strong></span>
                     <input
                       type="range"
                       min={min}
                       max={max}
                       step="1"
-                      value={settings[key] ?? 0}
-                      onChange={(event) => handleSaveSettings({ [key]: Number(event.target.value), color_preset: 'custom' })}
+                      value={selectedGrade[key] ?? 0}
+                      onChange={(event) => updateSelectedGrade({ [key]: Number(event.target.value), color_preset: 'custom' })}
                     />
                   </label>
                 ))}
                 <button
                   className="editor-reset-button"
-                  onClick={() => handleSaveSettings({ color_exposure: 0, color_contrast: 0, color_saturation: 0, color_temperature: 0, color_tint: 0, color_preset: 'none' })}
+                  onClick={() => updateSelectedGrade({ color_exposure: 0, color_contrast: 0, color_saturation: 0, color_temperature: 0, color_tint: 0, color_preset: 'none' })}
                 >
                   <RefreshCw size={13} /> Reset grade
                 </button>
