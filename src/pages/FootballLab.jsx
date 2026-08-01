@@ -19,6 +19,7 @@ import {
   Plus,
   Redo2,
   RotateCcw,
+  Ruler,
   Square,
   Trash2,
   Undo2,
@@ -36,6 +37,7 @@ const TOOLS = {
   pen: { label: 'Free draw', icon: Pencil },
   arrow: { label: 'Movement arrow', icon: ArrowRight },
   line: { label: 'Straight line', icon: Minus },
+  var: { label: 'VAR line (90 / 180 degrees)', icon: Ruler },
   circle: { label: 'Circle area', icon: Circle }
 };
 
@@ -61,6 +63,14 @@ const CAMERA_POSITIONS = [
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+function snapToAxis(start, point) {
+  const horizontalDistance = Math.abs(point.x - start.x);
+  const verticalDistance = Math.abs(point.y - start.y);
+  return horizontalDistance >= verticalDistance
+    ? { x: point.x, y: start.y }
+    : { x: start.x, y: point.y };
 }
 
 function formatTime(seconds, showHours = false) {
@@ -322,9 +332,12 @@ export default function FootballLab() {
   const handleStagePointerMove = (event) => {
     if (!drawingRef.current || !draftRef.current) return;
     const point = getStagePoint(event);
+    const endPoint = draftRef.current.type === 'var'
+      ? snapToAxis(draftRef.current.start, point)
+      : point;
     const nextDraft = {
       ...draftRef.current,
-      end: point,
+      end: endPoint,
       points: draftRef.current.type === 'pen'
         ? [...(draftRef.current.points || []), point]
         : draftRef.current.points
@@ -336,9 +349,12 @@ export default function FootballLab() {
   const handleStagePointerUp = (event) => {
     if (!drawingRef.current || !draftRef.current) return;
     const point = getStagePoint(event);
+    const endPoint = draftRef.current.type === 'var'
+      ? snapToAxis(draftRef.current.start, point)
+      : point;
     const finished = {
       ...draftRef.current,
-      end: point,
+      end: endPoint,
       points: draftRef.current.type === 'pen'
         ? [...(draftRef.current.points || []), point]
         : draftRef.current.points

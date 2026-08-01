@@ -281,6 +281,7 @@ function checkFootballWorkbench() {
   assertIncludes(football, 'videoBitsPerSecond: quality.bitRate', 'Football recording uses an explicit high-quality bitrate');
   assertIncludes(football, 'Face camera', 'Football creators can include or hide their camera');
   assertIncludes(football, 'Movement arrow', 'Football creators can draw player movement arrows');
+  assertIncludes(football, 'snapToAxis', 'Football VAR lines lock exactly to 90 or 180 degrees');
   assertIncludes(styles, 'grid-template-columns: minmax(0, 1fr) 298px', 'Football reaction stage remains the dominant desktop surface');
   assertIncludes(styles, 'aspect-ratio: 16 / 9', 'Football stage and output keep a stable video frame');
   assertMatches(
