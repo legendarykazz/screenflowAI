@@ -44,7 +44,8 @@ import {
   Type,
   Users,
   Video,
-  Volume2
+  Volume2,
+  X
 } from 'lucide-react';
 
 const toolOptions = [
@@ -140,6 +141,7 @@ export default function LiveCall() {
   const [watchError, setWatchError] = useState('');
   const [pendingWebsite, setPendingWebsite] = useState(null);
   const [showSelfView, setShowSelfView] = useState(false);
+  const [setupOpen, setSetupOpen] = useState(false);
   const isBrowserPresenter = !window.navigator?.userAgent?.toLowerCase?.().includes('electron') && !window.electron?.getAppVersion;
 
   const [roomCode, setRoomCode] = useState(() => `SF-${Math.random().toString(36).slice(2, 7).toUpperCase()}`);
@@ -592,6 +594,7 @@ export default function LiveCall() {
     try {
       if (!window.electron?.createLiveKitToken) {
         setLiveKitStatus('LiveKit token bridge is unavailable.');
+        setStatus('LiveKit token bridge is unavailable.');
         return null;
       }
 
@@ -606,6 +609,7 @@ export default function LiveCall() {
         room.disconnect();
         setAudioPlaybackBlocked(false);
         setLiveKitStatus(tokenResult.error);
+        setStatus(tokenResult.error);
         return null;
       }
 
@@ -657,16 +661,19 @@ export default function LiveCall() {
         setIsLiveKitConnected(false);
         setAudioPlaybackBlocked(false);
         setLiveKitStatus(reason ? `Disconnected: ${String(reason)}` : 'Disconnected');
+        setStatus(reason ? `Disconnected: ${String(reason)}` : 'Room disconnected.');
         setRemoteParticipants([]);
       });
 
       await room.connect(tokenResult.url, tokenResult.token);
       room.engine?.client?.on?.('signalDisconnected', () => {
         setLiveKitStatus('Signal disconnected. Check browser WebRTC/network permissions.');
+        setStatus('Signal disconnected. Check browser WebRTC/network permissions.');
       });
       liveKitRoomRef.current = room;
       setIsLiveKitConnected(true);
       setLiveKitStatus(`Connected as ${tokenResult.identity}`);
+      setStatus('Live conversation ready.');
       setAudioPlaybackBlocked(!room.canPlaybackAudio);
       updateRemoteParticipants(room);
 
@@ -685,6 +692,7 @@ export default function LiveCall() {
       setAudioPlaybackBlocked(false);
       const message = error?.message || error?.reason || error?.toString?.() || 'LiveKit connection failed.';
       setLiveKitStatus(`Connect failed: ${message}`);
+      setStatus(`Connect failed: ${message}`);
       return null;
     }
   };
@@ -699,6 +707,7 @@ export default function LiveCall() {
     setIsLiveKitConnected(false);
     setAudioPlaybackBlocked(false);
     setLiveKitStatus('Disconnected');
+    setStatus('Room disconnected.');
     setRemoteParticipants([]);
     if (remoteMediaRef.current) remoteMediaRef.current.innerHTML = '';
     if (remoteAudioRef.current) remoteAudioRef.current.innerHTML = '';
@@ -1318,10 +1327,9 @@ export default function LiveCall() {
   };
 
   const askAi = () => {
-    setNotes((current) => [
-      'AI draft: The presenter is walking through a live screen with guided zoom and visibility controls. Current follow-up: connect this canvas stream to the call provider.',
-      ...current
-    ]);
+    const summary = 'AI summary ready: presenting, call controls, and follow-ups are being tracked.';
+    setNotes((current) => [summary, ...current]);
+    setStatus(summary);
   };
 
   const adjustZoom = (delta) => {
@@ -1432,6 +1440,7 @@ export default function LiveCall() {
       setShareExpanded(false);
       setStatus(`${source.label} is ready for everyone.`);
       await sendRoomCommand('watch-sync', '', { watch: session });
+      setSetupOpen(false);
       setNotes((current) => [`Watch Together loaded: ${source.label}.`, ...current]);
     } catch (error) {
       setWatchError(error?.message || 'This link could not be loaded.');
@@ -1446,6 +1455,7 @@ export default function LiveCall() {
     setSourceName(pendingWebsite.label);
     if (isBrowserPresenter) {
       await startRoom('');
+      setSetupOpen(false);
     } else {
       await loadSources();
       setSelectedSourceId('');
@@ -1479,6 +1489,16 @@ export default function LiveCall() {
       return;
     }
     await switchScreen(selectedSourceId);
+    setSetupOpen(false);
+  };
+
+  const shareCurrentSource = async () => {
+    if (shareModeRef.current === 'whiteboard') {
+      await switchScreen(selectedSourceId);
+      setSetupOpen(false);
+      return;
+    }
+    await shareSelectedScreen();
   };
 
   const switchScreen = async (sourceId = selectedSourceId) => {
@@ -1541,12 +1561,26 @@ export default function LiveCall() {
     <div data-live-call-root="true" style={presenterMode ? presenterPageStyle : pageStyle}>
       <style>{liveCallResponsiveStyles}</style>
       <header data-live-call-header="true" style={headerStyle}>
-        <div>
+        <div data-header-identity="true" style={headerIdentityStyle}>
           <h1 style={titleStyle}>Live Call Studio</h1>
-          <p style={subtitleStyle}>{participantName} presenting in room {roomCode}</p>
+          <div data-host-identity="true" style={hostIdentityStyle}>
+            <span style={hostIdentityLabelStyle}>Host</span>
+            <input
+              aria-label="Host name"
+              disabled={isLiveKitConnected}
+              onChange={(event) => setParticipantName(event.target.value)}
+              data-host-name="true"
+              style={headerNameInputStyle}
+              title={isLiveKitConnected ? 'End the room to change the host name' : 'Host name'}
+              value={participantName}
+            />
+            <span style={connectionPillStyle(isLiveKitConnected)}>{isLiveKitConnected ? 'Online' : 'Offline'}</span>
+          </div>
         </div>
-        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-          <button onClick={copyInvite} style={secondaryHeaderButtonStyle}><Copy size={16} /> {copiedInvite ? 'Copied' : 'Invite'}</button>
+        <div data-header-actions="true" style={headerActionsStyle}>
+          <button data-invite-button="true" onClick={copyInvite} style={inviteHeaderButtonStyle} title={inviteLink}>
+            <Copy size={16} /> {copiedInvite ? 'Invite copied' : roomCode}
+          </button>
           {presenterMode ? (
             <button onClick={exitPresenterMode} style={secondaryHeaderButtonStyle}><Expand size={16} /> Exit Fullscreen</button>
           ) : (
@@ -1565,11 +1599,19 @@ export default function LiveCall() {
           <div style={conferenceHeaderStyle}>
             <div>
               <h2 style={stageTitleStyle}><Users size={18} /> Meeting Room</h2>
-              <p style={stageSubtitleStyle}>
-                {isLive ? `${sourceName} is being presented` : isLiveKitConnected ? 'Live conversation' : 'Room is offline'}
-              </p>
+              <p style={stageSubtitleStyle}>{isLive ? `${sourceName} is being presented` : status}</p>
             </div>
-            <span style={meetingCountStyle}>{remoteParticipants.length + 1} in call</span>
+            <div data-stage-actions="true" style={stageActionsStyle}>
+              <span style={meetingCountStyle}>{remoteParticipants.length + 1} in call</span>
+              <button
+                aria-expanded={setupOpen}
+                onClick={() => setSetupOpen((open) => !open)}
+                style={presentButtonStyle(setupOpen)}
+                type="button"
+              >
+                <Monitor size={16} /> Present
+              </button>
+            </div>
           </div>
           <div
             data-call-stage-body="true"
@@ -1577,6 +1619,11 @@ export default function LiveCall() {
             data-share-expanded={shareExpanded ? 'true' : 'false'}
             style={callStageBodyStyle(isLive, shareExpanded)}
           >
+            {callCaptions.length > 0 && (
+              <div data-live-caption="true" style={liveCaptionStyle}>
+                {callCaptions[callCaptions.length - 1]?.text}
+              </div>
+            )}
             {showSelfView && (
               <div data-self-view="true" style={hostSelfPreviewStyle}>
                 {cameraOn ? (
@@ -1769,17 +1816,26 @@ export default function LiveCall() {
 
         <video ref={outputVideoRef} autoPlay muted playsInline style={hiddenPreviewStyle} />
 
-        <aside data-call-side-panel="true" style={presenterMode ? presenterSidePanelStyle : sidePanelStyle}>
-          <section style={sourceControlCardStyle}>
+        {setupOpen && (
+          <aside data-present-panel="true" style={presentationPopoverStyle}>
+            <section style={presentationPanelContentStyle}>
             <div style={cardHeaderRowStyle}>
-              <h2 style={sideTitleStyle}><Monitor size={17} /> Setup</h2>
-              <button onClick={loadSources} style={compactButtonStyle}>
-                <RotateCcw size={15} /> Refresh
-              </button>
+              <h2 style={sideTitleStyle}><Monitor size={17} /> Present</h2>
+              <div style={presentationHeaderActionsStyle}>
+                <button aria-label="Refresh sources" className="tooltip" data-tooltip="Refresh sources" onClick={loadSources} style={panelIconButtonStyle} type="button">
+                  <RotateCcw size={15} />
+                </button>
+                <button aria-label="Close presentation controls" className="tooltip" data-tooltip="Close" onClick={() => setSetupOpen(false)} style={panelIconButtonStyle} type="button">
+                  <X size={16} />
+                </button>
+              </div>
             </div>
             <div style={{ ...segmentedStyle, gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}>
               <button onClick={activateScreenMode} style={segmentButtonStyle(shareMode === 'screen')}>Screen</button>
-              <button onClick={activateWhiteboard} style={segmentButtonStyle(shareMode === 'whiteboard')}>Whiteboard</button>
+              <button onClick={async () => {
+                await activateWhiteboard();
+                setSetupOpen(false);
+              }} style={segmentButtonStyle(shareMode === 'whiteboard')}>Whiteboard</button>
               <button onClick={() => {
                 shareModeRef.current = 'watch';
                 setShareMode('watch');
@@ -1834,7 +1890,7 @@ export default function LiveCall() {
             {shareMode !== 'watch' && (
               <>
                 <button
-                  onClick={shareMode === 'whiteboard' ? () => switchScreen(selectedSourceId) : shareSelectedScreen}
+                  onClick={shareCurrentSource}
                   style={{ ...secondaryButtonStyle(false), width: '100%', marginTop: '10px' }}
                 >
                   <ScreenShare size={16} /> {shareMode === 'whiteboard' ? (isLive ? 'Switch To Whiteboard' : 'Share Whiteboard') : (isLive ? 'Switch To Selected' : 'Share Selected')}
@@ -1855,74 +1911,9 @@ export default function LiveCall() {
                 </div>
               </>
             )}
-          </section>
-
-          <section style={controlCenterCardStyle}>
-            <div style={cardHeaderRowStyle}>
-              <h2 style={sideTitleStyle}><Users size={17} /> Room</h2>
-              <span style={connectionPillStyle(isLiveKitConnected)}>{isLiveKitConnected ? 'Online' : 'Offline'}</span>
-            </div>
-            <div style={inviteCompactStyle}>
-              <div style={inviteTextStyle}>
-                <span style={inviteLabelStyle}>Invite link</span>
-                <strong>{roomCode}</strong>
-                <span style={inviteUrlStyle}>{inviteLink}</span>
-              </div>
-              <button onClick={copyInvite} style={compactButtonStyle}><Copy size={15} /> {copiedInvite ? 'Copied' : 'Copy'}</button>
-            </div>
-            <div style={formGridStyle}>
-              <label style={compactLabelStyle}>
-                Room
-                <input
-                  value={roomCode}
-                  onChange={(event) => setRoomCode(event.target.value.trim().toUpperCase())}
-                  disabled={isLiveKitConnected}
-                  style={inputStyle}
-                />
-              </label>
-              <label style={compactLabelStyle}>
-                Name
-                <input
-                  value={participantName}
-                  onChange={(event) => setParticipantName(event.target.value)}
-                  style={inputStyle}
-                />
-              </label>
-            </div>
-            <div style={participantsInlineStyle}>
-              {[
-                { name: 'You - Host', kind: 'presenter' },
-                ...remoteParticipants.map((participant) => ({ name: participant.name, kind: 'remote' })),
-                { name: 'AI Notetaker', kind: 'ai' }
-              ].map((participant) => (
-                <div key={participant.name} style={participantChipStyle}>
-                  <div style={{ ...avatarStyle, background: participant.kind === 'ai' ? '#172033' : participant.kind === 'presenter' ? '#111827' : '#2F855A' }}>
-                    {participant.kind === 'ai' ? <Bot size={14} /> : participant.name.slice(0, 1)}
-                  </div>
-                  <span>{participant.name}</span>
-                </div>
-              ))}
-            </div>
-            <p style={smallTextStyle}>LiveKit: {liveKitStatus}</p>
-            {callCaptions.length > 0 && (
-              <div style={{ border: '1px solid #E2E8F0', borderRadius: '8px', marginBottom: '12px', maxHeight: '180px', overflowY: 'auto', padding: '10px' }}>
-                {callCaptions.map((caption, index) => (
-                  <p key={`${caption.start_time}-${index}`} style={{ ...noteStyle, marginBottom: '8px' }}>
-                    <strong>{Number(caption.start_time || 0).toFixed(1)}s</strong> {caption.text}
-                  </p>
-                ))}
-              </div>
-            )}
-            <div style={notesCompactStyle}>
-              {notes.slice(0, 3).map((note) => (
-                <p key={note} style={noteStyle}>{note}</p>
-              ))}
-            </div>
-            {isBrowserPresenter && (
-              <p style={smallTextStyle}>Web presenter mode works best in Chrome/Edge desktop.</p>
-            )}
-          </section>
-        </aside>
+            </section>
+          </aside>
+        )}
       </section>
     </div>
   );
@@ -1975,8 +1966,16 @@ const presenterPageStyle = {
 const headerStyle = {
   alignItems: 'center',
   display: 'flex',
-  justifyContent: 'space-between',
-  gap: '14px'
+  gap: '18px',
+  justifyContent: 'space-between'
+};
+
+const headerIdentityStyle = {
+  alignItems: 'center',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: '10px 18px',
+  minWidth: 0
 };
 
 const titleStyle = {
@@ -1984,13 +1983,63 @@ const titleStyle = {
   fontFamily: 'var(--font-display)',
   fontSize: '26px',
   fontWeight: 850,
-  letterSpacing: 0
+  letterSpacing: 0,
+  margin: 0
 };
 
-const subtitleStyle = {
-  color: '#647087',
+const hostIdentityStyle = {
+  alignItems: 'center',
+  background: '#FFFFFF',
+  border: '1px solid #DDE4EE',
+  borderRadius: '8px',
+  display: 'flex',
+  gap: '8px',
+  minHeight: '42px',
+  padding: '5px 7px 5px 10px'
+};
+
+const hostIdentityLabelStyle = {
+  color: '#667085',
+  fontSize: '11px',
+  fontWeight: 900,
+  textTransform: 'uppercase'
+};
+
+const headerNameInputStyle = {
+  background: 'transparent',
+  border: 0,
+  color: '#172033',
+  fontFamily: 'inherit',
   fontSize: '14px',
-  marginTop: '5px'
+  fontWeight: 850,
+  minWidth: 0,
+  outline: 'none',
+  padding: '4px',
+  width: '150px'
+};
+
+const headerActionsStyle = {
+  alignItems: 'center',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: '8px',
+  justifyContent: 'flex-end'
+};
+
+const inviteHeaderButtonStyle = {
+  alignItems: 'center',
+  background: '#FFFFFF',
+  border: '1px solid #CBD5E1',
+  borderRadius: '8px',
+  color: '#172033',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  fontSize: '13px',
+  fontWeight: 900,
+  gap: '8px',
+  justifyContent: 'center',
+  minHeight: '42px',
+  padding: '0 13px'
 };
 
 const workspaceStyle = {
@@ -2030,46 +2079,45 @@ const whiteboardTextInputStyle = {
   zIndex: 4
 };
 
-const statusRowStyle = {
-  alignItems: 'center',
-  color: '#647087',
-  display: 'flex',
-  fontSize: '13px',
-  gap: '10px',
-  justifyContent: 'space-between',
-  minHeight: '50px',
-  padding: '0 16px'
-};
-
-const sidePanelStyle = {
-  display: 'grid',
-  gap: '16px',
-  gridColumn: '1 / -1',
-  gridTemplateColumns: '360px minmax(0, 1fr)'
-};
-
-const presenterSidePanelStyle = {
-  ...sidePanelStyle,
-  maxHeight: 'calc(100vh - 116px)',
-  overflowY: 'auto'
-};
-
-const callCardStyle = {
+const presentationPopoverStyle = {
   background: '#FFFFFF',
   border: '1px solid #DDE4EE',
   borderRadius: '8px',
-  boxShadow: '0 10px 26px rgba(15, 23, 42, 0.035)',
-  padding: '18px'
+  boxShadow: '0 24px 60px rgba(15, 23, 42, 0.18)',
+  maxHeight: 'calc(100vh - 130px)',
+  overflowY: 'auto',
+  padding: '16px',
+  position: 'fixed',
+  right: '24px',
+  top: '104px',
+  width: 'min(410px, calc(100vw - 32px))',
+  zIndex: 80
 };
 
-const sourceControlCardStyle = {
-  ...callCardStyle,
-  alignSelf: 'start'
+const presentationPanelContentStyle = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '10px'
 };
 
-const controlCenterCardStyle = {
-  ...callCardStyle,
-  alignSelf: 'start'
+const presentationHeaderActionsStyle = {
+  alignItems: 'center',
+  display: 'flex',
+  gap: '6px'
+};
+
+const panelIconButtonStyle = {
+  alignItems: 'center',
+  background: '#F8FAFC',
+  border: '1px solid #DDE4EE',
+  borderRadius: '7px',
+  color: '#26344D',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  height: '34px',
+  justifyContent: 'center',
+  padding: 0,
+  width: '34px'
 };
 
 const cardHeaderRowStyle = {
@@ -2090,7 +2138,9 @@ const conferenceStageStyle = {
   gap: '12px',
   gridColumn: '1 / -1',
   gridRow: '1',
-  padding: '18px'
+  minHeight: 'calc(100vh - 152px)',
+  padding: '16px',
+  position: 'relative'
 };
 
 const conferenceHeaderStyle = {
@@ -2099,6 +2149,29 @@ const conferenceHeaderStyle = {
   gap: '12px',
   justifyContent: 'space-between'
 };
+
+const stageActionsStyle = {
+  alignItems: 'center',
+  display: 'flex',
+  flexShrink: 0,
+  gap: '8px'
+};
+
+const presentButtonStyle = (active) => ({
+  alignItems: 'center',
+  background: active ? '#172033' : '#FFFFFF',
+  border: `1px solid ${active ? '#172033' : '#CBD5E1'}`,
+  borderRadius: '8px',
+  color: active ? '#FFFFFF' : '#172033',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  fontSize: '13px',
+  fontWeight: 900,
+  gap: '7px',
+  justifyContent: 'center',
+  minHeight: '38px',
+  padding: '0 12px'
+});
 
 const stageTitleStyle = {
   alignItems: 'center',
@@ -2135,11 +2208,31 @@ const callStageBodyStyle = (presenting, expanded) => ({
   display: 'grid',
   gap: '10px',
   gridTemplateColumns: presenting && !expanded ? 'minmax(0, 1fr) minmax(280px, 30%)' : 'minmax(0, 1fr)',
-  minHeight: '360px',
+  flex: '1 1 auto',
+  minHeight: 'clamp(420px, 62vh, 760px)',
   overflow: 'hidden',
   padding: '12px',
   position: 'relative'
 });
+
+const liveCaptionStyle = {
+  background: 'rgba(9, 11, 18, 0.88)',
+  border: '1px solid rgba(255, 255, 255, 0.16)',
+  borderRadius: '8px',
+  bottom: '16px',
+  color: '#FFFFFF',
+  fontSize: '15px',
+  fontWeight: 800,
+  left: '50%',
+  lineHeight: 1.45,
+  maxWidth: 'min(760px, calc(100% - 32px))',
+  padding: '9px 13px',
+  pointerEvents: 'none',
+  position: 'absolute',
+  textAlign: 'center',
+  transform: 'translateX(-50%)',
+  zIndex: 18
+};
 
 const faceGridStyle = (presenting, expanded) => ({
   alignContent: 'start',
@@ -2364,73 +2457,12 @@ const sideTitleStyle = {
   marginBottom: 0
 };
 
-const participantStyle = {
-  alignItems: 'center',
-  color: '#26344D',
-  display: 'flex',
-  fontSize: '13px',
-  fontWeight: 800,
-  gap: '10px',
-  minHeight: '42px'
-};
-
-const participantsInlineStyle = {
-  borderTop: '1px solid #E6EBF2',
-  display: 'flex',
-  flexWrap: 'wrap',
-  gap: '8px',
-  marginTop: '14px',
-  paddingTop: '14px'
-};
-
-const participantChipStyle = {
-  alignItems: 'center',
-  background: '#FFFFFF',
-  border: '1px solid #DDE4EE',
-  borderRadius: '999px',
-  color: '#26344D',
-  display: 'inline-flex',
-  fontSize: '12px',
-  fontWeight: 900,
-  gap: '8px',
-  minHeight: '34px',
-  padding: '4px 10px 4px 4px'
-};
-
-const avatarStyle = {
-  alignItems: 'center',
-  borderRadius: '999px',
-  color: '#FFFFFF',
-  display: 'flex',
-  fontSize: '12px',
-  fontWeight: 900,
-  height: '30px',
-  justifyContent: 'center',
-  width: '30px'
-};
-
-const previewVideoStyle = {
-  aspectRatio: '16 / 9',
-  background: '#0B0F19',
-  borderRadius: '8px',
-  display: 'block',
-  objectFit: 'cover',
-  width: '100%'
-};
-
 const hiddenPreviewStyle = {
   height: 0,
   opacity: 0,
   pointerEvents: 'none',
   position: 'absolute',
   width: 0
-};
-
-const smallTextStyle = {
-  color: '#667085',
-  fontSize: '12px',
-  lineHeight: 1.45,
-  marginTop: '10px'
 };
 
 const connectionPillStyle = (active) => ({
@@ -2442,58 +2474,6 @@ const connectionPillStyle = (active) => ({
   fontWeight: 900,
   padding: '6px 10px'
 });
-
-const inviteBoxStyle = {
-  background: '#F8FAFF',
-  border: '1px solid #E8EDF5',
-  borderRadius: '8px',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '5px',
-  padding: '12px'
-};
-
-const inviteCompactStyle = {
-  alignItems: 'center',
-  background: '#F8FAFC',
-  border: '1px solid #DDE4EE',
-  borderRadius: '8px',
-  display: 'grid',
-  gap: '12px',
-  gridTemplateColumns: 'minmax(0, 1fr) auto',
-  padding: '12px'
-};
-
-const inviteTextStyle = {
-  display: 'grid',
-  gap: '3px',
-  overflow: 'hidden',
-  minWidth: 0
-};
-
-const inviteLabelStyle = {
-  color: '#667085',
-  fontSize: '11px',
-  fontWeight: 900,
-  textTransform: 'uppercase'
-};
-
-const inviteUrlStyle = {
-  color: '#344054',
-  display: 'block',
-  fontSize: '13px',
-  fontWeight: 700,
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap'
-};
-
-const formGridStyle = {
-  display: 'grid',
-  gap: '10px',
-  gridTemplateColumns: '1fr 1fr',
-  marginTop: '10px'
-};
 
 const compactLabelStyle = {
   color: '#26344D',
@@ -2562,22 +2542,6 @@ const segmentButtonStyle = (active) => ({
   fontWeight: 900,
   minHeight: '34px'
 });
-
-const noteStyle = {
-  background: '#F8FAFC',
-  border: '1px solid #E6EBF2',
-  borderRadius: '8px',
-  color: '#4E5A70',
-  fontSize: '12px',
-  lineHeight: 1.45,
-  padding: '9px 10px'
-};
-
-const notesCompactStyle = {
-  display: 'grid',
-  gap: '8px',
-  marginTop: '10px'
-};
 
 const inputStyle = {
   background: '#FFFFFF',
@@ -2753,9 +2717,6 @@ const liveCallResponsiveStyles = `
       grid-template-columns: minmax(0, 1fr) minmax(240px, 30%) !important;
     }
 
-    [data-call-side-panel="true"] {
-      grid-template-columns: 1fr 1fr !important;
-    }
   }
 
   @media (max-width: 760px) {
@@ -2770,7 +2731,21 @@ const liveCallResponsiveStyles = `
       flex-direction: column !important;
     }
 
-    [data-live-call-header="true"] > div:last-child {
+    [data-header-identity="true"] {
+      align-items: flex-start !important;
+      flex-direction: column !important;
+    }
+
+    [data-host-identity="true"] {
+      width: 100% !important;
+    }
+
+    [data-host-name="true"] {
+      flex: 1 !important;
+      width: auto !important;
+    }
+
+    [data-header-actions="true"] {
       display: grid !important;
       grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
       width: 100% !important;
@@ -2783,12 +2758,27 @@ const liveCallResponsiveStyles = `
       padding-right: 8px !important;
     }
 
-    [data-live-call-header="true"] > div:last-child > button:last-child {
+    [data-header-actions="true"] > button:last-child {
       grid-column: 1 / -1 !important;
     }
 
     [data-conference-stage="true"] {
+      min-height: calc(100dvh - 210px) !important;
       padding: 10px !important;
+    }
+
+    [data-stage-actions="true"] {
+      align-items: flex-end !important;
+      flex-direction: column !important;
+    }
+
+    [data-present-panel="true"] {
+      bottom: 80px !important;
+      left: 8px !important;
+      max-height: min(calc(100dvh - 96px), 680px) !important;
+      right: 8px !important;
+      top: auto !important;
+      width: auto !important;
     }
 
     [data-call-stage-body="true"] {
@@ -2913,8 +2903,9 @@ const liveCallResponsiveStyles = `
       z-index: 20 !important;
     }
 
-    [data-call-side-panel="true"] {
-      grid-template-columns: minmax(0, 1fr) !important;
+    [data-live-caption="true"] {
+      bottom: 8px !important;
+      font-size: 13px !important;
     }
   }
 `;

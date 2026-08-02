@@ -148,6 +148,11 @@ function checkPresenterLiveCall() {
   assertIncludes(live, '[data-face-grid="true"][data-face-layout="solo"]', 'Mobile presenter gives one remote caller a large stage');
   assertIncludes(live, 'data-self-view="true"', 'Presenter offers an optional compact self preview');
   assertNotIncludes(live, 'data-local-face-tile="true"', 'Presenter excludes self-view from the main grid');
+  assertIncludes(live, 'data-header-identity="true"', 'Presenter keeps host identity in the compact call header');
+  assertIncludes(live, 'data-invite-button="true"', 'Presenter exposes the room invite from the call header');
+  assertIncludes(live, 'data-present-panel="true"', 'Presenter opens sharing controls only when requested');
+  assertIncludes(live, 'data-live-caption="true"', 'Presenter captions overlay the call stage');
+  assertNotIncludes(live, '<h2 style={sideTitleStyle}><Users size={17} /> Room</h2>', 'Presenter does not reserve stage space for a duplicate room card');
   assertIncludes(live, 'outputStreamRef.current?.getTracks?.().forEach((track) => track.stop())', 'Presenter releases the enhanced output stream');
   assertIncludes(live, 'else if (isLive || streamRef.current || outputStreamRef.current) await releaseSharedMedia()', 'Whiteboard changes release the previous live source');
   assertIncludes(live, 'await releaseSharedMedia();\n    }\n    await startRoom(sourceId)', 'Screen changes release the previous live source');
