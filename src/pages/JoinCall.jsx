@@ -58,7 +58,19 @@ export default function JoinCall() {
     []
   );
   const previewWatchSession = useMemo(() => {
-    if (!import.meta.env.DEV || new URLSearchParams(window.location.search).get('previewWatch') !== 'youtube') return null;
+    const previewWatch = new URLSearchParams(window.location.search).get('previewWatch');
+    if (!import.meta.env.DEV || !previewWatch) return null;
+    if (previewWatch === 'web') {
+      return normalizeWatchSession({
+        kind: 'web',
+        label: 'Example website',
+        revision: 1,
+        sessionId: 'preview-web',
+        updatedAt: Date.now(),
+        url: 'https://example.com'
+      });
+    }
+    if (previewWatch !== 'youtube') return null;
     return normalizeWatchSession({
       currentTime: 0,
       kind: 'youtube',
@@ -88,7 +100,7 @@ export default function JoinCall() {
   const [screenShareNotice, setScreenShareNotice] = useState('');
   const [watchSession, setWatchSession] = useState(previewWatchSession);
   const [joining, setJoining] = useState(false);
-  const [showSelfView, setShowSelfView] = useState(false);
+  const [showSelfView, setShowSelfView] = useState(true);
 
   useEffect(() => {
     if (localCameraRef.current) {
@@ -884,7 +896,8 @@ export default function JoinCall() {
     while (node.firstChild) node.removeChild(node.firstChild);
   };
 
-  const hasPresentation = hasHostScreen || Boolean(watchSession);
+  const showSyncedWatchPlayer = Boolean(watchSession) && !(watchSession.kind === 'web' && hasHostScreen);
+  const hasPresentation = hasHostScreen || showSyncedWatchPlayer;
 
   return (
     <div data-join-call-root="true" style={pageStyle}>
@@ -938,7 +951,7 @@ export default function JoinCall() {
         >
           <section className="viewer-section" ref={presentationRef} style={{ ...viewerStyle, display: hasPresentation ? 'block' : 'none' }}>
             <div style={viewerHeaderStyle}>
-              <span style={viewerTitleStyle}><Video size={18} /> {watchSession ? 'Watch Together' : 'Presentation'}</span>
+              <span style={viewerTitleStyle}><Video size={18} /> {showSyncedWatchPlayer ? 'Watch Together' : 'Presentation'}</span>
               <button
                 aria-label="Fullscreen presentation"
                 onClick={() => presentationRef.current?.requestFullscreen?.()}
@@ -947,10 +960,10 @@ export default function JoinCall() {
                 <Expand size={16} />
               </button>
             </div>
-            <div className="media-box" ref={mediaRef} style={{ ...mediaBoxStyle, display: watchSession ? 'none' : 'flex' }}>
+            <div className="media-box" ref={mediaRef} style={{ ...mediaBoxStyle, display: showSyncedWatchPlayer ? 'none' : 'flex' }}>
               <span data-placeholder="true">No presentation yet.</span>
             </div>
-            {watchSession && (
+            {showSyncedWatchPlayer && (
               <WatchTogetherPlayer
                 onPlayerError={(message) => setStatus(message)}
                 session={watchSession}

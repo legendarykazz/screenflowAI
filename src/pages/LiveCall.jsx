@@ -73,6 +73,7 @@ const LIVE_CAMERA_BITRATE = 2_800_000;
 
 export default function LiveCall() {
   const canvasRef = useRef(null);
+  const browserOutputCanvasRef = useRef(null);
   const outputVideoRef = useRef(null);
   const sourceVideoRef = useRef(null);
   const streamRef = useRef(null);
@@ -104,6 +105,8 @@ export default function LiveCall() {
   const shareModeRef = useRef('screen');
   const outputModeRef = useRef('enhanced');
   const watchSessionRef = useRef(null);
+  const browserFramePendingRef = useRef(false);
+  const browserOutputStartedRef = useRef(false);
   const lastRenderAtRef = useRef(0);
 
   const [isLive, setIsLive] = useState(false);
@@ -139,8 +142,7 @@ export default function LiveCall() {
   const [watchUrl, setWatchUrl] = useState('');
   const [watchSession, setWatchSession] = useState(null);
   const [watchError, setWatchError] = useState('');
-  const [pendingWebsite, setPendingWebsite] = useState(null);
-  const [showSelfView, setShowSelfView] = useState(false);
+  const [showSelfView, setShowSelfView] = useState(true);
   const [setupOpen, setSetupOpen] = useState(false);
   const isBrowserPresenter = !window.navigator?.userAgent?.toLowerCase?.().includes('electron') && !window.electron?.getAppVersion;
 
@@ -369,6 +371,8 @@ export default function LiveCall() {
     cameraStreamRef.current = null;
     sourceVideoRef.current = null;
     outputStreamRef.current = null;
+    browserFramePendingRef.current = false;
+    browserOutputStartedRef.current = false;
     if (cameraPreviewRef.current) cameraPreviewRef.current.srcObject = null;
     if (outputVideoRef.current) outputVideoRef.current.srcObject = null;
     watchSessionRef.current = null;
@@ -378,7 +382,6 @@ export default function LiveCall() {
     setAudioPlaybackBlocked(false);
     setWatchSession(null);
     setWatchError('');
-    setPendingWebsite(null);
     setSourceName('No source selected');
     setStatus('Live room ended.');
   };
@@ -393,6 +396,8 @@ export default function LiveCall() {
     streamRef.current = null;
     sourceVideoRef.current = null;
     outputStreamRef.current = null;
+    browserFramePendingRef.current = false;
+    browserOutputStartedRef.current = false;
     liveKitVideoTrackRef.current = null;
     liveKitScreenAudioTrackRef.current = null;
     if (animationRef.current) cancelAnimationFrame(animationRef.current);
@@ -752,6 +757,87 @@ export default function LiveCall() {
   const publishActiveOutput = async () => {
     const outputStream = getActiveOutputStream();
     if (outputStream) await publishOutputStream(outputStream);
+  };
+
+  const ensureBrowserOutputStream = async () => {
+    const canvas = browserOutputCanvasRef.current;
+    if (!canvas) return;
+    if (!browserOutputStartedRef.current) {
+      canvas.width = LIVE_OUTPUT_WIDTH;
+      canvas.height = LIVE_OUTPUT_HEIGHT;
+      const outputStream = canvas.captureStream(Math.min(15, LIVE_OUTPUT_FPS));
+      outputStreamRef.current = outputStream;
+      if (outputVideoRef.current) outputVideoRef.current.srcObject = outputStream;
+      browserOutputStartedRef.current = true;
+      if (liveKitRoomRef.current) await publishActiveOutput();
+    }
+  };
+
+  const drawEmbeddedBrowserFrame = async (dataUrl) => {
+    if (shareModeRef.current !== 'watch' || watchSessionRef.current?.kind !== 'web') return;
+    if (browserFramePendingRef.current) return;
+    browserFramePendingRef.current = true;
+    try {
+      const canvas = browserOutputCanvasRef.current;
+      if (!canvas) return;
+      if (canvas.width !== LIVE_OUTPUT_WIDTH) canvas.width = LIVE_OUTPUT_WIDTH;
+      if (canvas.height !== LIVE_OUTPUT_HEIGHT) canvas.height = LIVE_OUTPUT_HEIGHT;
+      const image = new Image();
+      image.decoding = 'async';
+      image.src = dataUrl;
+      if (image.decode) await image.decode();
+      else {
+        await new Promise((resolve, reject) => {
+          image.onload = resolve;
+          image.onerror = reject;
+        });
+      }
+      const ctx = canvas.getContext('2d');
+      const sourceRatio = image.width / image.height;
+      const outputRatio = canvas.width / canvas.height;
+      let drawWidth = canvas.width;
+      let drawHeight = canvas.height;
+      let drawX = 0;
+      let drawY = 0;
+      if (sourceRatio > outputRatio) {
+        drawHeight = canvas.width / sourceRatio;
+        drawY = (canvas.height - drawHeight) / 2;
+      } else {
+        drawWidth = canvas.height * sourceRatio;
+        drawX = (canvas.width - drawWidth) / 2;
+      }
+      ctx.fillStyle = '#090B12';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+      await ensureBrowserOutputStream();
+    } catch (error) {
+      setWatchError(error?.message || 'The in-app browser preview could not be captured.');
+    } finally {
+      browserFramePendingRef.current = false;
+    }
+  };
+
+  const handleEmbeddedBrowserNavigation = (nextUrl) => {
+    const current = watchSessionRef.current;
+    if (!current || current.kind !== 'web') return;
+    let nextLabel = current.label;
+    try {
+      const parsed = parseWatchSource(nextUrl);
+      if (parsed.kind === 'web') nextLabel = parsed.label;
+    } catch (error) {
+      return;
+    }
+    const next = {
+      ...current,
+      label: nextLabel,
+      revision: (Number(current.revision) || 0) + 1,
+      updatedAt: Date.now(),
+      url: nextUrl
+    };
+    watchSessionRef.current = next;
+    setWatchSession(next);
+    setSourceName(nextLabel);
+    sendRoomCommand('watch-sync', '', { watch: next }).catch(() => {});
   };
 
   const publishOutputStream = async (outputStream) => {
@@ -1380,7 +1466,6 @@ export default function LiveCall() {
   const activateWhiteboard = async () => {
     if (watchSessionRef.current) await stopSharedOutput();
     else if (isLive || streamRef.current || outputStreamRef.current) await releaseSharedMedia();
-    setPendingWebsite(null);
     sourceVideoRef.current = null;
     shareModeRef.current = 'whiteboard';
     setShareMode('whiteboard');
@@ -1398,7 +1483,6 @@ export default function LiveCall() {
 
   const activateScreenMode = async () => {
     if (watchSessionRef.current) await stopSharedOutput();
-    setPendingWebsite(null);
     shareModeRef.current = 'screen';
     setShareMode('screen');
     setSourceName(sources.find((source) => source.id === selectedSourceId)?.name || 'No screen selected');
@@ -1410,26 +1494,24 @@ export default function LiveCall() {
     try {
       const source = parseWatchSource(watchUrl);
       if (source.kind === 'web') {
-        if (isBrowserPresenter || !window.electron?.openExternal) {
-          window.open(source.url, '_blank', 'noopener,noreferrer');
-        } else {
-          const openResult = await window.electron.openExternal(source.url);
-          if (openResult?.success === false) throw new Error(openResult.error || 'The website could not be opened.');
-        }
-        if (isLive) await stopSharedOutput();
-        watchSessionRef.current = null;
-        setWatchSession(null);
-        setPendingWebsite(source);
+        if (isLive || streamRef.current || outputStreamRef.current) await stopSharedOutput();
+        const session = createWatchSession(source);
+        watchSessionRef.current = session;
+        shareModeRef.current = 'watch';
+        setShareMode('watch');
+        setWatchSession(session);
         setSourceName(source.label);
-        setWatchError(source.protectedContent ? 'Protected video may appear black during capture.' : '');
-        setStatus(`${source.label} is ready to present.`);
-        setTimeout(() => loadSources(), 700);
-        setNotes((current) => [`Website ready for live presentation: ${source.label}.`, ...current]);
+        setWatchError(source.protectedContent ? 'Protected video may appear black to viewers if the service blocks capture.' : '');
+        setIsLive(true);
+        setShareExpanded(false);
+        setStatus(`${source.label} is live inside ScreenFlow.`);
+        await sendRoomCommand('watch-sync', '', { watch: session });
+        setSetupOpen(false);
+        setNotes((current) => [`Watch Together browser loaded: ${source.label}.`, ...current]);
         return;
       }
       if (isLive) await stopSharedOutput();
       const session = createWatchSession(source);
-      setPendingWebsite(null);
       watchSessionRef.current = session;
       shareModeRef.current = 'watch';
       setShareMode('watch');
@@ -1446,23 +1528,6 @@ export default function LiveCall() {
       setWatchError(error?.message || 'This link could not be loaded.');
       setStatus(error?.message || 'This link could not be loaded.');
     }
-  };
-
-  const presentWebsite = async () => {
-    if (!pendingWebsite) return;
-    shareModeRef.current = 'screen';
-    setShareMode('screen');
-    setSourceName(pendingWebsite.label);
-    if (isBrowserPresenter) {
-      await startRoom('');
-      setSetupOpen(false);
-    } else {
-      await loadSources();
-      setSelectedSourceId('');
-      setSourceName('Choose browser window');
-      setStatus('Choose the browser window under Source, then share the selected window.');
-    }
-    setPendingWebsite(null);
   };
 
   const handleWatchPlaybackChange = (playback) => {
@@ -1697,6 +1762,8 @@ export default function LiveCall() {
                     <WatchTogetherPlayer
                       controller
                       onPlaybackChange={handleWatchPlaybackChange}
+                      onWebFrame={drawEmbeddedBrowserFrame}
+                      onWebNavigation={handleEmbeddedBrowserNavigation}
                       onPlayerError={(message) => {
                         setWatchError(message);
                         setStatus(message);
@@ -1815,6 +1882,7 @@ export default function LiveCall() {
         </section>
 
         <video ref={outputVideoRef} autoPlay muted playsInline style={hiddenPreviewStyle} />
+        <canvas ref={browserOutputCanvasRef} aria-hidden="true" style={hiddenPreviewStyle} />
 
         {setupOpen && (
           <aside data-present-panel="true" style={presentationPopoverStyle}>
@@ -1880,11 +1948,6 @@ export default function LiveCall() {
                   </div>
                 </label>
                 {watchError && <span role="alert" style={watchErrorStyle}>{watchError}</span>}
-                {pendingWebsite && (
-                  <button onClick={presentWebsite} style={{ ...secondaryButtonStyle(false), width: '100%' }} type="button">
-                    <ScreenShare size={16} /> {isBrowserPresenter ? 'Present Website' : 'Choose Website Window'}
-                  </button>
-                )}
               </form>
             )}
             {shareMode !== 'watch' && (

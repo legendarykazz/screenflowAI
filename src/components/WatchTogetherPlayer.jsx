@@ -1,34 +1,100 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ExternalLink, FastForward, Pause, Play, RefreshCw, Rewind } from 'lucide-react';
+import { FastForward, Pause, Play, RefreshCw, Rewind } from 'lucide-react';
 import { projectedWatchTime } from '../lib/watchTogether';
 
 const PLAYER_SYNC_INTERVAL = 1500;
 const PLAYER_DRIFT_TOLERANCE = 0.55;
+const EMBEDDED_BROWSER_CAPTURE_INTERVAL = 120;
 
 export default function WatchTogetherPlayer({
   controller = false,
   onPlaybackChange,
+  onWebFrame,
+  onWebNavigation,
   onPlayerError,
   session
 }) {
   const youtubeHostRef = useRef(null);
   const youtubePlayerRef = useRef(null);
   const directVideoRef = useRef(null);
+  const webviewRef = useRef(null);
   const sessionRef = useRef(session);
   const playbackCallbackRef = useRef(onPlaybackChange);
+  const webFrameCallbackRef = useRef(onWebFrame);
+  const webNavigationCallbackRef = useRef(onWebNavigation);
   const errorCallbackRef = useRef(onPlayerError);
   const applyingSyncRef = useRef(false);
   const [webReloadKey, setWebReloadKey] = useState(0);
+  const [webAddress, setWebAddress] = useState(session?.label || '');
 
   useEffect(() => {
     sessionRef.current = session;
     playbackCallbackRef.current = onPlaybackChange;
+    webFrameCallbackRef.current = onWebFrame;
+    webNavigationCallbackRef.current = onWebNavigation;
     errorCallbackRef.current = onPlayerError;
-  }, [onPlaybackChange, onPlayerError, session]);
+  }, [onPlaybackChange, onPlayerError, onWebFrame, onWebNavigation, session]);
 
   useEffect(() => {
     setWebReloadKey(0);
+    setWebAddress(session?.label || '');
   }, [session?.sessionId]);
+
+  const useEmbeddedBrowser = controller && session?.kind === 'web' && Boolean(window.electron?.supportsEmbeddedBrowser);
+
+  useEffect(() => {
+    if (!useEmbeddedBrowser || session?.kind !== 'web') return undefined;
+    const webview = webviewRef.current;
+    if (!webview) return undefined;
+    let disposed = false;
+    let timer = null;
+    let busy = false;
+
+    const capture = async () => {
+      if (disposed || busy || typeof webview.capturePage !== 'function') return;
+      busy = true;
+      try {
+        const image = await webview.capturePage();
+        const dataUrl = image?.toDataURL?.();
+        if (dataUrl) webFrameCallbackRef.current?.(dataUrl);
+      } catch (error) {
+        errorCallbackRef.current?.('The in-app browser could not be captured yet.');
+      } finally {
+        busy = false;
+      }
+    };
+
+    const startCapture = () => {
+      if (!timer) timer = setInterval(capture, EMBEDDED_BROWSER_CAPTURE_INTERVAL);
+      capture();
+    };
+
+    const reportNavigation = (event) => {
+      const nextUrl = String(event?.url || webview.getURL?.() || session.url || '');
+      if (!nextUrl) return;
+      setWebAddress(formatAddress(nextUrl));
+      webNavigationCallbackRef.current?.(nextUrl);
+    };
+
+    const failLoad = (event) => {
+      if (event?.errorCode === -3) return;
+      errorCallbackRef.current?.(event?.errorDescription || 'This page could not load inside the app.');
+    };
+
+    webview.addEventListener('dom-ready', startCapture);
+    webview.addEventListener('did-navigate', reportNavigation);
+    webview.addEventListener('did-navigate-in-page', reportNavigation);
+    webview.addEventListener('did-fail-load', failLoad);
+
+    return () => {
+      disposed = true;
+      if (timer) clearInterval(timer);
+      webview.removeEventListener('dom-ready', startCapture);
+      webview.removeEventListener('did-navigate', reportNavigation);
+      webview.removeEventListener('did-navigate-in-page', reportNavigation);
+      webview.removeEventListener('did-fail-load', failLoad);
+    };
+  }, [session?.kind, session?.sessionId, session?.url, useEmbeddedBrowser, webReloadKey]);
 
   useEffect(() => {
     if (session?.kind !== 'youtube') return undefined;
@@ -220,39 +286,46 @@ export default function WatchTogetherPlayer({
         <div data-web-browser="true" style={webBrowserStyle}>
           <div style={webToolbarStyle}>
             <div style={webToolbarActionsStyle}>
-              <button
-                aria-label="Reload shared website"
-                onClick={() => setWebReloadKey((current) => current + 1)}
-                style={webToolButtonStyle}
-                title="Reload website"
-                type="button"
-              >
-                <RefreshCw size={16} />
-              </button>
-              <button
-                aria-label="Open shared website in new tab"
-                onClick={() => window.open(session.url, '_blank', 'noopener,noreferrer')}
-                style={webToolButtonStyle}
-                title="Open in new tab"
-                type="button"
-              >
-                <ExternalLink size={16} />
-              </button>
+              {controller && (
+                <button
+                  aria-label="Reload shared website"
+                  onClick={() => setWebReloadKey((current) => current + 1)}
+                  style={webToolButtonStyle}
+                  title="Reload website"
+                  type="button"
+                >
+                  <RefreshCw size={16} />
+                </button>
+              )}
             </div>
-            <span style={webAddressStyle}>{session.label}</span>
+            <span style={webAddressStyle}>{webAddress || session.label}</span>
           </div>
-          <iframe
-            allow="autoplay; clipboard-read; clipboard-write; fullscreen; picture-in-picture"
-            data-web-interactive="true"
-            key={`${session.sessionId}-${webReloadKey}`}
-            referrerPolicy="strict-origin-when-cross-origin"
-            sandbox="allow-forms allow-modals allow-popups allow-presentation allow-same-origin allow-scripts"
-            scrolling="yes"
-            src={session.url}
-            style={webFrameStyle}
-            tabIndex={0}
-            title={`Shared page: ${session.label}`}
-          />
+          {useEmbeddedBrowser ? (
+            <webview
+              allowpopups="true"
+              data-web-interactive="true"
+              data-webview-browser="true"
+              key={`${session.sessionId}-${webReloadKey}`}
+              partition="persist:screenflow-watch"
+              ref={webviewRef}
+              src={session.url}
+              style={webFrameStyle(true)}
+              webpreferences="contextIsolation=yes, nodeIntegration=no, sandbox=yes"
+            />
+          ) : (
+            <iframe
+              allow="autoplay; clipboard-read; clipboard-write; fullscreen; picture-in-picture"
+              data-web-interactive={controller ? 'true' : 'false'}
+              key={`${session.sessionId}-${webReloadKey}`}
+              referrerPolicy="strict-origin-when-cross-origin"
+              sandbox="allow-forms allow-modals allow-popups allow-presentation allow-same-origin allow-scripts"
+              scrolling="yes"
+              src={session.url}
+              style={webFrameStyle(controller)}
+              tabIndex={controller ? 0 : -1}
+              title={`Shared page: ${session.label}`}
+            />
+          )}
         </div>
       )}
     </div>
@@ -290,6 +363,16 @@ function applyDirectVideoSession(video, session) {
 function safePlayerTime(player) {
   const value = Number(player?.getCurrentTime?.());
   return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+function formatAddress(value) {
+  try {
+    const url = new URL(value);
+    const path = `${url.pathname}${url.search}`.replace(/\/$/, '');
+    return `${url.hostname.replace(/^www\./, '')}${path && path !== '/' ? path : ''}`;
+  } catch (error) {
+    return value;
+  }
 }
 
 function loadYouTubeIframeApi() {
@@ -357,7 +440,7 @@ const sharedControlButtonStyle = {
 
 const webPlayerShellStyle = {
   ...playerShellStyle,
-  aspectRatio: '4 / 3',
+  aspectRatio: '16 / 9',
   minHeight: 'min(440px, 56dvh)'
 };
 
@@ -374,17 +457,17 @@ const directVideoStyle = {
   width: '100%'
 };
 
-const webFrameStyle = {
+const webFrameStyle = (controller) => ({
   background: '#FFFFFF',
   border: 0,
   display: 'block',
   height: '100%',
   minHeight: 0,
   overscrollBehavior: 'contain',
-  pointerEvents: 'auto',
-  touchAction: 'auto',
+  pointerEvents: controller ? 'auto' : 'none',
+  touchAction: controller ? 'auto' : 'none',
   width: '100%'
-};
+});
 
 const webBrowserStyle = {
   background: '#FFFFFF',

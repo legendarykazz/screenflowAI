@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('electron', {
   // Recording functions
   getSources: () => ipcRenderer.invoke('recording:get-sources'),
   setLiveDisplaySource: (sourceId) => ipcRenderer.invoke('live:set-display-source', sourceId),
+  supportsEmbeddedBrowser: true,
   openExternal: (url) => ipcRenderer.invoke('browser:open-external', url),
   createLiveKitToken: (roomName, participantName) => ipcRenderer.invoke('livekit:create-token', roomName, participantName),
   startRecording: (options) => ipcRenderer.invoke('recording:start', options),

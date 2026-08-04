@@ -427,8 +427,44 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       webSecurity: true,
+      webviewTag: true,
       backgroundThrottling: false // Prevents canvas/timers from freezing when window is minimized
     }
+  });
+
+  mainWindow.webContents.on('will-attach-webview', (event, webPreferences, params) => {
+    try {
+      const url = new URL(String(params.src || ''));
+      if (!['http:', 'https:'].includes(url.protocol)) {
+        event.preventDefault();
+        return;
+      }
+    } catch (error) {
+      event.preventDefault();
+      return;
+    }
+
+    delete webPreferences.preload;
+    webPreferences.nodeIntegration = false;
+    webPreferences.contextIsolation = true;
+    webPreferences.sandbox = true;
+    webPreferences.webSecurity = true;
+  });
+
+  mainWindow.webContents.on('did-attach-webview', (_event, contents) => {
+    contents.setWindowOpenHandler(({ url }) => {
+      try {
+        const nextUrl = new URL(String(url || ''));
+        if (['http:', 'https:'].includes(nextUrl.protocol)) {
+          setImmediate(() => {
+            if (!contents.isDestroyed()) {
+              contents.loadURL(nextUrl.href).catch(() => {});
+            }
+          });
+        }
+      } catch (error) {}
+      return { action: 'deny' };
+    });
   });
 
   // Load app
