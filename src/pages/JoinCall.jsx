@@ -6,7 +6,7 @@ import {
   Track,
   VideoPresets
 } from 'livekit-client';
-import { Camera, Expand, Eye, EyeOff, Mic, PhoneOff, Play, ScreenShare, SquarePen, Users, Video, Volume2 } from 'lucide-react';
+import { Camera, Expand, Eye, EyeOff, Hand, Heart, Laugh, Mic, PhoneOff, Play, ScreenShare, Smile, Sparkles, SquarePen, ThumbsUp, Users, Video, Volume2 } from 'lucide-react';
 import {
   CALL_AUDIO_CAPTURE_OPTIONS,
   CALL_AUDIO_PUBLISH_OPTIONS,
@@ -101,6 +101,9 @@ export default function JoinCall() {
   const [watchSession, setWatchSession] = useState(previewWatchSession);
   const [joining, setJoining] = useState(false);
   const [showSelfView, setShowSelfView] = useState(true);
+  const [reactionMenuOpen, setReactionMenuOpen] = useState(false);
+  const [stageReactions, setStageReactions] = useState([]);
+  const [handRaised, setHandRaised] = useState(false);
 
   useEffect(() => {
     if (localCameraRef.current) {
@@ -310,6 +313,46 @@ export default function JoinCall() {
     }
   };
 
+  const addStageReaction = (emoji, reactionName = name || 'Guest') => {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    setStageReactions((current) => [...current.slice(-4), { emoji, id, name: reactionName }]);
+    window.setTimeout(() => {
+      setStageReactions((current) => current.filter((reaction) => reaction.id !== id));
+    }, 4200);
+  };
+
+  const sendRoomEvent = async (type, details) => {
+    const room = roomRef.current;
+    if (!room) return;
+    const payload = new TextEncoder().encode(JSON.stringify({ type, ...details }));
+    await room.localParticipant.publishData(payload, { reliable: true });
+  };
+
+  const sendReaction = async (emoji) => {
+    addStageReaction(emoji);
+    setReactionMenuOpen(false);
+    try {
+      await sendRoomEvent('reaction', { emoji, name: name || 'Guest' });
+    } catch (error) {
+      setStatus('Your reaction could not be sent.');
+    }
+  };
+
+  const toggleRaisedHand = async () => {
+    const nextRaised = !handRaised;
+    setHandRaised(nextRaised);
+    try {
+      await sendRoomEvent('raise-hand', {
+        identity: localIdentityRef.current,
+        name: name || 'Guest',
+        raised: nextRaised
+      });
+    } catch (error) {
+      setHandRaised(!nextRaised);
+      setStatus('Your hand status could not be sent.');
+    }
+  };
+
   const resetCallState = (nextStatus) => {
     joinPendingRef.current = false;
     setJoining(false);
@@ -324,6 +367,9 @@ export default function JoinCall() {
     setAudioPlaybackBlocked(false);
     setScreenShareNotice('');
     setWatchSession(null);
+    setReactionMenuOpen(false);
+    setStageReactions([]);
+    setHandRaised(false);
     activeVideoSidRef.current = null;
     activeCameraSidRef.current = null;
     publishedCameraTrackRef.current = null;
@@ -591,6 +637,9 @@ export default function JoinCall() {
       if (command.type === 'room-ended') {
         setStatus('Host ended the call.');
         safeDisconnectRoom(roomRef.current);
+      }
+      if (command.type === 'reaction' && command.emoji) {
+        addStageReaction(command.emoji, command.name || participant?.name || participant?.identity || 'Guest');
       }
       if (command.type === 'share-stopped') {
         clearHostScreen();
@@ -949,6 +998,15 @@ export default function JoinCall() {
           data-has-presentation={hasPresentation ? 'true' : 'false'}
           style={{ display: connected ? 'grid' : 'none', gap: '10px' }}
         >
+          {stageReactions.length > 0 && (
+            <div aria-live="polite" style={reactionTrayStyle}>
+              {stageReactions.map((reaction) => (
+                <span key={reaction.id} style={reactionBubbleStyle} title={reaction.name}>
+                  <span aria-hidden="true">{reaction.emoji}</span><small>{reaction.name}</small>
+                </span>
+              ))}
+            </div>
+          )}
           <section className="viewer-section" ref={presentationRef} style={{ ...viewerStyle, display: hasPresentation ? 'block' : 'none' }}>
             <div style={viewerHeaderStyle}>
               <span style={viewerTitleStyle}><Video size={18} /> {showSyncedWatchPlayer ? 'Watch Together' : 'Presentation'}</span>
@@ -1030,6 +1088,23 @@ export default function JoinCall() {
             <button aria-label={screenOn ? 'Stop whiteboard' : 'Share whiteboard'} onClick={toggleWhiteboard} style={controlButtonStyle(screenOn)}>
               <SquarePen size={18} /><span>{screenOn ? 'Stop Board' : 'Board'}</span>
             </button>
+            <button aria-label={handRaised ? 'Lower hand' : 'Raise hand'} onClick={toggleRaisedHand} style={controlButtonStyle(handRaised)}>
+              <Hand size={18} /><span>{handRaised ? 'Lower Hand' : 'Raise Hand'}</span>
+            </button>
+            <div style={reactionControlWrapStyle}>
+              <button aria-label="Send a reaction" onClick={() => setReactionMenuOpen((open) => !open)} style={controlButtonStyle(reactionMenuOpen)}>
+                <Smile size={18} /><span>React</span>
+              </button>
+              {reactionMenuOpen && (
+                <div style={reactionMenuStyle}>
+                  {[['👍', ThumbsUp], ['❤️', Heart], ['😂', Laugh], ['👏', Sparkles]].map(([emoji, Icon]) => (
+                    <button key={emoji} onClick={() => sendReaction(emoji)} style={reactionButtonStyle} title={`Send ${emoji}`}>
+                      <Icon size={16} /><span>{emoji}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <button aria-label="Leave call" onClick={leaveRoom} style={leaveButtonStyle}>
               <PhoneOff size={19} /><span>Leave</span>
             </button>
@@ -1189,11 +1264,70 @@ const callControlDockStyle = {
   bottom: '10px',
   display: 'grid',
   gap: '8px',
-  gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
+  gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
   marginTop: '12px',
   padding: '8px',
   position: 'sticky',
   zIndex: 20
+};
+
+const reactionControlWrapStyle = {
+  position: 'relative'
+};
+
+const reactionMenuStyle = {
+  alignItems: 'center',
+  background: '#161616',
+  border: '1px solid #333333',
+  borderRadius: '8px',
+  bottom: '62px',
+  boxShadow: '0 16px 34px rgba(0, 0, 0, 0.38)',
+  display: 'flex',
+  gap: '5px',
+  padding: '6px',
+  position: 'absolute',
+  right: 0,
+  zIndex: 30
+};
+
+const reactionButtonStyle = {
+  alignItems: 'center',
+  background: '#242424',
+  border: '1px solid #3A3A3A',
+  borderRadius: '999px',
+  color: '#FFFFFF',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  fontSize: '14px',
+  gap: '2px',
+  height: '34px',
+  justifyContent: 'center',
+  padding: 0,
+  width: '34px'
+};
+
+const reactionTrayStyle = {
+  alignItems: 'center',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: '7px',
+  justifyContent: 'center',
+  pointerEvents: 'none',
+  position: 'relative',
+  zIndex: 8
+};
+
+const reactionBubbleStyle = {
+  alignItems: 'center',
+  animation: 'screenflowGuestReaction 4.2s ease both',
+  background: '#FFFFFF',
+  borderRadius: '999px',
+  boxShadow: '0 12px 30px rgba(0, 0, 0, 0.3)',
+  color: '#000000',
+  display: 'inline-flex',
+  fontSize: '18px',
+  gap: '6px',
+  padding: '6px 10px'
 };
 
 const statusStyle = {
@@ -1387,6 +1521,13 @@ const sectionTitleStyle = {
 };
 
 const responsiveStyles = `
+  @keyframes screenflowGuestReaction {
+    0% { opacity: 0; transform: translateY(12px) scale(0.9); }
+    16% { opacity: 1; transform: translateY(0) scale(1); }
+    84% { opacity: 1; transform: translateY(-10px) scale(1); }
+    100% { opacity: 0; transform: translateY(-24px) scale(0.96); }
+  }
+
   [data-call-panel="true"][data-connected="true"] {
     max-width: 1380px !important;
   }

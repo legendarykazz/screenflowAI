@@ -27,7 +27,10 @@ import {
   Expand,
   Eye,
   EyeOff,
+  Hand,
+  Heart,
   Highlighter,
+  Laugh,
   MoreHorizontal,
   Monitor,
   Mic,
@@ -39,8 +42,10 @@ import {
   Plus,
   RotateCcw,
   ScreenShare,
+  Smile,
   Sparkles,
   Square,
+  ThumbsUp,
   Type,
   Users,
   Video,
@@ -144,6 +149,9 @@ export default function LiveCall() {
   const [watchError, setWatchError] = useState('');
   const [showSelfView, setShowSelfView] = useState(true);
   const [setupOpen, setSetupOpen] = useState(false);
+  const [reactionMenuOpen, setReactionMenuOpen] = useState(false);
+  const [stageReactions, setStageReactions] = useState([]);
+  const [raisedHands, setRaisedHands] = useState({});
   const isBrowserPresenter = !window.navigator?.userAgent?.toLowerCase?.().includes('electron') && !window.electron?.getAppVersion;
 
   const [roomCode, setRoomCode] = useState(() => `SF-${Math.random().toString(36).slice(2, 7).toUpperCase()}`);
@@ -629,6 +637,9 @@ export default function LiveCall() {
       room.on(RoomEvent.AudioPlaybackStatusChanged, (canPlay) => {
         setAudioPlaybackBlocked(!canPlay);
       });
+      room.on(RoomEvent.DataReceived, (payload, participant) => {
+        handleRoomCommand(payload, participant);
+      });
       room.on(RoomEvent.ParticipantDisconnected, (participant) => {
         remoteMediaRef.current
           ?.querySelectorAll(`[data-participant-id="${participant.identity}"]`)
@@ -728,6 +739,59 @@ export default function LiveCall() {
     } catch (error) {
       setAudioPlaybackBlocked(true);
       setLiveKitStatus('Your browser blocked call audio. Tap Enable sound again.');
+    }
+  };
+
+  const addStageReaction = (emoji, name = participantName || 'You') => {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    setStageReactions((current) => [...current.slice(-5), { emoji, id, name }]);
+    window.setTimeout(() => {
+      setStageReactions((current) => current.filter((reaction) => reaction.id !== id));
+    }, 4200);
+  };
+
+  const sendReaction = async (emoji) => {
+    addStageReaction(emoji);
+    setReactionMenuOpen(false);
+    try {
+      await sendRoomCommand('reaction', '', { emoji, name: participantName || 'Host' });
+    } catch (error) {
+      setStatus('Your reaction could not be sent to the room.');
+    }
+  };
+
+  const toggleRaisedHand = async () => {
+    const identity = liveKitRoomRef.current?.localParticipant?.identity || 'host';
+    const nextRaised = !raisedHands[identity];
+    setRaisedHands((current) => ({ ...current, [identity]: nextRaised ? participantName || 'Host' : '' }));
+    try {
+      await sendRoomCommand('raise-hand', '', {
+        identity,
+        name: participantName || 'Host',
+        raised: nextRaised
+      });
+    } catch (error) {
+      setStatus('Your hand status could not be sent to the room.');
+    }
+  };
+
+  const handleRoomCommand = (payload, participant) => {
+    try {
+      const command = JSON.parse(new TextDecoder().decode(payload));
+      if (!command?.type || command.targetIdentity) return;
+      if (command.type === 'reaction' && command.emoji) {
+        addStageReaction(command.emoji, command.name || participant?.name || participant?.identity || 'Guest');
+      }
+      if (command.type === 'raise-hand') {
+        const identity = command.identity || participant?.identity;
+        if (!identity) return;
+        setRaisedHands((current) => ({
+          ...current,
+          [identity]: command.raised ? (command.name || participant?.name || 'Guest') : ''
+        }));
+      }
+    } catch (error) {
+      console.warn('Ignoring invalid room event:', error);
     }
   };
 
@@ -1684,6 +1748,21 @@ export default function LiveCall() {
             data-share-expanded={shareExpanded ? 'true' : 'false'}
             style={callStageBodyStyle(isLive, shareExpanded)}
           >
+            {stageReactions.length > 0 && (
+              <div aria-live="polite" data-stage-reactions="true" style={reactionTrayStyle}>
+                {stageReactions.map((reaction) => (
+                  <span key={reaction.id} style={reactionBubbleStyle} title={reaction.name}>
+                    <span aria-hidden="true">{reaction.emoji}</span>
+                    <small>{reaction.name}</small>
+                  </span>
+                ))}
+              </div>
+            )}
+            {Object.values(raisedHands).filter(Boolean).length > 0 && (
+              <div data-raised-hands="true" style={raisedHandsStyle}>
+                <Hand size={14} /> {Object.values(raisedHands).filter(Boolean).join(', ')} raised {Object.values(raisedHands).filter(Boolean).length === 1 ? 'a hand' : 'their hands'}
+              </div>
+            )}
             {callCaptions.length > 0 && (
               <div data-live-caption="true" style={liveCaptionStyle}>
                 {callCaptions[callCaptions.length - 1]?.text}
@@ -1844,6 +1923,34 @@ export default function LiveCall() {
             <button onClick={shareSelectedScreen} style={dockButtonStyle(isLive && shareMode === 'screen')} className="tooltip" data-tooltip="Share screen">
               <ScreenShare size={18} />
             </button>
+            <button
+              onClick={async () => {
+                await activateWhiteboard();
+                setSetupOpen(true);
+              }}
+              style={dockButtonStyle(isLive && shareMode === 'whiteboard')}
+              className="tooltip"
+              data-tooltip="Open whiteboard"
+            >
+              <Pencil size={18} />
+            </button>
+            <button onClick={toggleRaisedHand} style={dockButtonStyle(Boolean(raisedHands[liveKitRoomRef.current?.localParticipant?.identity || 'host']))} className="tooltip" data-tooltip="Raise hand">
+              <Hand size={18} />
+            </button>
+            <div style={moreMenuWrapStyle}>
+              <button onClick={() => setReactionMenuOpen((open) => !open)} style={dockButtonStyle(reactionMenuOpen)} className="tooltip" data-tooltip="Send reaction">
+                <Smile size={18} />
+              </button>
+              {reactionMenuOpen && (
+                <div style={reactionMenuStyle}>
+                  {[['👍', ThumbsUp], ['❤️', Heart], ['😂', Laugh], ['👏', Sparkles]].map(([emoji, Icon]) => (
+                    <button key={emoji} onClick={() => sendReaction(emoji)} style={reactionButtonStyle} title={`Send ${emoji}`}>
+                      <Icon size={17} /> <span>{emoji}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <button onClick={isLiveKitConnected ? disconnectLiveKit : connectLiveKit} style={dockButtonStyle(isLiveKitConnected)} className="tooltip" data-tooltip={isLiveKitConnected ? 'Disconnect room' : 'Go online'}>
               <Users size={18} />
             </button>
@@ -2297,6 +2404,53 @@ const liveCaptionStyle = {
   zIndex: 18
 };
 
+const reactionTrayStyle = {
+  alignItems: 'flex-end',
+  bottom: '16px',
+  display: 'flex',
+  gap: '8px',
+  left: '16px',
+  maxWidth: 'calc(100% - 32px)',
+  pointerEvents: 'none',
+  position: 'absolute',
+  zIndex: 19
+};
+
+const reactionBubbleStyle = {
+  alignItems: 'center',
+  animation: 'screenflowReaction 4.2s ease both',
+  background: 'rgba(255, 255, 255, 0.94)',
+  border: '1px solid rgba(255, 255, 255, 0.8)',
+  borderRadius: '999px',
+  boxShadow: '0 12px 30px rgba(0, 0, 0, 0.25)',
+  color: '#172033',
+  display: 'inline-flex',
+  fontSize: '20px',
+  gap: '7px',
+  padding: '7px 10px'
+};
+
+const raisedHandsStyle = {
+  alignItems: 'center',
+  background: 'rgba(18, 28, 47, 0.92)',
+  border: '1px solid rgba(255, 255, 255, 0.15)',
+  borderRadius: '999px',
+  color: '#FFFFFF',
+  display: 'inline-flex',
+  fontSize: '12px',
+  fontWeight: 850,
+  gap: '7px',
+  left: '16px',
+  maxWidth: 'calc(100% - 32px)',
+  overflow: 'hidden',
+  padding: '8px 11px',
+  position: 'absolute',
+  textOverflow: 'ellipsis',
+  top: '16px',
+  whiteSpace: 'nowrap',
+  zIndex: 19
+};
+
 const faceGridStyle = (presenting, expanded) => ({
   alignContent: 'start',
   display: 'grid',
@@ -2683,6 +2837,31 @@ const dockMenuStyle = {
   top: 'auto'
 };
 
+const reactionMenuStyle = {
+  ...dockMenuStyle,
+  alignItems: 'center',
+  display: 'flex',
+  gap: '5px',
+  minWidth: 'auto',
+  padding: '7px'
+};
+
+const reactionButtonStyle = {
+  alignItems: 'center',
+  background: '#F8FAFC',
+  border: '1px solid #DDE4EE',
+  borderRadius: '999px',
+  color: '#26344D',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  fontSize: '15px',
+  gap: '2px',
+  height: '36px',
+  justifyContent: 'center',
+  padding: 0,
+  width: '36px'
+};
+
 const menuItemStyle = {
   alignItems: 'center',
   background: 'transparent',
@@ -2735,6 +2914,13 @@ const secondaryButtonStyle = (active) => ({
 });
 
 const liveCallResponsiveStyles = `
+  @keyframes screenflowReaction {
+    0% { opacity: 0; transform: translateY(18px) scale(0.9); }
+    14% { opacity: 1; transform: translateY(0) scale(1); }
+    82% { opacity: 1; transform: translateY(-18px) scale(1); }
+    100% { opacity: 0; transform: translateY(-38px) scale(0.96); }
+  }
+
   [data-live-call-root="true"] video {
     transform: none !important;
   }
