@@ -1962,7 +1962,7 @@ export default function LiveCall() {
                 <MoreHorizontal size={19} />
               </button>
               {moreMenuOpen && (
-                <div style={dockMenuStyle}>
+                <div data-call-utility-menu="true" style={dockMenuStyle}>
                   <button onClick={copyInvite} style={menuItemStyle}><Copy size={15} /> Copy Invite</button>
                   <button onClick={askAi} style={menuItemStyle}><Bot size={15} /> Ask AI</button>
                   <button onClick={() => setShowSelfView((visible) => !visible)} style={menuItemStyle}>
@@ -2833,7 +2833,10 @@ const moreMenuStyle = {
 
 const dockMenuStyle = {
   ...moreMenuStyle,
+  display: 'grid',
   bottom: '54px',
+  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+  minWidth: '360px',
   top: 'auto'
 };
 
@@ -2873,9 +2876,10 @@ const menuItemStyle = {
   fontSize: '13px',
   fontWeight: 900,
   gap: '9px',
-  minHeight: '38px',
+  minHeight: '42px',
   padding: '0 10px',
-  textAlign: 'left'
+  textAlign: 'left',
+  whiteSpace: 'nowrap'
 };
 
 const dangerButtonStyle = {
@@ -3150,6 +3154,12 @@ const liveCallResponsiveStyles = `
       overflow-x: auto !important;
       position: sticky !important;
       z-index: 20 !important;
+    }
+
+    [data-call-utility-menu="true"] {
+      grid-template-columns: 1fr !important;
+      min-width: min(260px, calc(100vw - 32px)) !important;
+      right: 0 !important;
     }
 
     [data-live-caption="true"] {
